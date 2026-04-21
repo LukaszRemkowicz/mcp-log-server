@@ -10,6 +10,7 @@ jobs:
   version-check:
     name: Version bump check
     runs-on: ubuntu-latest
+    if: github.base_ref == 'main' && github.head_ref == 'dev'
     steps:
       - name: Checkout PR HEAD
         uses: actions/checkout@v4
