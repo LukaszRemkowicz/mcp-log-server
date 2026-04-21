@@ -1,0 +1,77 @@
+name: Version Check
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  version-check:
+    name: Version bump check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR HEAD
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Log VERSION
+        run: |
+          if [[ -f VERSION ]]; then
+            VER=$(tr -d ' \t\r\n' < VERSION)
+            echo "VERSION: $VER"
+            echo "Release tag would be: v$VER"
+          else
+            echo "VERSION file not found"
+            exit 1
+          fi
+
+      - name: Validate VERSION file and bump
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          VERSION_FILE="VERSION"
+
+          if ! git cat-file -e "${HEAD_SHA}:${VERSION_FILE}" 2>/dev/null; then
+            echo "ERROR: ${VERSION_FILE} is missing in PR branch."
+            exit 1
+          fi
+
+          NEW="$(git show "${HEAD_SHA}:${VERSION_FILE}" | tr -d ' \t\r\n')"
+          if ! [[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: VERSION must be MAJOR.MINOR.PATCH. Got: '$NEW'"
+            exit 1
+          fi
+
+          if ! git cat-file -e "${BASE_SHA}:${VERSION_FILE}" 2>/dev/null; then
+            echo "VERSION introduced in this PR: $NEW"
+            exit 0
+          fi
+
+          OLD="$(git show "${BASE_SHA}:${VERSION_FILE}" | tr -d ' \t\r\n')"
+          if ! [[ "$OLD" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Base VERSION is invalid. Got: '$OLD'"
+            exit 1
+          fi
+
+          if [[ "$OLD" == "$NEW" ]]; then
+            echo "ERROR: VERSION was not changed in this PR."
+            exit 1
+          fi
+
+          IFS='.' read -r old_major old_minor old_patch <<< "$OLD"
+          IFS='.' read -r new_major new_minor new_patch <<< "$NEW"
+
+          if (( new_major < old_major )) || \
+             (( new_major == old_major && new_minor < old_minor )) || \
+             (( new_major == old_major && new_minor == old_minor && new_patch <= old_patch )); then
+            echo "ERROR: VERSION must increase. Base=$OLD PR=$NEW"
+            exit 1
+          fi
+
+          echo "Valid VERSION bump: $OLD -> $NEW"

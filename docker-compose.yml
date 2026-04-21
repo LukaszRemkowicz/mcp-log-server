@@ -1,0 +1,24 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    volumes:
+      - ./src:/app/src
+    environment:
+      HOST: 0.0.0.0
+      PYTHONPATH: /app/src
+    ports:
+      - "8001:8001"
+    command: ["uv", "run", "watchfiles", "--filter", "python", "python -m main", "/app/src"]
+
+  tests:
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    volumes:
+      - ./src:/app/src
+    environment:
+      HOST: 0.0.0.0
+      PYTHONPATH: /app/src
+    command: ["uv", "run", "pytest"]

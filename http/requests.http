@@ -1,0 +1,18 @@
+@baseUrl = http://127.0.0.1:8001
+
+### Service status
+GET {{baseUrl}}/
+Accept: application/json
+
+### Health check
+GET {{baseUrl}}/healthz
+Accept: application/json
+
+### Echo POST
+POST {{baseUrl}}/echo
+Content-Type: application/json
+Accept: application/json
+
+{
+  "message": "hello from http file"
+}
