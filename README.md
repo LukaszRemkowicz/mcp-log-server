@@ -81,7 +81,7 @@ doppler run -- docker compose run --rm tests
 If you prefer host execution while iterating, use `uv`:
 
 ```bash
-uv sync
+uv sync --group dev
 doppler run -- PYTHONPATH=src uv run python -m main
 ```
 

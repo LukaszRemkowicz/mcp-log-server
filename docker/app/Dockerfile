@@ -10,6 +10,6 @@ COPY --from=ghcr.io/astral-sh/uv:0.7.3 /uv /uvx /bin/
 COPY pyproject.toml README.md ./
 COPY src ./src
 
-RUN uv sync --extra dev
+RUN uv sync --group dev
 
 CMD ["uv", "run", "python", "-m", "main"]
