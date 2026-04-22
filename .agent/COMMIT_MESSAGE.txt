@@ -1,11 +1,10 @@
-feat(mcp): Add Dockerized MCP service foundation and repo automation
+feat(manifests): Add MCP manifest foundation and align roadmap
 
-Build the initial MCP service foundation with a flat src layout, uv-based
-workflow, Docker Compose runtime, hot reload, and basic HTTP endpoints for
-status, health, and POST testing. Add a temporary auth abstraction so the
-service can grow toward Keycloak without coupling the early code to the final
-provider.
+Add the first project manifest schema, loader, sample landingpage manifest,
+and tests so MCP can describe project log sources without hardcoded mappings.
 
-Document the architecture and repository foundation, and add repository
-automation for pre-commit, CI, CodeQL, and VERSION-based tag workflows so the
-project follows the same release discipline as landingpage from the start.
+Update the architecture and repository docs to match the current plan:
+HTTP-only service startup, mocked auth abstraction now, real auth later, and
+smaller implementation phases centered on request-driven log collection.
+
+Ignore local .agent state so assistant artifacts do not leak into git.

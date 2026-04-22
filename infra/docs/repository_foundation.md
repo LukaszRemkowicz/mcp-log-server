@@ -20,9 +20,8 @@ This repository currently includes:
 This repository does not yet include:
 
 - shared platform decisions for Keycloak and reverse proxy ownership
-- auth integration with project-aware JWT validation
-- source manifest contracts
-- `landingpage` client token flow
+- final Keycloak/JWT auth integration
+- finalized `landingpage` production auth flow
 - collector parity tools
 
 ## Delivered Files
@@ -41,3 +40,5 @@ This repository does not yet include:
 - stable application skeleton: yes
 - clear repo-vs-upstream ownership: yes, in `doc/mcp_log_server_architecture.md`
 - Docker-first local runtime: yes
+- source manifest contract: yes
+- internal auth abstraction with mocked authorization: yes

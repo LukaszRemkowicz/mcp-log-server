@@ -15,8 +15,17 @@ Current repository foundation:
 - architecture docs and repository setup docs
 - one basic smoke test for the settings scaffold
 
-This repo does not yet implement project manifests, auth integration, or real
-log collection parity with the existing collector.
+This repo does not yet implement project manifests or real log collection
+parity with the existing collector.
+
+Current auth is intentionally mocked behind an internal abstraction so the
+final external auth provider can be connected later without reworking tool
+logic.
+
+The repository now includes a sample source manifest at
+`manifests/landingpage.json`. This manifest is the project inventory/config
+that later collection tools will consume after authorization selects the
+project/resources.
 
 ## Layout
 

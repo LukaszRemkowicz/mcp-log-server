@@ -9,15 +9,47 @@ permissions:
   pull-requests: write
 
 jobs:
-  quality-and-tests:
-    uses: LukaszRemkowicz/ci-cd/.github/workflows/python-ci.yml@main
-    with:
-      python_version: "3.13"
-      dependency_install_command: uv sync --group dev
-      pre_commit_command: uv run pre-commit run --all-files
-      test_command: uv run pytest
-      docker_compose_validate_command: docker compose config
-      docker_build_command: docker compose build app tests
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run pre-commit
+        run: uv run pre-commit run --all-files
+
+  tests:
+    uses: LukaszRemkowicz/ci-cd/.github/workflows/python-tests-uv.yml@main
+
+  docker-build:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    needs: [quality, tests]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate compose config
+        run: docker compose config
+
+      - name: Build Docker images
+        run: docker compose build app tests
 
   codeql:
     permissions:
@@ -35,11 +67,11 @@ jobs:
       head_branch: dev
 
   pr-status:
-    needs: [quality-and-tests, codeql, version-check]
+    needs: [quality, tests, docker-build, codeql, version-check]
     if: always()
     uses: LukaszRemkowicz/ci-cd/.github/workflows/pr-status.yml@main
     with:
       status_items_json: >-
-        {"CI (quality, tests, docker build)":"${{ needs.quality-and-tests.result }}","CodeQL":"${{ needs.codeql.result }}","Version Check":"${{ needs.version-check.result }}"}
+        {"Quality":"${{ needs.quality.result }}","Tests":"${{ needs.tests.result }}","Docker Build Check":"${{ needs.docker-build.result }}","CodeQL":"${{ needs.codeql.result }}","Version Check":"${{ needs.version-check.result }}"}
       success_message: All MCP service CI checks passed.
       failure_message: MCP service CI failed. Please review the workflow logs.
