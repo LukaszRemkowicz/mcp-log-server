@@ -5,6 +5,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
 
 jobs:
   quality-and-tests:
@@ -16,3 +17,13 @@ jobs:
       test_command: uv run pytest
       docker_compose_validate_command: docker compose config
       docker_build_command: docker compose build app tests
+
+  pr-status:
+    needs: [quality-and-tests]
+    if: always()
+    uses: LukaszRemkowicz/ci-cd/.github/workflows/pr-status.yml@main
+    with:
+      status_items_json: >-
+        {"CI (quality, tests, docker build)":"${{ needs.quality-and-tests.result }}"}
+      success_message: All MCP service CI checks passed.
+      failure_message: MCP service CI failed. Please review the workflow logs.
