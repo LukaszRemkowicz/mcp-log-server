@@ -14,4 +14,4 @@ jobs:
   analyze:
     uses: LukaszRemkowicz/ci-cd/.github/workflows/codeql.yml@main
     with:
-      language: python
+      languages: python
