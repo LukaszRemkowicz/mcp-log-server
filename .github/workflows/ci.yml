@@ -2,58 +2,17 @@ name: CI
 
 on:
   pull_request:
-  push:
-    branches: [main]
-
-env:
-  PYTHON_VERSION: "3.13"
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
   quality-and-tests:
-    name: Quality and Tests
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync --group dev
-
-      - name: Run pre-commit
-        run: uv run pre-commit run --all-files
-
-      - name: Run tests
-        run: uv run pytest
-
-  docker-build:
-    name: Docker Build Check
-    runs-on: ubuntu-latest
-    needs: quality-and-tests
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Validate compose config
-        run: docker compose config
-
-      - name: Build app and test images
-        run: docker compose build app tests
+    uses: LukaszRemkowicz/ci-cd/.github/workflows/python-ci.yml@main
+    with:
+      python_version: "3.13"
+      dependency_install_command: uv sync --group dev
+      pre_commit_command: uv run pre-commit run --all-files
+      test_command: uv run pytest
+      docker_compose_validate_command: docker compose config
+      docker_build_command: docker compose build app tests

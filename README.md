@@ -102,14 +102,19 @@ docker compose config
 docker compose build app tests
 ```
 
-GitHub Actions runs the same categories of checks on push and pull request:
+GitHub Actions is wired through the shared
+[`LukaszRemkowicz/ci-cd`](https://github.com/LukaszRemkowicz/ci-cd) repository.
+This repository keeps thin workflow wrappers, while the reusable CI/CD logic
+lives there.
+
+Current checks and release flows:
 
 - pre-commit
 - pytest
 - Docker Compose validation
 - Docker image build check
-- CodeQL analysis
-- VERSION bump validation on pull requests
+- CodeQL analysis on pull requests and the weekly schedule
+- VERSION bump validation on `dev -> main` pull requests
 - tag creation from `VERSION` on pushes to `main`
 
 ## AI Review
