@@ -19,12 +19,27 @@ jobs:
       docker_compose_validate_command: docker compose config
       docker_build_command: docker compose build app tests
 
+  codeql:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: LukaszRemkowicz/ci-cd/.github/workflows/codeql.yml@main
+    with:
+      languages_json: '["python"]'
+
+  version-check:
+    uses: LukaszRemkowicz/ci-cd/.github/workflows/version-check.yml@main
+    with:
+      base_branch: main
+      head_branch: dev
+
   pr-status:
-    needs: [quality-and-tests]
+    needs: [quality-and-tests, codeql, version-check]
     if: always()
     uses: LukaszRemkowicz/ci-cd/.github/workflows/pr-status.yml@main
     with:
       status_items_json: >-
-        {"CI (quality, tests, docker build)":"${{ needs.quality-and-tests.result }}"}
+        {"CI (quality, tests, docker build)":"${{ needs.quality-and-tests.result }}","CodeQL":"${{ needs.codeql.result }}","Version Check":"${{ needs.version-check.result }}"}
       success_message: All MCP service CI checks passed.
       failure_message: MCP service CI failed. Please review the workflow logs.
