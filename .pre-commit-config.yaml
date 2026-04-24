@@ -34,7 +34,7 @@ repos:
     hooks:
       - id: mypy
         name: mypy
-        entry: uv run mypy src
+        entry: uv run mypy --explicit-package-bases src
         language: system
         pass_filenames: false
         stages: [pre-commit]
@@ -44,4 +44,4 @@ repos:
         entry: uv run pytest
         language: system
         pass_filenames: false
-        stages: [pre-push]
+        stages: [pre-commit, pre-push]

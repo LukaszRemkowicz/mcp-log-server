@@ -5,14 +5,17 @@ from manifests.models import SourceManifest
 from settings import Settings
 
 
-def test_settings_default_manifest_path_matches_repository_sample() -> None:
-    settings = Settings()
-
-    assert settings.manifest_path == Path("manifests/landingpage.json")
+def test_settings_default_manifest_path_matches_repository_sample(
+    settings_fixture: Settings,
+) -> None:
+    assert (
+        settings_fixture.manifest_path
+        == Path(__file__).resolve().parents[2] / "src/manifests/landingpage.json"
+    )
 
 
 def test_repository_manifest_loads_into_valid_source_manifest() -> None:
-    manifest = load_manifest("manifests/landingpage.json")
+    manifest = load_manifest(Path(__file__).resolve().parents[2] / "src/manifests/landingpage.json")
 
     assert isinstance(manifest, SourceManifest)
     assert manifest.project_key == "landingpage"

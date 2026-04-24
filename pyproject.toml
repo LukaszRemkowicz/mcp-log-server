@@ -9,6 +9,7 @@ description = "FastMCP log and VPS inspection service"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "authlib>=1.6.0",
   "fastmcp>=2.0.0",
   "pydantic>=2.9.0",
   "pydantic-settings>=2.5.0",
@@ -34,10 +35,15 @@ line_length = 100
 
 [tool.mypy]
 python_version = "3.13"
+mypy_path = ["src"]
 warn_unused_configs = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["authlib.jose"]
+ignore_missing_imports = true
 
 [tool.uv]
 package = false

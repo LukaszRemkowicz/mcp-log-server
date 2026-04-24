@@ -35,6 +35,8 @@ jobs:
 
   tests:
     uses: LukaszRemkowicz/ci-cd/.github/workflows/python-tests-uv.yml@main
+    with:
+      working_directory: .
 
   docker-build:
     name: Docker Build Check

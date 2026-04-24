@@ -209,3 +209,6 @@ __marimo__/
 
 # Local agent state
 .agent/
+.agents/
+
+infra/docs/NEW/

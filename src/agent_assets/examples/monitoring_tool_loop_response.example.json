@@ -1,0 +1,13 @@
+{
+  "action": "call_tools",
+  "tool_calls": [
+    {
+      "tool_name": "prepare_log_report",
+      "arguments": {}
+    },
+    {
+      "tool_name": "get_skill_owasp",
+      "arguments": {}
+    }
+  ]
+}

@@ -12,7 +12,8 @@ This repository currently includes:
 - repository structure for the FastMCP service
 - local developer bootstrap
 - settings/config approach
-- testing scaffold
+- automated HTTP integration tests
+- in-memory FastMCP client tests
 - architecture docs for cross-repo ownership
 - Dockerfile and Docker Compose bootstrap for local runs
 - `uv` as the package/runtime workflow
@@ -29,16 +30,19 @@ This repository does not yet include:
 - `README.md`
 - `pyproject.toml`
 - `.env.example`
-- `doc/mcp_log_server_architecture.md`
+- `infra/docs/current_project_state.md`
+- `infra/docs/NEW/mcp_log_server_architecture.md`
 - `docker-compose.yml`
 - `docker/app/Dockerfile`
 - `src/`
-- `src/tests/test_settings.py`
+- `src/tests/`
 
 ## Current State
 
 - stable application skeleton: yes
-- clear repo-vs-upstream ownership: yes, in `doc/mcp_log_server_architecture.md`
+- phase 1 ready: yes
+- clear current project reference: yes, in `infra/docs/current_project_state.md`
+- planning/development direction retained separately: yes, in `infra/docs/NEW/mcp_log_server_architecture.md`
 - Docker-first local runtime: yes
 - source manifest contract: yes
-- internal auth abstraction with mocked authorization: yes
+- FastMCP JWT verification with per-request component auth: yes

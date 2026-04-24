@@ -10,7 +10,7 @@ services:
       PYTHONPATH: /app/src
     ports:
       - "8001:8001"
-    command: ["uv", "run", "watchfiles", "--filter", "python", "python -m main", "/app/src"]
+    command: ["uv", "run", "watchfiles", "--filter", "all", "python -m main", "/app/src"]
 
   tests:
     build:
