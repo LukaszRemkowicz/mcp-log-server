@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 import pytest
 
 from auth.scopes import (
+    LOGS_COLLECT_SCOPE,
     MCP_HEALTH_READ_SCOPE,
     MCP_STATUS_READ_SCOPE,
+    PROJECTS_READ_SCOPE,
     WORKFLOW_BOOTSTRAP_SCOPE,
     WORKFLOW_SKILLS_READ_SCOPE,
 )
-from tests.conftest import JsonRpcClient
+from settings import Settings
+from tests.conftest import CollectLogsRequestFactory, FileSourceManifestFactory, JsonRpcFixture
 
 
 @pytest.mark.parametrize(
@@ -19,6 +23,8 @@ from tests.conftest import JsonRpcClient
         (
             "workflow-agent",
             [
+                LOGS_COLLECT_SCOPE,
+                PROJECTS_READ_SCOPE,
                 WORKFLOW_BOOTSTRAP_SCOPE,
                 WORKFLOW_SKILLS_READ_SCOPE,
                 MCP_STATUS_READ_SCOPE,
@@ -27,6 +33,8 @@ from tests.conftest import JsonRpcClient
             "workflow-agent",
             {
                 "analyze_daily_log_bundle",
+                "collect_logs",
+                "list_projects",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
             },
@@ -34,19 +42,18 @@ from tests.conftest import JsonRpcClient
         ),
         (
             "codex-agent",
-            [MCP_HEALTH_READ_SCOPE],
+            [PROJECTS_READ_SCOPE, LOGS_COLLECT_SCOPE, MCP_STATUS_READ_SCOPE, MCP_HEALTH_READ_SCOPE],
             "codex-agent",
-            {"get_mcp_health_check"},
+            {"collect_logs", "list_projects", "get_mcp_service_status", "get_mcp_health_check"},
             {
                 "analyze_daily_log_bundle",
-                "get_mcp_service_status",
             },
         ),
     ],
 )
 def test_tools_list_filters_visible_tools_per_jwt(
     create_test_jwt_token: Callable[[str, list[str], str], str],
-    jsonrpc: JsonRpcClient,
+    jsonrpc: JsonRpcFixture,
     subject: str,
     scopes: list[str],
     client_id: str,
@@ -72,11 +79,13 @@ def test_tools_list_filters_visible_tools_per_jwt(
 
 def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
     create_test_jwt_token: Callable[[str, list[str], str], str],
-    jsonrpc: JsonRpcClient,
+    jsonrpc: JsonRpcFixture,
 ) -> None:
     workflow_token = create_test_jwt_token(
         "workflow-agent",
         [
+            LOGS_COLLECT_SCOPE,
+            PROJECTS_READ_SCOPE,
             WORKFLOW_BOOTSTRAP_SCOPE,
             WORKFLOW_SKILLS_READ_SCOPE,
             MCP_STATUS_READ_SCOPE,
@@ -110,13 +119,180 @@ def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
         item["resource_uri"] == "skill://workflow/bot_detection"
         for item in payload["optional_skills"]
     )
+    assert any(item["tool_name"] == "collect_logs" for item in payload["tools"])
+    assert any(item["tool_name"] == "list_projects" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_service_status" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_health_check" for item in payload["tools"])
 
 
+def test_collect_logs_api_returns_requested_and_resolved_file_sources(
+    tmp_path,
+    settings_fixture: Settings,
+    create_test_jwt_token: Callable[[str, list[str], str], str],
+    file_source_manifest_factory: FileSourceManifestFactory,
+    collect_logs_request_factory: CollectLogsRequestFactory,
+    jsonrpc: JsonRpcFixture,
+) -> None:
+    log_file = tmp_path / "application.log"
+    log_file.write_text("line 1\nline 2\nline 3\n", encoding="utf-8")
+    manifest_path = file_source_manifest_factory.create(target=str(log_file))
+
+    settings = settings_fixture.model_copy(update={"manifest_path": manifest_path})
+    token = create_test_jwt_token(
+        "workflow-agent",
+        [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
+        "workflow-agent",
+    )
+
+    with jsonrpc.with_settings(settings) as custom_jsonrpc:
+        response = custom_jsonrpc.post(
+            token=token,
+            data=collect_logs_request_factory.create(
+                source_keys=["app_file", "missing_source"],
+                tail_lines=2,
+            ),
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert payload["requested_project_name"] == "landingpage"
+    assert payload["authorized_project_name"] == "landingpage"
+    assert payload["requested_source_keys"] == ["app_file", "missing_source"]
+    assert payload["save_to_files"] is False
+    assert payload["requested_tail_lines"] == 2
+    assert payload["effective_tail_lines"] == 2
+    assert payload["requested_timestamps"] is False
+    assert payload["requested_since"] is None
+    assert payload["requested_until"] is None
+    assert payload["tail_lines_limited"] is False
+    assert payload["unknown_requested_source_keys"] == ["missing_source"]
+    assert payload["resolved_source_keys"] == ["app_file"]
+    assert payload["warnings"] == [
+        "Some requested source_keys were not found in the configured manifest: missing_source."
+    ]
+    assert payload["retry_tips"] == [
+        "Retry with only source_keys returned by the manifest-backed project configuration."
+    ]
+    assert payload["logs_by_source"] == {"app_file": "line 2\nline 3"}
+    assert payload["project_output_dir"] is None
+    assert payload["latest_output_dir"] is None
+    assert payload["archive_dir"] is None
+    assert payload["sources"][0]["source_key"] == "app_file"
+    assert payload["sources"][0]["status"] == "collected"
+    assert payload["sources"][0]["output_file"] is None
+    assert payload["sources"][0]["content"] == "line 2\nline 3"
+
+
+def test_list_projects_api_returns_manifest_backed_projects(
+    create_test_jwt_token: Callable[[str, list[str], str], str],
+    jsonrpc: JsonRpcFixture,
+) -> None:
+    token = create_test_jwt_token(
+        "workflow-agent",
+        [PROJECTS_READ_SCOPE],
+        "workflow-agent",
+    )
+
+    response = jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "list-projects",
+            "method": "tools/call",
+            "params": {"name": "list_projects", "arguments": {}},
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]["result"]
+
+    assert response.status_code == 200
+    assert any(item["project_name"] == "landingpage" for item in payload)
+    landingpage = next(item for item in payload if item["project_name"] == "landingpage")
+    assert landingpage["project_summary"] == (
+        "Portfolio platform with shared ingress, backend API, frontend SSR, and edge proxy logs."
+    )
+    assert landingpage["manifest_file"] == "landingpage.json"
+    assert "docker" in landingpage["source_types"]
+
+
+def test_list_projects_api_returns_multiple_manifest_backed_projects(
+    tmp_path,
+    settings_fixture: Settings,
+    create_test_jwt_token: Callable[[str, list[str], str], str],
+    file_source_manifest_factory: FileSourceManifestFactory,
+    jsonrpc: JsonRpcFixture,
+) -> None:
+    alpha_log = tmp_path / "alpha.log"
+    alpha_log.write_text("alpha\n", encoding="utf-8")
+    beta_log = tmp_path / "beta.log"
+    beta_log.write_text("beta\n", encoding="utf-8")
+    file_source_manifest_factory.create(
+        target=str(alpha_log),
+        project_name="alpha",
+        project_summary="Alpha project summary.",
+    )
+    file_source_manifest_factory.create(
+        target=str(beta_log),
+        project_name="beta",
+        project_summary="Beta project summary.",
+    )
+    settings = settings_fixture.model_copy(update={"manifest_path": tmp_path / "alpha.json"})
+    token = create_test_jwt_token(
+        "workflow-agent",
+        [PROJECTS_READ_SCOPE],
+        "workflow-agent",
+    )
+
+    with jsonrpc.with_settings(settings) as custom_jsonrpc:
+        response = custom_jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "list-projects-multi",
+                "method": "tools/call",
+                "params": {"name": "list_projects", "arguments": {}},
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]["result"]
+
+    assert [item["project_name"] for item in payload] == ["alpha", "beta"]
+    assert payload[0]["project_summary"] == "Alpha project summary."
+    assert payload[1]["project_summary"] == "Beta project summary."
+
+
+def test_collect_logs_api_returns_agent_error_for_project_mismatch(
+    create_test_jwt_token: Callable[[str, list[str], str], str],
+    collect_logs_request_factory: CollectLogsRequestFactory,
+    jsonrpc: JsonRpcFixture,
+) -> None:
+    token = create_test_jwt_token(
+        "workflow-agent",
+        [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
+        "workflow-agent",
+    )
+
+    response = jsonrpc.post(
+        token=token,
+        data=collect_logs_request_factory.create(project_name="other-project"),
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "project_access_mismatch"
+    assert payload["retry_tips"] == [
+        "Retry with project_name equal to the project_key authorized by the current JWT.",
+        "Use get_mcp_service_status to confirm the current project_key before retrying.",
+    ]
+
+
 def test_workflow_skill_resource_read_api_returns_skill_contents(
     create_test_jwt_token: Callable[[str, list[str], str], str],
-    jsonrpc: JsonRpcClient,
+    jsonrpc: JsonRpcFixture,
 ) -> None:
     workflow_token = create_test_jwt_token(
         "workflow-agent",
@@ -143,7 +319,7 @@ def test_workflow_skill_resource_read_api_returns_skill_contents(
 
 def test_resources_list_shows_concrete_workflow_skill_resources(
     create_test_jwt_token: Callable[[str, list[str], str], str],
-    jsonrpc: JsonRpcClient,
+    jsonrpc: JsonRpcFixture,
 ) -> None:
     workflow_token = create_test_jwt_token(
         "workflow-agent",
@@ -170,9 +346,9 @@ def test_resources_list_shows_concrete_workflow_skill_resources(
     assert "skill://workflow/bot_detection" in resource_uris
 
 
-def test_resource_templates_list_is_empty_for_fixed_skill_inventory(
+def test_resource_templates_list_exposes_workflow_skill_template(
     create_test_jwt_token: Callable[[str, list[str], str], str],
-    jsonrpc: JsonRpcClient,
+    jsonrpc: JsonRpcFixture,
 ) -> None:
     workflow_token = create_test_jwt_token(
         "workflow-agent",
@@ -193,16 +369,57 @@ def test_resource_templates_list_is_empty_for_fixed_skill_inventory(
     templates = response.json()["result"]["resourceTemplates"]
 
     assert response.status_code == 200
-    assert templates == []
+    assert templates == [
+        {
+            "name": "workflow_skill_resource",
+            "uriTemplate": "skill://workflow/{skill_name}",
+            "description": "Read one workflow skill as an MCP resource.",
+            "mimeType": "text/plain",
+            "_meta": {"fastmcp": {"tags": []}},
+        }
+    ]
+
+
+def test_invalid_workflow_skill_resource_returns_agent_guidance(
+    create_test_jwt_token: Callable[[str, list[str], str], str],
+    jsonrpc: JsonRpcFixture,
+) -> None:
+    workflow_token = create_test_jwt_token(
+        "workflow-agent",
+        [WORKFLOW_SKILLS_READ_SCOPE],
+        "workflow-agent",
+    )
+
+    response = jsonrpc.post(
+        token=workflow_token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "4d",
+            "method": "resources/read",
+            "params": {"uri": "skill://workflow/not_a_real_skill"},
+        },
+    )
+
+    contents = response.json()["result"]["contents"]
+    payload = json.loads(contents[0]["text"])
+
+    assert response.status_code == 200
+    assert contents[0]["uri"] == "skill://workflow/not_a_real_skill"
+    assert contents[0]["mimeType"] == "application/json"
+    assert payload["error_code"] == "unknown_workflow_skill"
+    assert payload["retry_tips"] == [
+        "Retry with one of the skill://workflow/... URIs returned by resources/list.",
+        "Call analyze_daily_log_bundle to get the workflow skill inventory before retrying.",
+    ]
 
 
 def test_codex_cannot_access_workflow_components(
     create_test_jwt_token: Callable[[str, list[str], str], str],
-    jsonrpc: JsonRpcClient,
+    jsonrpc: JsonRpcFixture,
 ) -> None:
     codex_token = create_test_jwt_token(
         "codex-agent",
-        [MCP_HEALTH_READ_SCOPE],
+        [PROJECTS_READ_SCOPE, LOGS_COLLECT_SCOPE, MCP_STATUS_READ_SCOPE, MCP_HEALTH_READ_SCOPE],
         "codex-agent",
     )
 
@@ -235,7 +452,7 @@ def test_codex_cannot_access_workflow_components(
 
 
 def test_api_requires_bearer_token(
-    jsonrpc: JsonRpcClient,
+    jsonrpc: JsonRpcFixture,
 ) -> None:
     response = jsonrpc.post(
         token=None,

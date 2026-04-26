@@ -1,5 +1,6 @@
 {
   "project_key": "landingpage",
+  "project_summary": "Portfolio platform with shared ingress, backend API, frontend SSR, and edge proxy logs.",
   "sources": [
     {
       "source_key": "nginx",

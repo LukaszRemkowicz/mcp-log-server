@@ -30,7 +30,7 @@ under `src/agent_assets/`.
 
 Current MCP workflow surface includes:
 
-- tools: `analyze_daily_log_bundle`, `get_mcp_service_status`, `get_mcp_health_check`
+- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`
 - resources: concrete workflow skill resources such as
   `skill://workflow/project_context`, `skill://workflow/severity_guide`,
   `skill://workflow/bot_detection`
@@ -144,12 +144,16 @@ That prints two signed bearer tokens:
 Current example JWT capabilities:
 
 - `workflow_agent`
+  - `collect_logs`
+  - `list_projects`
   - `analyze_daily_log_bundle`
   - `get_mcp_service_status`
   - `get_mcp_health_check`
   - `resources/read` for `skill://workflow/{skill_name}`
 
 - `codex_agent`
+  - `collect_logs`
+  - `list_projects`
   - `get_mcp_service_status`
   - `get_mcp_health_check`
 
@@ -344,9 +348,18 @@ What it is for:
 
 What it returns right now for the workflow token:
 
+- `collect_logs`
+- `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
 - `analyze_daily_log_bundle`
+
+What it returns right now for the codex token:
+
+- `collect_logs`
+- `list_projects`
+- `get_mcp_service_status`
+- `get_mcp_health_check`
 
 ### 2. Get Workflow Bootstrap
 
@@ -385,6 +398,129 @@ What it returns:
 - `mandatory_skills`
 - `optional_skills`
 - `tools`
+
+### 2a. List Available Projects
+
+Use this to discover which manifest-backed projects are currently available to
+the current JWT.
+
+Command:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2a",
+    "method":"tools/call",
+    "params":{
+      "name":"list_projects",
+      "arguments":{}
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent.result'
+```
+
+What it returns:
+
+- `project_name`
+- `project_summary`
+- `manifest_file`
+- `source_keys`
+- `source_types`
+- `file_sources_available`
+- `docker_sources_available`
+
+### 2b. Collect Deterministic Logs
+
+Use this when the agent needs manifest-driven log collection for the
+authorized project and selected sources.
+
+Command:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b",
+    "method":"tools/call",
+    "params":{
+      "name":"collect_logs",
+      "arguments":{
+        "project_name":"landingpage",
+        "source_keys":["nginx","backend"],
+        "save_to_files":false,
+        "tail_lines":200,
+        "timestamps":true,
+        "since":"30m"
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+What it is for:
+
+- first deterministic collection surface after the workflow skeleton
+- explicit project, source, and docker/file option tracking
+- manifest-driven source resolution before later snapshot/filtering work
+- project-scoped persistence under the configured logs root
+
+Agent-facing collect_logs arguments:
+
+- `project_name`
+- `source_keys`
+- `save_to_files`
+- optional `tail_lines`
+- `timestamps`
+- `since`
+- `until`
+
+Important:
+
+- if `tail_lines` is omitted, the server requests full source output where supported
+- agents should prefer setting `tail_lines` when they do not need the full history
+- when an unbounded source is too slow or too large, the response includes retry guidance pointing back to `tail_lines`
+
+What it returns:
+
+- `action`
+- `requested_project_name`
+- `authorized_project_name`
+- `effective_project_name`
+- `requested_source_keys`
+- `requested_tail_lines`
+- `effective_tail_lines`
+- `requested_timestamps`
+- `requested_since`
+- `requested_until`
+- `unknown_requested_source_keys`
+- `resolved_source_keys`
+- `logs_by_source`
+- `warnings`
+- `retry_tips`
+- `project_output_dir`
+- `latest_output_dir`
+- `archive_dir`
+- `sources`
+
+Important response detail:
+
+- `logs_by_source` is the agent-first field for the actual collected log text
+- `sources` still includes the per-source deterministic metadata and status
+
+Current write layout:
+
+- `DOCKER_LOGS_DIR` is the logs root
+- each project writes under:
+  - `<DOCKER_LOGS_DIR>/<project_key>/latest/`
+- the previous `latest` snapshot is moved into:
+  - `<DOCKER_LOGS_DIR>/<project_key>/archive/<timestamp>/`
 
 ### 3. List Concrete Resources
 
@@ -435,10 +571,11 @@ curl -sS \
 
 What it returns right now:
 
-- an empty `resourceTemplates` list
+- one template:
+  - `skill://workflow/{skill_name}`
 
-That is expected. The current workflow skill inventory is fixed, so skills are
-registered as concrete resources rather than parameterized templates.
+That template exists so invalid workflow skill reads can return structured
+agent guidance instead of falling through to a generic unknown-resource error.
 
 ### 5. Read One Workflow Skill Resource
 

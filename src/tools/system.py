@@ -5,19 +5,19 @@ from __future__ import annotations
 import logging
 
 from fastmcp.dependencies import CurrentAccessToken, Depends
-from fastmcp.server.auth import AccessToken, require_scopes
+from fastmcp.server.auth import AccessToken
 
 from auth.scopes import MCP_HEALTH_READ_SCOPE, MCP_STATUS_READ_SCOPE
 from dependencies import get_settings_dependency
 from logging_config import get_logger
 from settings import Settings
-from tools import mcp
+from tools.registry import workflow_discoverable_tool
 from utils.types import JSONObject
 
 logger: logging.Logger = get_logger("tools.system")
 
 
-@mcp.tool(auth=require_scopes(MCP_STATUS_READ_SCOPE))
+@workflow_discoverable_tool(MCP_STATUS_READ_SCOPE)
 def get_mcp_service_status(
     settings: Settings = Depends(get_settings_dependency),
     access_token: AccessToken | None = CurrentAccessToken(),
@@ -51,7 +51,7 @@ def get_mcp_service_status(
     }
 
 
-@mcp.tool(auth=require_scopes(MCP_HEALTH_READ_SCOPE))
+@workflow_discoverable_tool(MCP_HEALTH_READ_SCOPE)
 def get_mcp_health_check() -> JSONObject:
     """Return the smallest possible MCP health payload.
 

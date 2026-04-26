@@ -4,7 +4,13 @@ from fastmcp.server.auth import AccessToken, require_scopes
 from fastmcp.utilities.components import FastMCPComponent
 
 from app import create_application
-from auth.scopes import MCP_HEALTH_READ_SCOPE, MCP_STATUS_READ_SCOPE, WORKFLOW_BOOTSTRAP_SCOPE
+from auth.scopes import (
+    LOGS_COLLECT_SCOPE,
+    MCP_HEALTH_READ_SCOPE,
+    MCP_STATUS_READ_SCOPE,
+    PROJECTS_READ_SCOPE,
+    WORKFLOW_BOOTSTRAP_SCOPE,
+)
 from tools.workflow import build_workflow_bootstrap_payload, get_allowed_workflow_tool_metadata
 from utils.assets import WorkflowAssetLoader
 
@@ -17,6 +23,8 @@ def test_application_registers_expected_mcp_components() -> None:
         tool_names = [tool.name for tool in tools]
 
         assert "analyze_daily_log_bundle" in tool_names
+        assert "collect_logs" in tool_names
+        assert "list_projects" in tool_names
         assert "get_mcp_service_status" in tool_names
         assert "get_mcp_health_check" in tool_names
         assert "list_workflow_skills" not in tool_names
@@ -30,12 +38,20 @@ def test_application_registers_expected_mcp_components() -> None:
         assert "skill://workflow/bot_detection" in resource_uris
 
         resource_templates = await app._local_provider.list_resource_templates()
-        assert resource_templates == []
+        assert len(resource_templates) == 1
+        assert resource_templates[0].name == "workflow_skill_resource"
+        assert str(resource_templates[0].uri_template) == "skill://workflow/{skill_name}"
 
         workflow_token = AccessToken(
             token="workflow-dev-token",
             client_id="workflow-agent",
-            scopes=[WORKFLOW_BOOTSTRAP_SCOPE, MCP_STATUS_READ_SCOPE, MCP_HEALTH_READ_SCOPE],
+            scopes=[
+                WORKFLOW_BOOTSTRAP_SCOPE,
+                LOGS_COLLECT_SCOPE,
+                PROJECTS_READ_SCOPE,
+                MCP_STATUS_READ_SCOPE,
+                MCP_HEALTH_READ_SCOPE,
+            ],
             claims={
                 "sub": "workflow-agent",
                 "client_type": "workflow_agent",
@@ -58,6 +74,8 @@ def test_application_registers_expected_mcp_components() -> None:
         assert any(
             item["skill_name"] == "bot_detection" for item in bootstrap_text["optional_skills"]
         )
+        assert any(item["tool_name"] == "collect_logs" for item in bootstrap_text["tools"])
+        assert any(item["tool_name"] == "list_projects" for item in bootstrap_text["tools"])
         assert any(
             item["tool_name"] == "get_mcp_service_status" for item in bootstrap_text["tools"]
         )
@@ -116,7 +134,13 @@ def test_workflow_bootstrap_uses_skill_resource_uris() -> None:
     workflow_token = AccessToken(
         token="workflow-dev-token",
         client_id="workflow-agent",
-        scopes=[WORKFLOW_BOOTSTRAP_SCOPE, MCP_STATUS_READ_SCOPE, MCP_HEALTH_READ_SCOPE],
+        scopes=[
+            WORKFLOW_BOOTSTRAP_SCOPE,
+            LOGS_COLLECT_SCOPE,
+            PROJECTS_READ_SCOPE,
+            MCP_STATUS_READ_SCOPE,
+            MCP_HEALTH_READ_SCOPE,
+        ],
         claims={
             "sub": "workflow-agent",
             "client_type": "workflow_agent",

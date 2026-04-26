@@ -210,5 +210,9 @@ __marimo__/
 # Local agent state
 .agent/
 .agents/
+.safety-project.ini
+.safety-policy.yml
+/logs/
+/docker-logs/
 
 infra/docs/NEW/

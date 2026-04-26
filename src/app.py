@@ -2,10 +2,22 @@
 
 from __future__ import annotations
 
+from functools import cache
+
 from fastmcp import FastMCP
 from fastmcp.server.auth import AuthProvider
 
-from tools import mcp
+mcp: FastMCP = FastMCP(name="mcp-log-server")
+
+
+@cache
+def register_mcp_components() -> None:
+    """Import MCP component modules once so decorator registration executes."""
+
+    import resources.workflow  # noqa: F401
+    import tools.collection  # noqa: F401
+    import tools.system  # noqa: F401
+    import tools.workflow  # noqa: F401
 
 
 def create_application(
@@ -16,12 +28,6 @@ def create_application(
     app = mcp
     app.auth = auth_provider
 
-    # These imports intentionally happen during app creation because the
-    # modules register MCP tools/resources via decorators and module-level setup
-    # side effects. Keeping them here makes the registration step explicit and
-    # avoids triggering it earlier just by importing app.py.
-    import resources.workflow  # noqa: F401
-    import tools.system  # noqa: F401
-    import tools.workflow  # noqa: F401
+    register_mcp_components()
 
     return app

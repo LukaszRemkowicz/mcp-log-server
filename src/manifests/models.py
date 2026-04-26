@@ -26,4 +26,5 @@ class SourceManifest(BaseModel):
     """Describe the available log sources for a single project."""
 
     project_key: str
+    project_summary: str
     sources: list[SourceDefinition] = Field(min_length=1)

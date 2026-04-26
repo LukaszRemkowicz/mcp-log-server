@@ -69,6 +69,8 @@ Important current Python files:
   MCP resources for reading workflow skill content on demand.
 - `src/tools/workflow.py`
   Workflow bootstrap tool.
+- `src/tools/collection.py`
+  Deterministic log collection tool.
 - `src/tools/system.py`
   MCP service diagnostics tools.
 - `src/tests/`
@@ -106,6 +108,8 @@ Design intent:
 Currently implemented:
 
 - `analyze_daily_log_bundle`
+- `collect_logs`
+- `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
 
@@ -114,6 +118,14 @@ Purpose:
 - `analyze_daily_log_bundle`
   returns structured workflow bootstrap data for the daily log-analysis flow:
   prepared prompt text, skill inventory, and visible tool inventory
+- `collect_logs`
+  returns deterministic collection results for the authorized project and
+  requested source keys from the manifest. Current agent-facing arguments are:
+  `project_name`, `source_keys`, `save_to_files`, optional `tail_lines`,
+  `timestamps`, `since`, and `until`.
+- `list_projects`
+  returns the currently available manifest-backed projects with short project
+  summaries and source inventory metadata
 - `get_mcp_service_status`, `get_mcp_health_check`
   bootstrap/development diagnostics
 
@@ -140,8 +152,9 @@ Current workflow skill resources are concrete resources such as:
 - `skill://workflow/bot_detection`
 - `skill://workflow/recommendations_guide`
 
-`resources/templates/list` is currently expected to return an empty list because
-the skill inventory is registered as fixed concrete resources.
+`resources/templates/list` now returns the workflow skill template:
+
+- `skill://workflow/{skill_name}`
 
 
 ## Manifest Model
@@ -161,6 +174,7 @@ Current code:
 Manifest purpose:
 
 - inventory of available project sources
+- short project summary exposed to agent discovery
 - foundation for future deterministic collection tools
 - not the same thing as workflow prompts
 
@@ -216,7 +230,6 @@ Important distinction:
 
 Major missing pieces:
 
-- real collector-parity log tools such as `collect_logs`
 - snapshot inventory and snapshot lifecycle tools
 - real JWT/Keycloak-backed auth
 - final cross-repo rollout/integration behavior
@@ -226,12 +239,14 @@ Current auth state:
 - FastMCP verifies JWTs per request
 - component access is enforced with per-component `auth=` checks
 - local development uses real example JWTs signed with the local shared secret
-- local development JWTs currently expire after 24 hours
-- generate fresh local example tokens with:
+- local development JWTs are valid for 24 hours only
+- before using local saved tokens, first check `updated_at` in a private local
+  file such as `.agent/DEV_JWT_TOKENS.json`
+- if `updated_at` is older than one day, treat the saved tokens as not valid
+  and generate fresh ones with:
   `uv run python infra/scripts/generate_dev_jwt.py`
-- if you want to save generated tokens in a private local file such as
-  `.agent/DEV_JWT_TOKENS.json`, treat that as developer-local state, not as a
-  repository contract
+- if you keep generated tokens in `.agent/DEV_JWT_TOKENS.json`, treat that file
+  as developer-local state, not as a repository contract
 
 
 ## Working Rules For This Repo

@@ -7,16 +7,19 @@ import sys
 import time
 from pathlib import Path
 
-from authlib.jose import JsonWebToken
+from joserfc import jwt
+from joserfc.jwk import OctKey
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = REPOSITORY_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from auth.scopes import (  # noqa: E402
+    LOGS_COLLECT_SCOPE,
     MCP_HEALTH_READ_SCOPE,
     MCP_STATUS_READ_SCOPE,
+    PROJECTS_READ_SCOPE,
     WORKFLOW_BOOTSTRAP_SCOPE,
     WORKFLOW_SKILLS_READ_SCOPE,
 )
@@ -43,6 +46,8 @@ def build_example_token_payloads(settings: Settings) -> dict[str, dict[str, obje
             "client_type": "workflow_agent",
             "scope": " ".join(
                 (
+                    LOGS_COLLECT_SCOPE,
+                    PROJECTS_READ_SCOPE,
                     WORKFLOW_BOOTSTRAP_SCOPE,
                     WORKFLOW_SKILLS_READ_SCOPE,
                     MCP_STATUS_READ_SCOPE,
@@ -55,7 +60,14 @@ def build_example_token_payloads(settings: Settings) -> dict[str, dict[str, obje
             "sub": "codex-agent",
             "client_id": "codex-agent",
             "client_type": "codex",
-            "scope": " ".join((MCP_STATUS_READ_SCOPE, MCP_HEALTH_READ_SCOPE)),
+            "scope": " ".join(
+                (
+                    LOGS_COLLECT_SCOPE,
+                    PROJECTS_READ_SCOPE,
+                    MCP_STATUS_READ_SCOPE,
+                    MCP_HEALTH_READ_SCOPE,
+                )
+            ),
         },
     }
 
@@ -63,12 +75,16 @@ def build_example_token_payloads(settings: Settings) -> dict[str, dict[str, obje
 def build_example_tokens(settings: Settings) -> dict[str, str]:
     """Return signed example JWTs for local development."""
 
-    jwt = JsonWebToken([settings.jwt_algorithm])
+    signing_key = OctKey.import_key(settings.jwt_shared_secret)
     header = {"alg": settings.jwt_algorithm, "typ": "JWT"}
     tokens: dict[str, str] = {}
     for token_name, payload in build_example_token_payloads(settings).items():
-        token = jwt.encode(header, payload, settings.jwt_shared_secret)
-        tokens[token_name] = token.decode() if isinstance(token, bytes) else str(token)
+        tokens[token_name] = jwt.encode(
+            header,
+            payload,
+            signing_key,
+            algorithms=[settings.jwt_algorithm],
+        )
     return tokens
 
 

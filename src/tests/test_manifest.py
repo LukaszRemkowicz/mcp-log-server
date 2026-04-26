@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from manifests import load_manifest
+from manifests.loader import load_manifest
 from manifests.models import SourceManifest
 from settings import Settings
 
@@ -19,6 +19,9 @@ def test_repository_manifest_loads_into_valid_source_manifest() -> None:
 
     assert isinstance(manifest, SourceManifest)
     assert manifest.project_key == "landingpage"
+    assert manifest.project_summary == (
+        "Portfolio platform with shared ingress, backend API, frontend SSR, and edge proxy logs."
+    )
     assert [source.source_key for source in manifest.sources] == [
         "nginx",
         "traefik",

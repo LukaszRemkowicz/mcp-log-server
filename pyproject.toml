@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "authlib>=1.6.0",
+  "docker>=7.1.0",
   "fastmcp>=2.0.0",
+  "joserfc>=1.4.0",
   "pydantic>=2.9.0",
   "pydantic-settings>=2.5.0",
 ]
@@ -20,9 +22,11 @@ dev = [
   "black>=24.10.0",
   "isort>=5.13.0",
   "mypy>=1.13.0",
+  "pip-audit>=2.9.0",
   "pre-commit>=4.5.0",
   "pytest>=8.3.0",
-  "ruff>=0.15.0",
+  "ruff>=0.15.12",
+  "safety>=3.6.1",
 ]
 
 [tool.black]
@@ -42,7 +46,7 @@ warn_unused_ignores = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["authlib.jose"]
+module = ["docker", "docker.errors", "requests", "requests.*"]
 ignore_missing_imports = true
 
 [tool.uv]

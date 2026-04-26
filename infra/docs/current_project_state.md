@@ -21,6 +21,7 @@ should be treated as a development/planning document for future direction.
 This repository currently owns the FastMCP server used for:
 
 - workflow bootstrap for daily log analysis
+- deterministic manifest-driven log collection
 - on-demand workflow skill access through MCP resources
 - JWT-protected MCP tool/resource access
 - future deterministic collector-style log tooling
@@ -46,6 +47,12 @@ Phase 1 currently covers:
 Phase 2 should focus on deterministic collector-style data tools rather than
 further reshaping the workflow bootstrap surface.
 
+Current next-step note:
+
+- an initial `collect_logs` tool now exists, so the next collection work should
+  move toward snapshot inventory and retention rather than reworking the basic
+  collection contract again.
+
 ## Current MCP Surface
 
 ### Tools
@@ -53,6 +60,8 @@ further reshaping the workflow bootstrap surface.
 Currently implemented tools:
 
 - `analyze_daily_log_bundle`
+- `collect_logs`
+- `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
 
@@ -65,9 +74,9 @@ Workflow skills are exposed as concrete read-only MCP resources, for example:
 - `skill://workflow/recommendations_guide`
 - `skill://workflow/bot_detection`
 
-`resources/templates/list` is currently expected to return an empty list
-because the workflow skill inventory is fixed and registered as concrete
-resources.
+`resources/templates/list` currently exposes the workflow skill template:
+
+- `skill://workflow/{skill_name}`
 
 ### Prompts
 
@@ -90,6 +99,31 @@ Important response note:
 
 - `analyze_daily_log_bundle` currently returns `content: []`
 - the real workflow payload is in `result.structuredContent`
+
+## Current Collection Flow
+
+Current deterministic collection shape:
+
+1. call `tools/call` for `collect_logs`
+2. include an optional requested project name and optional requested source keys
+3. MCP validates the requested project against the JWT `project_key`
+4. MCP resolves the requested sources from the configured manifest
+5. MCP writes the collection into a project-scoped logs root
+6. MCP returns deterministic per-source collection results
+
+Important collection response note:
+
+- `collect_logs` returns `content: []`
+- the real collection payload is in `result.structuredContent`
+- the payload keeps both:
+  - what the caller requested
+  - what the server actually resolved from the manifest
+- `tail_lines` is optional; if omitted, agents get a warning that full source
+  output may be slow or large
+- `DOCKER_LOGS_DIR` is treated as a logs root, not a flat one-run output path
+- the current on-disk layout is:
+  - `<DOCKER_LOGS_DIR>/<project_key>/latest/...`
+  - `<DOCKER_LOGS_DIR>/<project_key>/archive/<timestamp>/...`
 
 ## Current Auth Model
 
