@@ -1,0 +1,54 @@
+{
+  "project_key": "landingpage",
+  "project_summary": "Portfolio platform with shared ingress, backend API, frontend SSR, and edge proxy logs.",
+  "sources": [
+    {
+      "source_key": "nginx",
+      "source_type": "docker",
+      "target": "portfolio-dev-nginx-1",
+      "stream": "stdout",
+      "description": "Nginx access and error logs for the landingpage edge.",
+      "required": true,
+      "parser_type": "nginx_json",
+      "normalization_profile": "web_access",
+      "retention_class": "short",
+      "default_noise_profile": "web_noise"
+    },
+    {
+      "source_key": "traefik",
+      "source_type": "docker",
+      "target": "traefik",
+      "stream": "stdout",
+      "description": "Traefik edge and routing logs for shared ingress debugging.",
+      "required": true,
+      "parser_type": "traefik_json",
+      "normalization_profile": "proxy_access",
+      "retention_class": "short",
+      "default_noise_profile": "proxy_noise"
+    },
+    {
+      "source_key": "backend",
+      "source_type": "docker",
+      "target": "portfolio-dev-be-1",
+      "stream": "stdout",
+      "description": "Backend application logs for the landingpage project.",
+      "required": true,
+      "parser_type": "python_json",
+      "normalization_profile": "backend_app",
+      "retention_class": "medium",
+      "default_noise_profile": "backend_noise"
+    },
+    {
+      "source_key": "frontend",
+      "source_type": "docker",
+      "target": "portfolio-dev-fe-1",
+      "stream": "stdout",
+      "description": "Frontend SSR and application logs for the landingpage project.",
+      "required": false,
+      "parser_type": "node_json",
+      "normalization_profile": "frontend_app",
+      "retention_class": "medium",
+      "default_noise_profile": "frontend_noise"
+    }
+  ]
+}

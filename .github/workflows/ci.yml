@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    environment: test
+    env:
+      SAFETY_API_KEY: ${{ secrets.SAFETY_API_KEY }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run pre-commit
+        run: uv run pre-commit run --all-files
+
+  tests:
+    uses: LukaszRemkowicz/ci-cd/.github/workflows/python-tests-uv.yml@main
+    with:
+      working_directory: .
+
+  docker-build:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    needs: [quality, tests]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate compose config
+        run: docker compose config
+
+      - name: Build Docker images
+        run: docker compose build app tests
+
+  codeql:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: LukaszRemkowicz/ci-cd/.github/workflows/codeql.yml@main
+    with:
+      languages_json: '["python"]'
+
+  version-check:
+    uses: LukaszRemkowicz/ci-cd/.github/workflows/version-check.yml@main
+    with:
+      base_branch: main
+      head_branch: dev
+
+  pr-status:
+    needs: [quality, tests, docker-build, codeql, version-check]
+    if: always()
+    uses: LukaszRemkowicz/ci-cd/.github/workflows/pr-status.yml@main
+    with:
+      status_items_json: >-
+        {"Quality":"${{ needs.quality.result }}","Tests":"${{ needs.tests.result }}","Docker Build Check":"${{ needs.docker-build.result }}","CodeQL":"${{ needs.codeql.result }}","Version Check":"${{ needs.version-check.result }}"}
+      success_message: All MCP service CI checks passed.
+      failure_message: MCP service CI failed. Please review the workflow logs.

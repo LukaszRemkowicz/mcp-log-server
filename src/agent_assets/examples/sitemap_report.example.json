@@ -1,0 +1,9 @@
+{
+  "summary": "Two sitemap URLs need attention.",
+  "issues": [
+    {
+      "url": "https://example.com/missing-page",
+      "status_code": 404
+    }
+  ]
+}

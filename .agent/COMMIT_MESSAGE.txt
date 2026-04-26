@@ -1,0 +1,10 @@
+feat(manifests): Add MCP manifest foundation and align roadmap
+
+Add the first project manifest schema, loader, sample landingpage manifest,
+and tests so MCP can describe project log sources without hardcoded mappings.
+
+Update the architecture and repository docs to match the current plan:
+HTTP-only service startup, mocked auth abstraction now, real auth later, and
+smaller implementation phases centered on request-driven log collection.
+
+Ignore local .agent state so assistant artifacts do not leak into git.

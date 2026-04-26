@@ -1,0 +1,112 @@
+@baseUrl = http://127.0.0.1:8001
+@workflowJwt = {{$dotenv WORKFLOW_AGENT_JWT}}
+@codexJwt = {{$dotenv CODEX_AGENT_JWT}}
+
+### List visible tools for the current workflow JWT
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: Bearer {{workflowJwt}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "tools-list",
+  "method": "tools/list",
+  "params": {}
+}
+
+### Get workflow bootstrap
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: Bearer {{workflowJwt}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "bundle",
+  "method": "tools/call",
+  "params": {
+    "name": "analyze_daily_log_bundle",
+    "arguments": {}
+  }
+}
+
+### List manifest-backed projects
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: Bearer {{workflowJwt}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "list-projects",
+  "method": "tools/call",
+  "params": {
+    "name": "list_projects",
+    "arguments": {}
+  }
+}
+
+### Collect bounded logs with whitelisted docker/file options
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: Bearer {{workflowJwt}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "collect-logs",
+  "method": "tools/call",
+  "params": {
+    "name": "collect_logs",
+    "arguments": {
+      "project_name": "landingpage",
+      "source_keys": ["nginx", "backend"],
+      "save_to_files": false,
+      "tail_lines": 200,
+      "timestamps": true,
+      "since": "30m"
+    }
+  }
+}
+
+### Read one workflow skill resource
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: Bearer {{workflowJwt}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "read-skill",
+  "method": "resources/read",
+  "params": {
+    "uri": "skill://workflow/severity_guide"
+  }
+}
+
+### List resource templates
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: Bearer {{workflowJwt}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "templates-list",
+  "method": "resources/templates/list",
+  "params": {}
+}
+
+### List visible tools for the codex JWT
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: Bearer {{codexJwt}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "codex-tools-list",
+  "method": "tools/list",
+  "params": {}
+}
