@@ -73,6 +73,7 @@ class WorkflowToolMetadata(TypedDict):
 
     tool_name: str
     description: str
+    arguments: list[dict[str, object]]
 
 
 class WorkflowBootstrapPayload(TypedDict):
@@ -136,6 +137,9 @@ def get_allowed_workflow_tool_metadata(
         {
             "tool_name": metadata["tool_name"],
             "description": metadata["description"],
+            "arguments": (
+                metadata["arguments"] if isinstance(metadata.get("arguments"), list) else []
+            ),
         }
         for metadata in list_workflow_discoverable_tool_registrations()
         if str(metadata["required_scope"]) in granted_scopes

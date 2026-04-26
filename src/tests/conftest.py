@@ -81,6 +81,8 @@ class FileSourceManifestFactory:
         *,
         target: str,
         source_key: str = "app_file",
+        source_type: str = "file",
+        inspect_path_prefixes: list[str] | None = None,
         project_name: str = "landingpage",
         project_summary: str = "Temporary landingpage-style project for collection tests.",
     ) -> Path:
@@ -93,7 +95,7 @@ class FileSourceManifestFactory:
                     "sources": [
                         {
                             "source_key": source_key,
-                            "source_type": "file",
+                            "source_type": source_type,
                             "target": target,
                             "description": "Temporary file-backed application logs.",
                             "required": True,
@@ -101,6 +103,7 @@ class FileSourceManifestFactory:
                             "normalization_profile": "app_logs",
                             "retention_class": "short",
                             "default_noise_profile": "app_noise",
+                            "inspect_path_prefixes": inspect_path_prefixes or [],
                         }
                     ],
                 }

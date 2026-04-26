@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from joserfc import jwt
@@ -16,6 +17,7 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from auth.scopes import (  # noqa: E402
+    CONTAINER_FILES_READ_SCOPE,
     LOGS_COLLECT_SCOPE,
     MCP_HEALTH_READ_SCOPE,
     MCP_STATUS_READ_SCOPE,
@@ -62,6 +64,7 @@ def build_example_token_payloads(settings: Settings) -> dict[str, dict[str, obje
             "client_type": "codex",
             "scope": " ".join(
                 (
+                    CONTAINER_FILES_READ_SCOPE,
                     LOGS_COLLECT_SCOPE,
                     PROJECTS_READ_SCOPE,
                     MCP_STATUS_READ_SCOPE,
@@ -92,7 +95,13 @@ def main() -> None:
     """Print example JWTs for local development."""
 
     settings = get_settings()
-    print(json.dumps(build_example_tokens(settings), indent=2))
+    generated_at = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    payload = {
+        **build_example_tokens(settings),
+        "created_at": generated_at,
+        "updated_at": generated_at,
+    }
+    print(json.dumps(payload, indent=2))
 
 
 if __name__ == "__main__":

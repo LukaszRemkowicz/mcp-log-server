@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from unittest.mock import patch
 
 import pytest
 
 from auth.scopes import (
+    CONTAINER_FILES_READ_SCOPE,
     LOGS_COLLECT_SCOPE,
     MCP_HEALTH_READ_SCOPE,
     MCP_STATUS_READ_SCOPE,
@@ -15,6 +17,7 @@ from auth.scopes import (
 )
 from settings import Settings
 from tests.conftest import CollectLogsRequestFactory, FileSourceManifestFactory, JsonRpcFixture
+from utils.container_inspection_commands import ContainerPathStat
 
 
 @pytest.mark.parametrize(
@@ -38,13 +41,31 @@ from tests.conftest import CollectLogsRequestFactory, FileSourceManifestFactory,
                 "get_mcp_service_status",
                 "get_mcp_health_check",
             },
-            set(),
+            {
+                "read_container_file",
+                "stat_container_path",
+                "list_container_directory",
+            },
         ),
         (
             "codex-agent",
-            [PROJECTS_READ_SCOPE, LOGS_COLLECT_SCOPE, MCP_STATUS_READ_SCOPE, MCP_HEALTH_READ_SCOPE],
+            [
+                PROJECTS_READ_SCOPE,
+                LOGS_COLLECT_SCOPE,
+                CONTAINER_FILES_READ_SCOPE,
+                MCP_STATUS_READ_SCOPE,
+                MCP_HEALTH_READ_SCOPE,
+            ],
             "codex-agent",
-            {"collect_logs", "list_projects", "get_mcp_service_status", "get_mcp_health_check"},
+            {
+                "collect_logs",
+                "list_projects",
+                "read_container_file",
+                "stat_container_path",
+                "list_container_directory",
+                "get_mcp_service_status",
+                "get_mcp_health_check",
+            },
             {
                 "analyze_daily_log_bundle",
             },
@@ -123,6 +144,11 @@ def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
     assert any(item["tool_name"] == "list_projects" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_service_status" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_health_check" for item in payload["tools"])
+    collect_logs_tool = next(
+        item for item in payload["tools"] if item["tool_name"] == "collect_logs"
+    )
+    assert any(argument["name"] == "project_name" for argument in collect_logs_tool["arguments"])
+    assert any(argument["name"] == "source_keys" for argument in collect_logs_tool["arguments"])
 
 
 def test_collect_logs_api_returns_requested_and_resolved_file_sources(
@@ -214,6 +240,68 @@ def test_list_projects_api_returns_manifest_backed_projects(
     )
     assert landingpage["manifest_file"] == "landingpage.json"
     assert "docker" in landingpage["source_types"]
+
+
+def test_read_container_file_api_returns_file_contents(
+    tmp_path,
+    settings_fixture: Settings,
+    create_test_jwt_token: Callable[[str, list[str], str], str],
+    file_source_manifest_factory: FileSourceManifestFactory,
+    jsonrpc: JsonRpcFixture,
+) -> None:
+    manifest_path = file_source_manifest_factory.create(
+        target="backend-container",
+        source_key="backend",
+        source_type="docker",
+        inspect_path_prefixes=["/app/"],
+    )
+    settings = settings_fixture.model_copy(update={"manifest_path": manifest_path})
+    token = create_test_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+    )
+
+    with (
+        patch(
+            "tools.container_inspection.run_stat_container_path",
+            return_value=ContainerPathStat(
+                path="/app/VERSION",
+                is_dir=False,
+                size=12,
+                mode=0o100644,
+                modified_at="2026-04-26T10:00:00+00:00",
+            ),
+        ),
+        patch(
+            "tools.container_inspection.run_read_container_file",
+            return_value=("release-123\n", False),
+        ),
+    ):
+        with jsonrpc.with_settings(settings) as custom_jsonrpc:
+            response = custom_jsonrpc.post(
+                token=token,
+                data={
+                    "jsonrpc": "2.0",
+                    "id": "read-container-file",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "read_container_file",
+                        "arguments": {
+                            "project_name": "landingpage",
+                            "source_key": "backend",
+                            "path": "/app/VERSION",
+                        },
+                    },
+                },
+            )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert payload["action"] == "read_container_file"
+    assert payload["content"] == "release-123\n"
+    assert payload["file"]["name"] == "VERSION"
 
 
 def test_list_projects_api_returns_multiple_manifest_backed_projects(

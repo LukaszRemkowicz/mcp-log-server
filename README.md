@@ -30,7 +30,7 @@ under `src/agent_assets/`.
 
 Current MCP workflow surface includes:
 
-- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`
+- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `stat_container_path`, `list_container_directory`
 - resources: concrete workflow skill resources such as
   `skill://workflow/project_context`, `skill://workflow/severity_guide`,
   `skill://workflow/bot_detection`
@@ -136,10 +136,25 @@ Generate example JWTs locally:
 uv run python infra/scripts/generate_dev_jwt.py
 ```
 
-That prints two signed bearer tokens:
+That prints a JSON payload with:
 
 - `workflow_agent`
 - `codex_agent`
+- `created_at`
+- `updated_at`
+
+The usual local flow is to save it into `.agent/DEV_JWT_TOKENS.json`:
+
+```bash
+uv run python infra/scripts/generate_dev_jwt.py > .agent/DEV_JWT_TOKENS.json
+```
+
+Then export the values you want to use with `curl`:
+
+```bash
+export WORKFLOW_AGENT_JWT="$(jq -r '.workflow_agent' .agent/DEV_JWT_TOKENS.json)"
+export CODEX_AGENT_JWT="$(jq -r '.codex_agent' .agent/DEV_JWT_TOKENS.json)"
+```
 
 Current example JWT capabilities:
 
@@ -156,6 +171,9 @@ Current example JWT capabilities:
   - `list_projects`
   - `get_mcp_service_status`
   - `get_mcp_health_check`
+  - `read_container_file`
+  - `stat_container_path`
+  - `list_container_directory`
 
 Important:
 
@@ -311,15 +329,36 @@ Important response note:
 - current workflow entrypoint is a tool, not an MCP prompt
 - current workflow skills are exposed as concrete resources, not resource templates
 
-For local development, generate your own example JWTs with:
+For local development, generate fresh example JWTs with:
 
 ```bash
-uv run python infra/scripts/generate_dev_jwt.py
+uv run python infra/scripts/generate_dev_jwt.py > .agent/DEV_JWT_TOKENS.json
 ```
 
-If you want, you can save the generated tokens in your own local file such as
-`.agent/DEV_JWT_TOKENS.json`, but that file is not part of the project
-contract and should be treated as private local convenience state.
+Refresh them when:
+
+- they are older than 24 hours
+- token structure or expected scopes change
+
+Then export them into your shell:
+
+```bash
+export WORKFLOW_AGENT_JWT="$(jq -r '.workflow_agent' .agent/DEV_JWT_TOKENS.json)"
+export CODEX_AGENT_JWT="$(jq -r '.codex_agent' .agent/DEV_JWT_TOKENS.json)"
+```
+
+Quick terminal helpers:
+
+```bash
+# Pretty-print any MCP JSON body
+curl -k -sS http://127.0.0.1:8001/mcp ... | jq
+
+# Print only file content from read_container_file
+curl -k -sS http://127.0.0.1:8001/mcp ... | jq -r '.result.structuredContent.content'
+
+# Print only discovered entry names from list_container_directory
+curl -k -sS http://127.0.0.1:8001/mcp ... | jq -r '.result.structuredContent.entries[].name'
+```
 
 ### 1. List Visible Tools
 
@@ -360,6 +399,9 @@ What it returns right now for the codex token:
 - `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
+- `read_container_file`
+- `stat_container_path`
+- `list_container_directory`
 
 ### 2. Get Workflow Bootstrap
 
@@ -513,6 +555,96 @@ Important response detail:
 
 - `logs_by_source` is the agent-first field for the actual collected log text
 - `sources` still includes the per-source deterministic metadata and status
+
+### 2c. Inspect Allowed Container Paths
+
+Use these specialist tools with the codex token when an agent needs to verify
+deployed project files inside an approved container.
+
+Important:
+
+- these tools are not part of the workflow bootstrap inventory
+- they are available to the codex token because it includes
+  `container.files.read`
+- `source_key` is the manifest container alias such as `backend`, `frontend`,
+  `nginx`, or `traefik`
+- `path` is the filesystem path inside that container
+
+List an allowed directory:
+
+```bash
+curl -k -sS \
+  -H 'Authorization: Bearer '"$CODEX_AGENT_JWT" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2c-list",
+    "method":"tools/call",
+    "params":{
+      "name":"list_container_directory",
+      "arguments":{
+        "project_name":"landingpage",
+        "source_key":"backend",
+        "path":"/app"
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Read one allowed file:
+
+```bash
+curl -k -sS \
+  -H 'Authorization: Bearer '"$CODEX_AGENT_JWT" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2c-read",
+    "method":"tools/call",
+    "params":{
+      "name":"read_container_file",
+      "arguments":{
+        "project_name":"landingpage",
+        "source_key":"backend",
+        "path":"/app/manage.py",
+        "max_bytes":4000
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq -r '.result.structuredContent.content'
+```
+
+Stat one allowed path:
+
+```bash
+curl -k -sS \
+  -H 'Authorization: Bearer '"$CODEX_AGENT_JWT" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2c-stat",
+    "method":"tools/call",
+    "params":{
+      "name":"stat_container_path",
+      "arguments":{
+        "project_name":"landingpage",
+        "source_key":"nginx",
+        "path":"/etc/nginx/nginx.conf"
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+The manifest path whitelist still applies. For example:
+
+- `backend` and `frontend` can inspect approved `/app/...` paths
+- `nginx` can inspect approved `/etc/nginx/...` paths
+- `traefik` can inspect approved `/etc/traefik/...` paths
 
 Current write layout:
 

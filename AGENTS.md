@@ -17,6 +17,7 @@ truth. For broader direction, also read:
 - `README.md`
 - `infra/docs/current_project_state.md`
 - `infra/docs/repository_foundation.md`
+- `infra/docs/NEW/mcp_log_server_architecture.md`
 
 
 ## Short Project Summary
@@ -245,8 +246,25 @@ Current auth state:
 - if `updated_at` is older than one day, treat the saved tokens as not valid
   and generate fresh ones with:
   `uv run python infra/scripts/generate_dev_jwt.py`
+- if the expected token structure changes, for example a new required scope is
+  added for MCP checks, treat previously saved tokens as outdated and generate
+  fresh ones even if they are still within the 24-hour window
+- after generating fresh tokens for local MCP checks, save the new values back
+  into `.agent/DEV_JWT_TOKENS.json` before using curl or MCP client requests
 - if you keep generated tokens in `.agent/DEV_JWT_TOKENS.json`, treat that file
   as developer-local state, not as a repository contract
+
+
+## Planning Notes
+
+Use these docs when a task touches near-term design work that is not yet fully
+implemented:
+
+- `infra/docs/NEW/mcp_log_server_architecture.md`
+  broader MCP server implementation direction
+- `infra/docs/NEW/log_search_and_large_log_handling.md`
+  planned direction for adding log-search arguments to `collect_logs` and for
+  handling large log payloads without relying on unbounded in-memory responses
 
 
 ## Working Rules For This Repo

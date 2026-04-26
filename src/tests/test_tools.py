@@ -5,6 +5,7 @@ from fastmcp.utilities.components import FastMCPComponent
 
 from app import create_application
 from auth.scopes import (
+    CONTAINER_FILES_READ_SCOPE,
     LOGS_COLLECT_SCOPE,
     MCP_HEALTH_READ_SCOPE,
     MCP_STATUS_READ_SCOPE,
@@ -25,6 +26,9 @@ def test_application_registers_expected_mcp_components() -> None:
         assert "analyze_daily_log_bundle" in tool_names
         assert "collect_logs" in tool_names
         assert "list_projects" in tool_names
+        assert "read_container_file" in tool_names
+        assert "stat_container_path" in tool_names
+        assert "list_container_directory" in tool_names
         assert "get_mcp_service_status" in tool_names
         assert "get_mcp_health_check" in tool_names
         assert "list_workflow_skills" not in tool_names
@@ -79,6 +83,18 @@ def test_application_registers_expected_mcp_components() -> None:
         assert any(
             item["tool_name"] == "get_mcp_service_status" for item in bootstrap_text["tools"]
         )
+        collect_logs_tool = next(
+            item for item in bootstrap_text["tools"] if item["tool_name"] == "collect_logs"
+        )
+        assert collect_logs_tool["description"]
+        assert any(
+            argument["name"] == "project_name" for argument in collect_logs_tool["arguments"]
+        )
+        assert any(argument["name"] == "tail_lines" for argument in collect_logs_tool["arguments"])
+        list_projects_tool = next(
+            item for item in bootstrap_text["tools"] if item["tool_name"] == "list_projects"
+        )
+        assert list_projects_tool["arguments"] == []
         assert all(
             item["tool_name"] != "analyze_daily_log_bundle" for item in bootstrap_text["tools"]
         )
@@ -90,7 +106,7 @@ def test_tool_metadata_filters_tools_by_token_scopes() -> None:
     codex_token = AccessToken(
         token="codex-dev-token",
         client_id="codex-agent",
-        scopes=[MCP_HEALTH_READ_SCOPE],
+        scopes=[MCP_HEALTH_READ_SCOPE, CONTAINER_FILES_READ_SCOPE],
         claims={"sub": "codex-agent", "client_type": "codex", "project_key": "landingpage"},
     )
 
@@ -99,6 +115,7 @@ def test_tool_metadata_filters_tools_by_token_scopes() -> None:
     ]
 
     assert "get_mcp_health_check" in allowed_tool_names
+    assert "read_container_file" not in allowed_tool_names
     assert "analyze_daily_log_bundle" not in allowed_tool_names
     assert "get_mcp_service_status" not in allowed_tool_names
 

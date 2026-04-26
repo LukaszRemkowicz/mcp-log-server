@@ -1,12 +1,17 @@
 @baseUrl = http://127.0.0.1:8001
 @workflowJwt = {{$dotenv WORKFLOW_AGENT_JWT}}
 @codexJwt = {{$dotenv CODEX_AGENT_JWT}}
+@workflowAuth = Bearer {{workflowJwt}}
+@codexAuth = Bearer {{codexJwt}}
+
+### Note
+# Shell playbook and curl helpers live in README.md.
 
 ### List visible tools for the current workflow JWT
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{workflowJwt}}
+Authorization: {{workflowAuth}}
 
 {
   "jsonrpc": "2.0",
@@ -19,7 +24,7 @@ Authorization: Bearer {{workflowJwt}}
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{workflowJwt}}
+Authorization: {{workflowAuth}}
 
 {
   "jsonrpc": "2.0",
@@ -35,7 +40,7 @@ Authorization: Bearer {{workflowJwt}}
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{workflowJwt}}
+Authorization: {{workflowAuth}}
 
 {
   "jsonrpc": "2.0",
@@ -51,7 +56,7 @@ Authorization: Bearer {{workflowJwt}}
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{workflowJwt}}
+Authorization: {{workflowAuth}}
 
 {
   "jsonrpc": "2.0",
@@ -74,7 +79,7 @@ Authorization: Bearer {{workflowJwt}}
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{workflowJwt}}
+Authorization: {{workflowAuth}}
 
 {
   "jsonrpc": "2.0",
@@ -89,7 +94,7 @@ Authorization: Bearer {{workflowJwt}}
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{workflowJwt}}
+Authorization: {{workflowAuth}}
 
 {
   "jsonrpc": "2.0",
@@ -102,11 +107,72 @@ Authorization: Bearer {{workflowJwt}}
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{codexJwt}}
+Authorization: {{codexAuth}}
 
 {
   "jsonrpc": "2.0",
   "id": "codex-tools-list",
   "method": "tools/list",
   "params": {}
+}
+
+### List allowed files and folders in the landingpage backend container
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{codexAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "list-backend-app-dir",
+  "method": "tools/call",
+  "params": {
+    "name": "list_container_directory",
+    "arguments": {
+      "project_name": "landingpage",
+      "source_key": "backend",
+      "path": "/app"
+    }
+  }
+}
+
+### Read one file from the landingpage backend container
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{codexAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "read-backend-manage-py",
+  "method": "tools/call",
+  "params": {
+    "name": "read_container_file",
+    "arguments": {
+      "project_name": "landingpage",
+      "source_key": "backend",
+      "path": "/app/manage.py",
+      "max_bytes": 4000
+    }
+  }
+}
+
+### Stat one file from the landingpage nginx container
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{codexAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "stat-nginx-config",
+  "method": "tools/call",
+  "params": {
+    "name": "stat_container_path",
+    "arguments": {
+      "project_name": "landingpage",
+      "source_key": "nginx",
+      "path": "/etc/nginx/nginx.conf"
+    }
+  }
 }

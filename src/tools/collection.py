@@ -21,10 +21,11 @@ import docker
 from auth.scopes import LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE
 from dependencies import get_settings_dependency
 from logging_config import get_logger
-from manifests.loader import list_project_manifests, load_project_manifest
+from manifests.loader import list_project_manifests
 from manifests.models import SourceDefinition, SourceManifest
 from settings import Settings
 from tools.registry import workflow_discoverable_tool
+from tools.utils import load_authorized_project_manifest
 from utils.mcp_errors import build_agent_tool_error_result
 
 logger: logging.Logger = get_logger("tools.collection")
@@ -428,26 +429,11 @@ def build_collect_logs_payload(
 ) -> CollectLogsPayload:
     """Build the structured collection payload for the current caller and manifest."""
 
-    authorized_project_name = str(access_token.claims.get("project_key") or "").strip()
-    if not authorized_project_name:
-        raise ValueError("Authenticated access token must include a project_key claim.")
-
-    effective_project_name = requested_project_name or authorized_project_name
-    if effective_project_name != authorized_project_name:
-        raise ValueError(
-            "Requested project key does not match the project_key authorized by the access token."
-        )
-
-    manifests_dir = settings.manifest_path.parent
-    try:
-        manifest = load_project_manifest(manifests_dir, effective_project_name)
-    except FileNotFoundError as error:
-        raise ValueError(
-            f"Unknown project {effective_project_name!r}. No manifest file was "
-            "found for that project."
-        ) from error
-    if manifest.project_key != effective_project_name:
-        raise ValueError("Requested project key does not match the loaded manifest project_key.")
+    manifest, authorized_project_name, effective_project_name = load_authorized_project_manifest(
+        settings,
+        access_token,
+        requested_project_name,
+    )
 
     bounded_tail_lines = None if tail_lines is None else limit_tail_lines(tail_lines)
     resolved_sources, unknown_source_keys, resolved_source_keys = resolve_manifest_sources(
