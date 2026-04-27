@@ -267,10 +267,31 @@ implemented:
   handling large log payloads without relying on unbounded in-memory responses
 
 
+## External Skills
+
+This repo may also use the shared local skill library at:
+
+- [antigravity-awesome-skills](/Users/lukaszremkowicz/Projects/antigravity-awesome-skills)
+
+Use it as the first external skill source when a task needs:
+
+- architecture review
+- Python testing patterns
+- code review guidance
+- README/documentation authoring
+- other reusable engineering workflows not already local to this repository
+
+Do not copy skills into this repository by default. Prefer linking to and using
+the shared skill set in place unless the user explicitly asks for a local copy.
+
+
 ## Working Rules For This Repo
 
 - Prefer matching the existing `landingpage` monitoring workflow before
   inventing new abstractions.
+- Check the shared local skill library in
+  `/Users/lukaszremkowicz/Projects/antigravity-awesome-skills` before inventing
+  new process, review, testing, or documentation guidance.
 - Keep prompts small enough that on-demand skills still matter.
 - Do not assume the agent runtime magically understands prompts/tools/skills;
   code still has to orchestrate MCP calls explicitly.
@@ -287,6 +308,13 @@ Current local validation command:
 ```bash
 uv run pytest
 ```
+
+Current collector test caveat:
+
+- collector and snapshot tools have strong unit and API-level coverage
+- docker-backed collection inside pytest is covered with mocks
+- the curl-driven MCP HTTP path is covered by `infra/scripts/run_http_e2e.sh`
+- real live-container log collection is not yet exercised inside pytest
 
 Common run path:
 

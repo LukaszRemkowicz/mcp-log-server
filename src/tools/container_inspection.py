@@ -21,21 +21,24 @@ It exposes only deterministic, read-only file inspection primitives:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Any, Literal
 
 from fastmcp.dependencies import CurrentAccessToken, Depends
 from fastmcp.server.auth import AccessToken, require_scopes
 from fastmcp.tools.base import ToolResult
-from mcp.types import TextContent
-from pydantic import BaseModel, ConfigDict
 
 from app import mcp
 from auth.scopes import CONTAINER_FILES_READ_SCOPE
 from dependencies import get_settings_dependency
 from manifests.models import SourceDefinition
 from settings import Settings
+from tools.errors import build_container_file_error_result
+from tools.models import (
+    ContainerPathMetadataPayload,
+    ListContainerDirectoryPayload,
+    ReadContainerFilePayload,
+    StatContainerPathPayload,
+)
 from tools.utils import load_authorized_project_manifest, resolve_container_source_definition
 from utils.container_inspection_commands import MAX_CONTAINER_FILE_BYTES, ContainerPathStat
 from utils.container_inspection_commands import (
@@ -43,189 +46,7 @@ from utils.container_inspection_commands import (
 )
 from utils.container_inspection_commands import read_container_file as run_read_container_file
 from utils.container_inspection_commands import stat_container_path as run_stat_container_path
-from utils.mcp_errors import (
-    AgentToolErrorResult,
-    build_agent_error_payload,
-    build_agent_tool_error_result,
-)
-
-
-class ContainerPathMetadataPayload(BaseModel):
-    """Describe one inspected file or directory inside an approved container.
-
-    This is the shared path metadata shape used by all container-inspection
-    responses. It keeps the public MCP contract consistent whether the caller
-    is:
-
-    - reading a file
-    - statting a path
-    - listing a directory
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    path: str
-    name: str
-    is_dir: bool
-    size: int
-    mode: int
-    modified_at: str | None
-
-    def __getitem__(self, key: str) -> object:
-        """Allow legacy dict-style reads while keeping a typed model contract."""
-
-        return getattr(self, key)
-
-
-class ReadContainerFilePayload(BaseModel):
-    """Structured success payload returned by `read_container_file`.
-
-    The tool returns both the inspected file metadata and the text content
-    that was read from the container, plus a truncation flag when `max_bytes`
-    limits the returned body.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    action: Literal["read_container_file"]
-    requested_project_name: str | None
-    authorized_project_name: str
-    effective_project_name: str
-    source_key: str
-    container_name: str
-    path: str
-    max_bytes: int
-    truncated: bool
-    content: str
-    file: ContainerPathMetadataPayload
-
-
-class StatContainerPathPayload(BaseModel):
-    """Structured success payload returned by `stat_container_path`.
-
-    This is the lightest inspection response. It lets an agent verify whether
-    a path exists and inspect its metadata without reading file contents or
-    listing directory children.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    action: Literal["stat_container_path"]
-    requested_project_name: str | None
-    authorized_project_name: str
-    effective_project_name: str
-    source_key: str
-    container_name: str
-    path: str
-    stat: ContainerPathMetadataPayload
-
-
-class ListContainerDirectoryPayload(BaseModel):
-    """Structured success payload returned by `list_container_directory`.
-
-    The tool only returns immediate entries for one approved directory. It is
-    intentionally not a recursive filesystem browser.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    action: Literal["list_container_directory"]
-    requested_project_name: str | None
-    authorized_project_name: str
-    effective_project_name: str
-    source_key: str
-    container_name: str
-    path: str
-    truncated: bool
-    entries: list[ContainerPathMetadataPayload]
-
-
-@dataclass(frozen=True)
-class _ContainerInspectionErrorRule:
-    """Describe one ordered message-to-error mapping for inspection failures."""
-
-    message_fragment: str
-    error_code: str
-    retry_tips: list[str]
-
-
-_CONTAINER_INSPECTION_ERROR_RULES: tuple[_ContainerInspectionErrorRule, ...] = (
-    _ContainerInspectionErrorRule(
-        message_fragment="project_key claim",
-        error_code="missing_project_key_claim",
-        retry_tips=[
-            "Retry with a JWT that includes the project_key claim for the monitored project.",
-        ],
-    ),
-    _ContainerInspectionErrorRule(
-        message_fragment="authorized by the access token",
-        error_code="project_access_mismatch",
-        retry_tips=[
-            "Retry with project_name equal to the project_key authorized by the current JWT.",
-        ],
-    ),
-    _ContainerInspectionErrorRule(
-        message_fragment="No manifest file was found",
-        error_code="unknown_project",
-        retry_tips=[
-            "Call list_projects to discover the project_name values currently available.",
-            "Retry with one of the listed project names.",
-        ],
-    ),
-    _ContainerInspectionErrorRule(
-        message_fragment="loaded manifest project_key",
-        error_code="manifest_project_mismatch",
-        retry_tips=[
-            "Verify that the manifest filename and its project_key describe the same project.",
-        ],
-    ),
-    _ContainerInspectionErrorRule(
-        message_fragment="source_key was not found",
-        error_code="unknown_container_source_key",
-        retry_tips=[
-            "Retry with one of the docker source_keys returned by list_projects for this project.",
-        ],
-    ),
-    _ContainerInspectionErrorRule(
-        message_fragment="only available for docker sources",
-        error_code="container_source_type_mismatch",
-        retry_tips=["Retry with a docker-backed source_key."],
-    ),
-    _ContainerInspectionErrorRule(
-        message_fragment="not enabled for the requested source",
-        error_code="container_inspection_not_enabled",
-        retry_tips=[
-            "Retry with a source that exposes inspect_path_prefixes in the project manifest.",
-        ],
-    ),
-    _ContainerInspectionErrorRule(
-        message_fragment="must be an absolute path",
-        error_code="container_path_not_absolute",
-        retry_tips=["Retry with an absolute container path like /app/VERSION."],
-    ),
-    _ContainerInspectionErrorRule(
-        message_fragment="parent directory traversal",
-        error_code="container_path_parent_traversal",
-        retry_tips=["Retry with a normalized path inside the allowed source prefix."],
-    ),
-    _ContainerInspectionErrorRule(
-        message_fragment="outside the manifest whitelist",
-        error_code="container_path_not_allowed",
-        retry_tips=[
-            "Retry with a path under one of the manifest-approved path prefixes for this source.",
-        ],
-    ),
-    _ContainerInspectionErrorRule(
-        message_fragment="Docker Engine API is not available",
-        error_code="docker_api_unavailable",
-        retry_tips=["Retry in a runtime where the Docker socket is mounted and reachable."],
-    ),
-    _ContainerInspectionErrorRule(
-        message_fragment="was not found",
-        error_code="container_path_not_found",
-        retry_tips=["Retry with a different path under the allowed source prefixes."],
-    ),
-)
+from utils.mcp_errors import build_agent_tool_error_result
 
 
 def _normalize_container_path(path: str) -> str:
@@ -301,113 +122,6 @@ def _build_path_metadata(
         size=size,
         mode=mode,
         modified_at=str(modified_at) if modified_at is not None else None,
-    )
-
-
-def _build_container_file_error_details(
-    *,
-    error_code: str,
-    requested_project_name: str | None,
-    source_key: str | None,
-    path: str | None,
-    access_token: AccessToken | None,
-    settings: Settings,
-) -> dict[str, Any] | None:
-    """Build structured details for one normalized inspection error code."""
-
-    if error_code == "project_access_mismatch":
-        return {
-            "requested_project_name": requested_project_name,
-            "authorized_project_name": str(
-                access_token.claims.get("project_key") if access_token is not None else ""
-            ),
-        }
-    if error_code == "unknown_project":
-        return {"requested_project_name": requested_project_name}
-    if error_code == "manifest_project_mismatch":
-        return {"manifests_dir": str(settings.manifest_path.parent)}
-    if error_code in {
-        "unknown_container_source_key",
-        "container_source_type_mismatch",
-        "container_inspection_not_enabled",
-    }:
-        return {"source_key": source_key}
-    if error_code in {"container_path_not_absolute", "container_path_parent_traversal"}:
-        return {"path": path}
-    if error_code in {"container_path_not_allowed", "container_path_not_found"}:
-        return {"source_key": source_key, "path": path}
-    return None
-
-
-def _classify_container_file_error(message: str) -> tuple[str, list[str]]:
-    """Classify one inspection error message into a stable code and retry tips.
-
-    The public MCP error contract is intentionally normalized, but the raw
-    failures come from several helpers and runtime layers. This classifier
-    keeps the mapping in one ordered table instead of a long imperative
-    `elif` ladder.
-    """
-
-    for rule in _CONTAINER_INSPECTION_ERROR_RULES:
-        if rule.message_fragment in message:
-            return rule.error_code, rule.retry_tips
-    return (
-        "container_file_inspection_error",
-        ["Review the tool arguments and retry with a valid source_key and path."],
-    )
-
-
-def _build_container_file_error_result(
-    *,
-    action: str,
-    message: str,
-    requested_project_name: str | None,
-    source_key: str | None,
-    path: str | None,
-    access_token: AccessToken | None,
-    settings: Settings,
-    shape_defaults: dict[str, Any] | None = None,
-) -> ToolResult:
-    """Map one inspection failure into a stable, agent-facing MCP error result.
-
-    The specialist inspection tools should keep a predictable response shape
-    even on errors so that:
-
-    - agents can branch on `isError`
-    - terminal callers can still extract known fields safely
-    - validation and authorization failures remain easy to understand
-
-    This helper translates common validation and runtime failures into:
-
-    - a stable `error_code`
-    - retry guidance
-    - optional structured details
-    - shape defaults for the specific inspection action
-    """
-
-    error_code, retry_tips = _classify_container_file_error(message)
-    details = _build_container_file_error_details(
-        error_code=error_code,
-        requested_project_name=requested_project_name,
-        source_key=source_key,
-        path=path,
-        access_token=access_token,
-        settings=settings,
-    )
-
-    payload = {
-        "action": action,
-        **(shape_defaults or {}),
-        **build_agent_error_payload(
-            error_code=error_code,
-            message=message,
-            retry_tips=retry_tips,
-            details=details,
-        ),
-    }
-    return AgentToolErrorResult(
-        content=[TextContent(type="text", text=message)],
-        structured_content=payload,
     )
 
 
@@ -494,7 +208,7 @@ def stat_container_path(
             stat=_metadata_from_stat(stat_payload),
         )
     except ValueError as error:
-        return _build_container_file_error_result(
+        return build_container_file_error_result(
             action="stat_container_path",
             message=str(error),
             requested_project_name=project_name,
@@ -589,7 +303,7 @@ def read_container_file(
             file=file_metadata,
         )
     except ValueError as error:
-        return _build_container_file_error_result(
+        return build_container_file_error_result(
             action="read_container_file",
             message=str(error),
             requested_project_name=project_name,
@@ -677,7 +391,7 @@ def list_container_directory(
             entries=[_metadata_from_stat(entry) for entry in entries],
         )
     except ValueError as error:
-        return _build_container_file_error_result(
+        return build_container_file_error_result(
             action="list_container_directory",
             message=str(error),
             requested_project_name=project_name,

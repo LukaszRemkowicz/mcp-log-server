@@ -32,10 +32,10 @@ def build_example_token_payloads(settings: Settings) -> dict[str, dict[str, obje
     """Return example JWT payloads for local development clients."""
 
     now = int(time.time())
-    exp = now + settings.jwt_expiration_seconds
+    exp = now + settings.JWT_EXPIRATION_SECONDS
     common_claims = {
-        "iss": settings.jwt_issuer,
-        "aud": settings.jwt_audience,
+        "iss": settings.JWT_ISSUER,
+        "aud": settings.JWT_AUDIENCE,
         "iat": now,
         "exp": exp,
         "project_key": "landingpage",
@@ -78,15 +78,15 @@ def build_example_token_payloads(settings: Settings) -> dict[str, dict[str, obje
 def build_example_tokens(settings: Settings) -> dict[str, str]:
     """Return signed example JWTs for local development."""
 
-    signing_key = OctKey.import_key(settings.jwt_shared_secret)
-    header = {"alg": settings.jwt_algorithm, "typ": "JWT"}
+    signing_key = OctKey.import_key(settings.JWT_SHARED_SECRET)
+    header = {"alg": settings.JWT_ALGORITHM, "typ": "JWT"}
     tokens: dict[str, str] = {}
     for token_name, payload in build_example_token_payloads(settings).items():
         tokens[token_name] = jwt.encode(
             header,
             payload,
             signing_key,
-            algorithms=[settings.jwt_algorithm],
+            algorithms=[settings.JWT_ALGORITHM],
         )
     return tokens
 

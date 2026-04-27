@@ -41,10 +41,35 @@ jobs:
     with:
       working_directory: .
 
+  http-e2e:
+    name: HTTP E2E
+    runs-on: ubuntu-latest
+    needs: [quality]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --group dev
+
+      - name: Run HTTP MCP end-to-end checks
+        run: bash infra/scripts/run_http_e2e.sh
+
   docker-build:
     name: Docker Build Check
     runs-on: ubuntu-latest
-    needs: [quality, tests]
+    needs: [quality, tests, http-e2e]
 
     steps:
       - name: Checkout code
@@ -72,11 +97,11 @@ jobs:
       head_branch: dev
 
   pr-status:
-    needs: [quality, tests, docker-build, codeql, version-check]
+    needs: [quality, tests, http-e2e, docker-build, codeql, version-check]
     if: always()
     uses: LukaszRemkowicz/ci-cd/.github/workflows/pr-status.yml@main
     with:
       status_items_json: >-
-        {"Quality":"${{ needs.quality.result }}","Tests":"${{ needs.tests.result }}","Docker Build Check":"${{ needs.docker-build.result }}","CodeQL":"${{ needs.codeql.result }}","Version Check":"${{ needs.version-check.result }}"}
+        {"Quality":"${{ needs.quality.result }}","Tests":"${{ needs.tests.result }}","HTTP E2E":"${{ needs.http-e2e.result }}","Docker Build Check":"${{ needs.docker-build.result }}","CodeQL":"${{ needs.codeql.result }}","Version Check":"${{ needs.version-check.result }}"}
       success_message: All MCP service CI checks passed.
       failure_message: MCP service CI failed. Please review the workflow logs.

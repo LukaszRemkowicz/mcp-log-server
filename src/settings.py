@@ -19,30 +19,42 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    environment: str = "dev"
-    host: str = "127.0.0.1"
-    port: int = 8001
-    log_level: str = "INFO"
-    log_format: str = "text"
-    jwt_algorithm: str = "HS256"
-    jwt_shared_secret: str = "change-me-local-dev-secret"
-    jwt_issuer: str = "mcp-log-server-dev"
-    jwt_audience: str = "mcp-log-server"
-    jwt_expiration_seconds: int = 86400
-    logs_dir: Path = Field(
+    ENVIRONMENT: str = "dev"
+    HOST: str = "127.0.0.1"
+    PORT: int = 8001
+    LOG_LEVEL: str = "INFO"
+    LOG_FORMAT: str = "text"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_SHARED_SECRET: str = "change-me-local-dev-secret"
+    JWT_ISSUER: str = "mcp-log-server-dev"
+    JWT_AUDIENCE: str = "mcp-log-server"
+    JWT_EXPIRATION_SECONDS: int = 86400
+    LOGS_DIR: Path = Field(
         default=REPOSITORY_ROOT / "docker-logs",
         alias="DOCKER_LOGS_DIR",
     )
-    manifest_path: Path = REPOSITORY_ROOT / "src/manifests/landingpage.json"
-    mcp_path: str = "/mcp"
-    mcp_stateless_http: bool = True
-    mcp_json_response: bool = True
+    DEFAULT_LOG_WINDOW: str = Field(
+        default="24h",
+        alias="DEFAULT_LOG_WINDOW",
+    )
+    WORKFLOW_ARCHIVE_RETENTION: str = Field(
+        default="14d",
+        alias="WORKFLOW_ARCHIVE_RETENTION",
+    )
+    LOG_SNAPSHOT_RETENTION: str = Field(
+        default="7d",
+        alias="LOG_SNAPSHOT_RETENTION",
+    )
+    MANIFEST_PATH: Path = REPOSITORY_ROOT / "src/manifests/landingpage.json"
+    MCP_PATH: str = "/mcp"
+    MCP_STATELESS_HTTP: bool = True
+    MCP_JSON_RESPONSE: bool = True
 
     def model_post_init(self, __context: object) -> None:
         """Normalize relative repository paths after settings load."""
 
-        self.logs_dir = self._resolve_repo_path(self.logs_dir)
-        self.manifest_path = self._resolve_repo_path(self.manifest_path)
+        self.LOGS_DIR = self._resolve_repo_path(self.LOGS_DIR)
+        self.MANIFEST_PATH = self._resolve_repo_path(self.MANIFEST_PATH)
 
     @staticmethod
     def _resolve_repo_path(path: Path) -> Path:

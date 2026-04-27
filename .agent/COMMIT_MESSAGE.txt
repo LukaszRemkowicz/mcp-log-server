@@ -1,10 +1,11 @@
-feat(manifests): Add MCP manifest foundation and align roadmap
+feat(mcp): Add snapshot-based log analysis tools
 
-Add the first project manifest schema, loader, sample landingpage manifest,
-and tests so MCP can describe project log sources without hardcoded mappings.
+Replace inline-oriented log collection with a snapshot-first workflow that
+persists workflow and session log snapshots, then lets agents inspect them
+through list/read/grep follow-up tools.
 
-Update the architecture and repository docs to match the current plan:
-HTTP-only service startup, mocked auth abstraction now, real auth later, and
-smaller implementation phases centered on request-driven log collection.
-
-Ignore local .agent state so assistant artifacts do not leak into git.
+Refactor collection logic into dedicated services, models, utils, and error
+mapping helpers so the MCP tool layer is thinner and easier to reason about.
+Tighten the agent-facing contract with clearer auth-driven discovery defaults,
+chunked snapshot reads, paged grep windows, improved snapshot validation
+errors, and stronger live HTTP coverage in CI.

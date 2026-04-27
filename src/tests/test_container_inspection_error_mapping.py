@@ -4,10 +4,7 @@ import pytest
 from fastmcp.server.auth import AccessToken
 
 from settings import Settings
-from tools.container_inspection import (
-    _build_container_file_error_details,
-    _classify_container_file_error,
-)
+from tools.errors import build_container_file_error_details, classify_container_file_error
 
 
 @pytest.mark.parametrize(
@@ -102,7 +99,7 @@ def test_classify_container_file_error_returns_expected_mapping(
     expected_error_code: str,
     expected_retry_tips: list[str],
 ) -> None:
-    error_code, retry_tips = _classify_container_file_error(message)
+    error_code, retry_tips = classify_container_file_error(message)
 
     assert error_code == expected_error_code
     assert retry_tips == expected_retry_tips
@@ -217,7 +214,7 @@ def test_build_container_file_error_details_returns_expected_details(
     expected_details: dict[str, str] | None,
 ) -> None:
     settings = settings_fixture.model_copy(
-        update={"manifest_path": settings_fixture.manifest_path.parent / "landingpage.json"}
+        update={"MANIFEST_PATH": settings_fixture.MANIFEST_PATH.parent / "landingpage.json"}
     )
     access_token = AccessToken(
         token="codex-dev-token",
@@ -226,7 +223,7 @@ def test_build_container_file_error_details_returns_expected_details(
         claims={"sub": "codex-agent", "project_key": "landingpage"},
     )
 
-    details = _build_container_file_error_details(
+    details = build_container_file_error_details(
         error_code=error_code,
         requested_project_name=requested_project_name,
         source_key=source_key,
@@ -236,6 +233,6 @@ def test_build_container_file_error_details_returns_expected_details(
     )
 
     if error_code == "manifest_project_mismatch":
-        assert details == {"manifests_dir": str(settings_fixture.manifest_path.parent)}
+        assert details == {"manifests_dir": str(settings_fixture.MANIFEST_PATH.parent)}
     else:
         assert details == expected_details

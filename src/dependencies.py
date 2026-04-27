@@ -1,7 +1,12 @@
 """Dependency injection helpers for FastMCP components."""
 
-from settings import Settings, get_settings
+from typing import TYPE_CHECKING
+
+from conf import get_settings
 from utils.assets import WorkflowAssetLoader
+
+if TYPE_CHECKING:
+    from settings import Settings
 
 
 def get_settings_dependency() -> Settings:

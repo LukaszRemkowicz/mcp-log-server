@@ -11,8 +11,8 @@ def build_auth_provider(settings: Settings) -> AuthProvider | None:
     """Build the FastMCP JWT auth provider."""
 
     return JWTVerifier(
-        public_key=settings.jwt_shared_secret,
-        issuer=settings.jwt_issuer,
-        audience=settings.jwt_audience,
-        algorithm=settings.jwt_algorithm,
+        public_key=settings.JWT_SHARED_SECRET,
+        issuer=settings.JWT_ISSUER,
+        audience=settings.JWT_AUDIENCE,
+        algorithm=settings.JWT_ALGORITHM,
     )

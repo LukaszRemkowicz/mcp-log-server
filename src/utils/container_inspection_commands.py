@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import TYPE_CHECKING
 
 from docker.errors import APIError, DockerException
 from requests import exceptions as requests_exceptions
 
 import docker
+
+if TYPE_CHECKING:
+    from docker.client import DockerClient  # type: ignore[import-not-found]
 
 DOCKER_INSPECTION_TIMEOUT_SECONDS = 15
 MAX_CONTAINER_FILE_BYTES = 200_000
@@ -27,41 +30,12 @@ class ContainerPathStat:
     modified_at: str | None
 
 
-class _ContainerExecResult(Protocol):
-    """Minimal typed shape returned by the Docker SDK exec wrapper."""
-
-    exit_code: int | None
-    output: bytes
-
-
-class _DockerContainer(Protocol):
-    """Minimal typed container surface used by inspection commands."""
-
-    def exec_run(
-        self,
-        cmd: list[str],
-        stdout: bool = ...,
-        stderr: bool = ...,
-    ) -> _ContainerExecResult: ...
-
-
-class _DockerContainerCollection(Protocol):
-    """Minimal typed container collection surface used by the client."""
-
-    def get(self, container_id: str) -> _DockerContainer: ...
-
-
-class _DockerClient(Protocol):
-    """Minimal typed Docker client surface needed by this module."""
-
-    containers: _DockerContainerCollection
-
-
 def _run_container_command(container_name: str, command: list[str]) -> str:
     """Run one approved command inside a container and return UTF-8 output."""
 
     try:
-        client: _DockerClient = docker.from_env(  # type: ignore[attr-defined]
+        # docker-py exposes from_env at runtime, but the typing is incomplete here.
+        client: DockerClient = docker.from_env(  # type: ignore[attr-defined]
             timeout=DOCKER_INSPECTION_TIMEOUT_SECONDS
         )
         container = client.containers.get(container_name)

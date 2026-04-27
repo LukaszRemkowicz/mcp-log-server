@@ -125,7 +125,11 @@ def _serialize_default(default: Any) -> Any:
     return repr(default)
 
 
-def _get_tool_arguments(func: Callable[..., Any]) -> list[dict[str, Any]]:
+def _get_tool_arguments(
+    func: Callable[..., Any],
+    *,
+    default_overrides: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Return the public argument metadata for one workflow-discoverable tool.
 
     These argument entries are intentionally lighter than FastMCP's full JSON
@@ -155,7 +159,11 @@ def _get_tool_arguments(func: Callable[..., Any]) -> list[dict[str, Any]]:
                 "name": parameter.name,
                 "type": _annotation_to_string(parameter.annotation),
                 "required": parameter.default is Signature.empty,
-                "default": _serialize_default(parameter.default),
+                "default": _serialize_default(
+                    default_overrides.get(parameter.name, parameter.default)
+                    if default_overrides is not None
+                    else parameter.default
+                ),
             }
         )
     return arguments
@@ -163,6 +171,8 @@ def _get_tool_arguments(func: Callable[..., Any]) -> list[dict[str, Any]]:
 
 def workflow_discoverable_tool(
     required_scope: str,
+    *,
+    argument_default_overrides: dict[str, Any] | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Register a tool in two places: MCP and the workflow bootstrap registry.
 
@@ -205,7 +215,10 @@ def workflow_discoverable_tool(
             "tool_name": func.__name__,
             "description": _get_tool_summary(func),
             "required_scope": required_scope,
-            "arguments": _get_tool_arguments(func),
+            "arguments": _get_tool_arguments(
+                func,
+                default_overrides=argument_default_overrides,
+            ),
         }
         return mcp.tool(auth=require_scopes(required_scope))(func)
 

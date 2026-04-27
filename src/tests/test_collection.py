@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import json
+import os
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,11 +15,14 @@ from manifests.models import SourceDefinition
 from settings import Settings
 from tests.conftest import FileSourceManifestFactory
 from tools.collection import (
-    MAX_UNBOUNDED_FILE_BYTES,
+    MAX_INLINE_LOG_BYTES,
     build_collect_logs_payload,
     collect_logs,
     collect_source,
+    grep_log_snapshot,
+    list_log_snapshot_files,
     list_projects,
+    read_log_snapshot_file,
 )
 from tools.container_inspection import (
     list_container_directory,
@@ -39,7 +44,7 @@ def test_build_collect_logs_payload_collects_requested_file_source(
     manifest_path = file_source_manifest_factory.create(target=str(log_file))
 
     settings = settings_fixture.model_copy(
-        update={"manifest_path": manifest_path, "logs_dir": logs_dir}
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
     )
     token = AccessToken(
         token="workflow-dev-token",
@@ -53,7 +58,7 @@ def test_build_collect_logs_payload_collects_requested_file_source(
         token,
         requested_project_name="landingpage",
         requested_source_keys=["app_file", "unknown_source"],
-        save_to_files=True,
+        workspace="workflow",
         tail_lines=2,
         timestamps=False,
         since=None,
@@ -62,11 +67,11 @@ def test_build_collect_logs_payload_collects_requested_file_source(
 
     assert payload["requested_project_name"] == "landingpage"
     assert payload["authorized_project_name"] == "landingpage"
-    assert payload["save_to_files"] is True
+    assert payload["workspace"] == "workflow"
     assert payload["requested_tail_lines"] == 2
     assert payload["effective_tail_lines"] == 2
     assert payload["requested_timestamps"] is False
-    assert payload["requested_since"] is None
+    assert payload["requested_since"] == "24h"
     assert payload["requested_until"] is None
     assert payload["tail_lines_limited"] is False
     assert payload["resolved_source_keys"] == ["app_file"]
@@ -77,20 +82,57 @@ def test_build_collect_logs_payload_collects_requested_file_source(
     assert payload["retry_tips"] == [
         "Retry with only source_keys returned by the manifest-backed project configuration."
     ]
-    assert payload["logs_by_source"] == {"app_file": "beta\ngamma"}
-    latest_dir = logs_dir / "landingpage" / "latest"
-    archive_dir = logs_dir / "landingpage" / "archive"
+    assert payload["logs_by_source"] == {"app_file": "beta\ngamma\n"}
+    latest_dir = logs_dir / "landingpage" / "workflow" / "latest"
+    archive_dir = logs_dir / "landingpage" / "workflow" / "archive"
 
-    assert payload["project_output_dir"] == str(logs_dir / "landingpage")
-    assert payload["latest_output_dir"] == str(latest_dir)
-    assert payload["archive_dir"] == str(archive_dir)
-    assert payload.sources[0].content == "beta\ngamma"
+    assert payload.project_output_dir == str(logs_dir / "landingpage")
+    assert payload.latest_output_dir == str(latest_dir)
+    assert payload.archive_dir == str(archive_dir)
+    assert payload.snapshot_dir == str(latest_dir)
+    assert payload.persisted is True
+    assert payload.snapshot_id.startswith("workflow_")
+    assert Path(payload.metadata_file).exists()
+    assert payload.sources[0].content == "beta\ngamma\n"
     assert payload.sources[0].status == "collected"
     output_file = payload.sources[0].output_file
     assert output_file is not None
-    assert Path(output_file).read_text(encoding="utf-8") == "beta\ngamma"
+    assert Path(output_file).read_text(encoding="utf-8") == "beta\ngamma\n"
     assert (latest_dir / "collected_at.txt").exists()
     assert archive_dir.exists()
+
+
+def test_build_collect_logs_payload_uses_runtime_default_log_window(
+    tmp_path,
+    settings_fixture: Settings,
+    file_source_manifest_factory: FileSourceManifestFactory,
+) -> None:
+    log_file = tmp_path / "logs.txt"
+    log_file.write_text("alpha\nbeta\n", encoding="utf-8")
+    manifest_path = file_source_manifest_factory.create(target=str(log_file))
+    settings = settings_fixture.model_copy(
+        update={"MANIFEST_PATH": manifest_path, "DEFAULT_LOG_WINDOW": "12h"}
+    )
+    token = AccessToken(
+        token="workflow-dev-token",
+        client_id="workflow-agent",
+        scopes=["logs.collect"],
+        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    )
+
+    payload = build_collect_logs_payload(
+        settings,
+        token,
+        requested_project_name="landingpage",
+        requested_source_keys=["app_file"],
+        workspace="workflow",
+        tail_lines=None,
+        timestamps=False,
+        since=None,
+        until=None,
+    )
+
+    assert payload["requested_since"] == "12h"
 
 
 def test_build_collect_logs_payload_archives_previous_latest_snapshot(
@@ -105,7 +147,7 @@ def test_build_collect_logs_payload_archives_previous_latest_snapshot(
     manifest_path = file_source_manifest_factory.create(target=str(log_file))
 
     settings = settings_fixture.model_copy(
-        update={"manifest_path": manifest_path, "logs_dir": logs_dir}
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
     )
     token = AccessToken(
         token="workflow-dev-token",
@@ -119,7 +161,7 @@ def test_build_collect_logs_payload_archives_previous_latest_snapshot(
         token,
         requested_project_name="landingpage",
         requested_source_keys=["app_file"],
-        save_to_files=True,
+        workspace="workflow",
         tail_lines=1,
         timestamps=False,
         since=None,
@@ -133,22 +175,131 @@ def test_build_collect_logs_payload_archives_previous_latest_snapshot(
         token,
         requested_project_name="landingpage",
         requested_source_keys=["app_file"],
-        save_to_files=True,
+        workspace="workflow",
         tail_lines=1,
         timestamps=False,
         since=None,
         until=None,
     )
 
-    latest_dir = logs_dir / "landingpage" / "latest"
-    archive_root = logs_dir / "landingpage" / "archive"
+    latest_dir = logs_dir / "landingpage" / "workflow" / "latest"
+    archive_root = logs_dir / "landingpage" / "workflow" / "archive"
     archived_snapshots = [path for path in archive_root.iterdir() if path.is_dir()]
 
-    assert first_payload.sources[0].content == "third"
-    assert second_payload.sources[0].content == "sixth"
-    assert (latest_dir / "app_file.log").read_text(encoding="utf-8") == "sixth"
+    assert first_payload.sources[0].content == "third\n"
+    assert second_payload.sources[0].content == "sixth\n"
+    assert (latest_dir / "app_file.log").read_text(encoding="utf-8") == "sixth\n"
     assert archived_snapshots
-    assert (archived_snapshots[0] / "app_file.log").read_text(encoding="utf-8") == "third"
+    assert (archived_snapshots[0] / "app_file.log").read_text(encoding="utf-8") == "third\n"
+
+
+def test_archived_workflow_snapshot_metadata_points_to_archived_files(
+    tmp_path,
+    settings_fixture: Settings,
+    file_source_manifest_factory: FileSourceManifestFactory,
+) -> None:
+    log_file = tmp_path / "logs.txt"
+    log_file.write_text("first\nsecond\nthird\n", encoding="utf-8")
+    logs_dir = tmp_path / "collected-logs"
+    manifest_path = file_source_manifest_factory.create(target=str(log_file))
+    settings = settings_fixture.model_copy(
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
+    )
+    token = AccessToken(
+        token="workflow-dev-token",
+        client_id="workflow-agent",
+        scopes=["logs.collect"],
+        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    )
+
+    build_collect_logs_payload(
+        settings,
+        token,
+        requested_project_name="landingpage",
+        requested_source_keys=["app_file"],
+        workspace="workflow",
+        tail_lines=1,
+        timestamps=False,
+        since=None,
+        until=None,
+    )
+    log_file.write_text("fourth\nfifth\nsixth\n", encoding="utf-8")
+    build_collect_logs_payload(
+        settings,
+        token,
+        requested_project_name="landingpage",
+        requested_source_keys=["app_file"],
+        workspace="workflow",
+        tail_lines=1,
+        timestamps=False,
+        since=None,
+        until=None,
+    )
+
+    archive_root = logs_dir / "landingpage" / "workflow" / "archive"
+    archived_snapshot = next(path for path in archive_root.iterdir() if path.is_dir())
+    archived_metadata = json.loads(
+        (archived_snapshot / "snapshot_metadata.json").read_text(encoding="utf-8")
+    )
+
+    assert archived_metadata["files"][0]["output_file"] == str(archived_snapshot / "app_file.log")
+
+
+def test_session_snapshot_cleanup_uses_configured_retention_window(
+    tmp_path,
+    settings_fixture: Settings,
+    file_source_manifest_factory: FileSourceManifestFactory,
+) -> None:
+    log_file = tmp_path / "logs.txt"
+    log_file.write_text("one\ntwo\n", encoding="utf-8")
+    logs_dir = tmp_path / "collected-logs"
+    manifest_path = file_source_manifest_factory.create(target=str(log_file))
+    settings = settings_fixture.model_copy(
+        update={
+            "MANIFEST_PATH": manifest_path,
+            "LOGS_DIR": logs_dir,
+            "LOG_SNAPSHOT_RETENTION": "10m",
+        }
+    )
+    token = AccessToken(
+        token="workflow-dev-token",
+        client_id="workflow-agent",
+        scopes=["logs.collect"],
+        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    )
+
+    sessions_root = logs_dir / "landingpage" / "sessions"
+    old_snapshot = sessions_root / "session_old"
+    old_snapshot.mkdir(parents=True, exist_ok=True)
+    old_file = old_snapshot / "backend.log"
+    old_file.write_text("old\n", encoding="utf-8")
+    old_timestamp = (datetime.now(UTC) - timedelta(minutes=11)).timestamp()
+    old_snapshot.touch()
+    old_file.touch()
+    os.utime(old_snapshot, (old_timestamp, old_timestamp))
+    os.utime(old_file, (old_timestamp, old_timestamp))
+
+    recent_snapshot = sessions_root / "session_recent"
+    recent_snapshot.mkdir(parents=True, exist_ok=True)
+    recent_file = recent_snapshot / "backend.log"
+    recent_file.write_text("recent\n", encoding="utf-8")
+
+    payload = build_collect_logs_payload(
+        settings,
+        token,
+        requested_project_name="landingpage",
+        requested_source_keys=["app_file"],
+        workspace="session",
+        session_id="cleanup-session",
+        tail_lines=1,
+        timestamps=False,
+        since=None,
+        until=None,
+    )
+
+    assert not old_snapshot.exists()
+    assert recent_snapshot.exists()
+    assert (sessions_root / payload.snapshot_id).exists()
 
 
 def test_build_collect_logs_payload_rejects_project_mismatch(
@@ -163,7 +314,7 @@ def test_build_collect_logs_payload_rejects_project_mismatch(
     manifest_path = file_source_manifest_factory.create(target=str(log_file))
 
     settings = settings_fixture.model_copy(
-        update={"manifest_path": manifest_path, "logs_dir": logs_dir}
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
     )
     token = AccessToken(
         token="workflow-dev-token",
@@ -178,7 +329,7 @@ def test_build_collect_logs_payload_rejects_project_mismatch(
             token,
             requested_project_name="other-project",
             requested_source_keys=None,
-            save_to_files=False,
+            workspace="workflow",
             tail_lines=20,
             timestamps=False,
             since=None,
@@ -198,7 +349,7 @@ def test_build_collect_logs_payload_reports_tail_line_limiting(
     manifest_path = file_source_manifest_factory.create(target=str(log_file))
 
     settings = settings_fixture.model_copy(
-        update={"manifest_path": manifest_path, "logs_dir": logs_dir}
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
     )
     token = AccessToken(
         token="workflow-dev-token",
@@ -212,7 +363,7 @@ def test_build_collect_logs_payload_reports_tail_line_limiting(
         token,
         requested_project_name="landingpage",
         requested_source_keys=["app_file"],
-        save_to_files=False,
+        workspace="workflow",
         tail_lines=5000,
         timestamps=False,
         since=None,
@@ -222,10 +373,11 @@ def test_build_collect_logs_payload_reports_tail_line_limiting(
     assert payload["requested_tail_lines"] == 5000
     assert payload["effective_tail_lines"] == 1000
     assert payload["tail_lines_limited"] is True
-    assert payload["project_output_dir"] is None
-    assert payload["latest_output_dir"] is None
-    assert payload["archive_dir"] is None
-    assert payload["collected_at_file"] is None
+    assert payload["project_output_dir"] == str(logs_dir / "landingpage")
+    assert payload["latest_output_dir"] == str(logs_dir / "landingpage" / "workflow" / "latest")
+    assert payload["archive_dir"] == str(logs_dir / "landingpage" / "workflow" / "archive")
+    assert payload["snapshot_dir"] == str(logs_dir / "landingpage" / "workflow" / "latest")
+    assert payload["collected_at_file"] is not None
     assert payload["warnings"] == [
         "Requested tail_lines=5000 exceeded the server limit of 1000. Using 1000 instead."
     ]
@@ -240,7 +392,7 @@ def test_build_collect_logs_payload_warns_when_tail_lines_is_omitted(
     log_file = tmp_path / "logs.txt"
     log_file.write_text("one\ntwo\nthree\n", encoding="utf-8")
     manifest_path = file_source_manifest_factory.create(target=str(log_file))
-    settings = settings_fixture.model_copy(update={"manifest_path": manifest_path})
+    settings = settings_fixture.model_copy(update={"MANIFEST_PATH": manifest_path})
     token = AccessToken(
         token="workflow-dev-token",
         client_id="workflow-agent",
@@ -253,7 +405,7 @@ def test_build_collect_logs_payload_warns_when_tail_lines_is_omitted(
         token,
         requested_project_name="landingpage",
         requested_source_keys=["app_file"],
-        save_to_files=False,
+        workspace="workflow",
         tail_lines=None,
         timestamps=False,
         since=None,
@@ -287,7 +439,7 @@ def test_read_container_file_reads_whitelisted_project_file(
         source_type="docker",
         inspect_path_prefixes=["/app/"],
     )
-    settings = settings_fixture.model_copy(update={"manifest_path": manifest_path})
+    settings = settings_fixture.model_copy(update={"MANIFEST_PATH": manifest_path})
     token = AccessToken(
         token="codex-dev-token",
         client_id="codex-agent",
@@ -342,7 +494,7 @@ def test_read_container_file_rejects_non_whitelisted_path(
         source_type="docker",
         inspect_path_prefixes=["/app/"],
     )
-    settings = settings_fixture.model_copy(update={"manifest_path": manifest_path})
+    settings = settings_fixture.model_copy(update={"MANIFEST_PATH": manifest_path})
     token = AccessToken(
         token="codex-dev-token",
         client_id="codex-agent",
@@ -380,7 +532,7 @@ def test_read_container_file_rejects_parent_directory_traversal(
         source_type="docker",
         inspect_path_prefixes=["/app/"],
     )
-    settings = settings_fixture.model_copy(update={"manifest_path": manifest_path})
+    settings = settings_fixture.model_copy(update={"MANIFEST_PATH": manifest_path})
     token = AccessToken(
         token="codex-dev-token",
         client_id="codex-agent",
@@ -417,7 +569,7 @@ def test_list_container_directory_lists_immediate_entries(
         source_type="docker",
         inspect_path_prefixes=["/app/"],
     )
-    settings = settings_fixture.model_copy(update={"manifest_path": manifest_path})
+    settings = settings_fixture.model_copy(update={"MANIFEST_PATH": manifest_path})
     token = AccessToken(
         token="codex-dev-token",
         client_id="codex-agent",
@@ -487,7 +639,7 @@ def test_stat_container_path_returns_metadata(
         source_type="docker",
         inspect_path_prefixes=["/etc/nginx/"],
     )
-    settings = settings_fixture.model_copy(update={"manifest_path": manifest_path})
+    settings = settings_fixture.model_copy(update={"MANIFEST_PATH": manifest_path})
     token = AccessToken(
         token="codex-dev-token",
         client_id="codex-agent",
@@ -521,15 +673,19 @@ def test_stat_container_path_returns_metadata(
     assert payload["stat"]["is_dir"] is False
 
 
-def test_build_collect_logs_payload_reports_large_file_without_tail_lines(
+def test_build_collect_logs_payload_auto_persists_large_file_without_tail_lines(
     tmp_path,
     settings_fixture: Settings,
     file_source_manifest_factory: FileSourceManifestFactory,
 ) -> None:
     log_file = tmp_path / "logs.txt"
-    log_file.write_text("x" * (MAX_UNBOUNDED_FILE_BYTES + 1), encoding="utf-8")
+    full_content = "x" * (MAX_INLINE_LOG_BYTES + 1)
+    log_file.write_text(full_content, encoding="utf-8")
+    logs_dir = tmp_path / "collected-logs"
     manifest_path = file_source_manifest_factory.create(target=str(log_file))
-    settings = settings_fixture.model_copy(update={"manifest_path": manifest_path})
+    settings = settings_fixture.model_copy(
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
+    )
     token = AccessToken(
         token="workflow-dev-token",
         client_id="workflow-agent",
@@ -542,18 +698,22 @@ def test_build_collect_logs_payload_reports_large_file_without_tail_lines(
         token,
         requested_project_name="landingpage",
         requested_source_keys=["app_file"],
-        save_to_files=False,
+        workspace="workflow",
         tail_lines=None,
         timestamps=False,
         since=None,
         until=None,
     )
 
-    assert payload.sources[0].status == "unavailable"
-    assert "Retry with tail_lines" in str(payload.sources[0].error)
-    assert payload.sources[0].retry_tips == [
-        "Retry with tail_lines <= 1000 to keep file output bounded."
-    ]
+    assert payload.sources[0].status == "collected"
+    assert payload.sources[0].content_truncated is True
+    assert payload.sources[0].byte_count == len(full_content.encode("utf-8"))
+    assert payload.sources[0].output_file is not None
+    assert Path(payload.sources[0].output_file).read_text(encoding="utf-8") == full_content
+    assert payload["project_output_dir"] == str(logs_dir / "landingpage")
+    assert payload["latest_output_dir"] == str(logs_dir / "landingpage" / "workflow" / "latest")
+    assert any("only a preview was returned" in warning for warning in payload.warnings)
+    assert payload.logs_by_source["app_file"] == payload.sources[0].content
 
 
 def test_collect_source_reports_docker_timeout_without_tail_lines_tip(monkeypatch) -> None:
@@ -640,7 +800,7 @@ def test_collect_source_uses_docker_sdk_filters(monkeypatch) -> None:
     )
 
     assert result["status"] == "collected"
-    assert result["content"] == "log line 1\nlog line 2"
+    assert result["content"] == "log line 1\nlog line 2\n"
     assert captured["timestamps"] is True
     assert captured["stdout"] is True
     assert captured["stderr"] is True
@@ -698,7 +858,6 @@ def test_collect_logs_returns_agent_error_for_invalid_docker_time_filter(
     result = collect_logs(
         project_name="landingpage",
         source_keys=["backend"],
-        save_to_files=False,
         tail_lines=20,
         timestamps=False,
         since="thirty-minutes",
@@ -724,7 +883,7 @@ def test_collect_logs_returns_agent_error_for_project_mismatch(
     log_file = tmp_path / "logs.txt"
     log_file.write_text("one\n", encoding="utf-8")
     manifest_path = file_source_manifest_factory.create(target=str(log_file))
-    settings = settings_fixture.model_copy(update={"manifest_path": manifest_path})
+    settings = settings_fixture.model_copy(update={"MANIFEST_PATH": manifest_path})
     token = AccessToken(
         token="workflow-dev-token",
         client_id="workflow-agent",
@@ -735,7 +894,6 @@ def test_collect_logs_returns_agent_error_for_project_mismatch(
     result = collect_logs(
         project_name="other-project",
         source_keys=None,
-        save_to_files=False,
         tail_lines=20,
         timestamps=False,
         since=None,
@@ -761,7 +919,7 @@ def test_collect_logs_returns_agent_error_for_missing_project_claim(
     log_file = tmp_path / "logs.txt"
     log_file.write_text("one\n", encoding="utf-8")
     manifest_path = file_source_manifest_factory.create(target=str(log_file))
-    settings = settings_fixture.model_copy(update={"manifest_path": manifest_path})
+    settings = settings_fixture.model_copy(update={"MANIFEST_PATH": manifest_path})
     token = AccessToken(
         token="workflow-dev-token",
         client_id="workflow-agent",
@@ -772,7 +930,6 @@ def test_collect_logs_returns_agent_error_for_missing_project_claim(
     result = collect_logs(
         project_name="landingpage",
         source_keys=None,
-        save_to_files=False,
         tail_lines=20,
         timestamps=False,
         since=None,
@@ -788,6 +945,605 @@ def test_collect_logs_returns_agent_error_for_missing_project_claim(
         "Retry with a JWT that includes the project_key claim for the monitored project.",
         "Use get_mcp_service_status to inspect the current caller context if needed.",
     ]
+
+
+def test_collect_logs_returns_agent_error_for_missing_session_id(
+    tmp_path,
+    settings_fixture: Settings,
+    file_source_manifest_factory: FileSourceManifestFactory,
+) -> None:
+    log_file = tmp_path / "logs.txt"
+    log_file.write_text("one\n", encoding="utf-8")
+    manifest_path = file_source_manifest_factory.create(target=str(log_file))
+    settings = settings_fixture.model_copy(update={"MANIFEST_PATH": manifest_path})
+    token = AccessToken(
+        token="workflow-dev-token",
+        client_id="workflow-agent",
+        scopes=["logs.collect"],
+        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    )
+
+    result = collect_logs(
+        project_name="landingpage",
+        source_keys=["app_file"],
+        workspace="session",
+        session_id=None,
+        tail_lines=20,
+        timestamps=False,
+        since=None,
+        until=None,
+        settings=settings,
+        access_token=token,
+    )
+    mcp_result = result.to_mcp_result()
+
+    assert mcp_result.isError is True
+    assert mcp_result.structuredContent["error_code"] == "missing_session_id"
+
+
+def test_build_collect_logs_payload_requires_agent_chosen_session_id(
+    tmp_path,
+    settings_fixture: Settings,
+    file_source_manifest_factory: FileSourceManifestFactory,
+) -> None:
+    log_file = tmp_path / "logs.txt"
+    log_file.write_text("one\ntwo\n", encoding="utf-8")
+    logs_dir = tmp_path / "collected-logs"
+    manifest_path = file_source_manifest_factory.create(target=str(log_file))
+    settings = settings_fixture.model_copy(
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
+    )
+    token = AccessToken(
+        token="workflow-dev-token",
+        client_id="workflow-agent",
+        scopes=["logs.collect"],
+        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    )
+
+    with pytest.raises(ValueError, match="session_id is required"):
+        build_collect_logs_payload(
+            settings,
+            token,
+            requested_project_name="landingpage",
+            requested_source_keys=["app_file"],
+            workspace="session",
+            session_id=None,
+            tail_lines=1,
+            timestamps=False,
+            since=None,
+            until=None,
+        )
+
+
+def test_build_collect_logs_payload_reuses_agent_chosen_session_id(
+    tmp_path,
+    settings_fixture: Settings,
+    file_source_manifest_factory: FileSourceManifestFactory,
+) -> None:
+    log_file = tmp_path / "logs.txt"
+    log_file.write_text("one\ntwo\n", encoding="utf-8")
+    logs_dir = tmp_path / "collected-logs"
+    manifest_path = file_source_manifest_factory.create(target=str(log_file))
+    settings = settings_fixture.model_copy(
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
+    )
+    token = AccessToken(
+        token="workflow-dev-token",
+        client_id="workflow-agent",
+        scopes=["logs.collect"],
+        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    )
+
+    payload = build_collect_logs_payload(
+        settings,
+        token,
+        requested_project_name="landingpage",
+        requested_source_keys=["app_file"],
+        workspace="session",
+        session_id="agent-session-1",
+        tail_lines=1,
+        timestamps=False,
+        since=None,
+        until=None,
+    )
+
+    snapshot_dir = logs_dir / "landingpage" / "sessions" / "agent-session-1"
+    assert payload.workspace == "session"
+    assert payload.session_id == "agent-session-1"
+    assert payload.snapshot_id == "agent-session-1"
+    assert payload.snapshot_dir == str(snapshot_dir)
+    assert payload.latest_output_dir is None
+    assert payload.archive_dir is None
+    assert snapshot_dir.exists()
+    assert (snapshot_dir / "app_file.log").read_text(encoding="utf-8") == "two\n"
+
+
+def test_list_read_and_grep_log_snapshot_use_persisted_workflow_snapshot(
+    tmp_path,
+    settings_fixture: Settings,
+    file_source_manifest_factory: FileSourceManifestFactory,
+) -> None:
+    log_file = tmp_path / "logs.txt"
+    log_file.write_text("alpha\nmatch one\nmatch two\n", encoding="utf-8")
+    logs_dir = tmp_path / "collected-logs"
+    manifest_path = file_source_manifest_factory.create(target=str(log_file))
+    settings = settings_fixture.model_copy(
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
+    )
+    token = AccessToken(
+        token="workflow-dev-token",
+        client_id="workflow-agent",
+        scopes=["logs.collect"],
+        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    )
+
+    collect_result = collect_logs(
+        project_name="landingpage",
+        source_keys=["app_file"],
+        workspace="workflow",
+        tail_lines=None,
+        timestamps=False,
+        since=None,
+        until=None,
+        settings=settings,
+        access_token=token,
+    )
+    collect_payload = collect_result.structured_content
+    assert collect_payload is not None
+
+    list_result = list_log_snapshot_files(
+        snapshot_id="latest",
+        workspace="workflow",
+        project_name="landingpage",
+        settings=settings,
+        access_token=token,
+    )
+    list_payload = list_result.structured_content
+    assert list_payload is not None
+
+    assert list_payload["action"] == "list_log_snapshot_files"
+    assert list_payload["snapshot_id"] == collect_payload["snapshot_id"]
+    assert list_payload["files"][0]["source_key"] == "app_file"
+
+    read_result = read_log_snapshot_file(
+        snapshot_id="latest",
+        source_key="app_file",
+        workspace="workflow",
+        project_name="landingpage",
+        max_bytes=5,
+        settings=settings,
+        access_token=token,
+    )
+    read_payload = read_result.structured_content
+    assert read_payload is not None
+
+    assert read_payload["action"] == "read_log_snapshot_file"
+    assert read_payload["start_line"] == 1
+    assert read_payload["line_count"] == 3
+    assert read_payload["content"] == "alpha"
+    assert read_payload["truncated"] is True
+    assert read_payload["file"]["source_key"] == "app_file"
+
+    grep_result = grep_log_snapshot(
+        snapshot_id="latest",
+        grep="match",
+        workspace="workflow",
+        project_name="landingpage",
+        source_keys=["app_file"],
+        settings=settings,
+        access_token=token,
+    )
+    grep_payload = grep_result.structured_content
+    assert grep_payload is not None
+
+    assert grep_payload["action"] == "grep_log_snapshot"
+    assert grep_payload["match_offset"] == 0
+    assert grep_payload["match_limit"] == 100
+    assert grep_payload["match_count"] == 2
+    assert grep_payload["returned_match_count"] == 2
+    assert grep_payload["truncated"] is False
+    assert grep_payload["matched_source_keys"] == ["app_file"]
+    assert grep_payload["matches"][0]["line"] == "match one"
+    assert grep_payload["matches"][0]["line_truncated"] is False
+    assert grep_payload["matches"][1]["line"] == "match two"
+    assert grep_payload["matches"][1]["line_truncated"] is False
+
+
+def test_read_log_snapshot_file_reanchors_tampered_metadata_to_snapshot_dir(
+    tmp_path,
+    settings_fixture: Settings,
+    file_source_manifest_factory: FileSourceManifestFactory,
+) -> None:
+    log_file = tmp_path / "logs.txt"
+    log_file.write_text("safe content\n", encoding="utf-8")
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_text("TOP_SECRET\n", encoding="utf-8")
+    logs_dir = tmp_path / "collected-logs"
+    manifest_path = file_source_manifest_factory.create(target=str(log_file))
+    settings = settings_fixture.model_copy(
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
+    )
+    token = AccessToken(
+        token="workflow-dev-token",
+        client_id="workflow-agent",
+        scopes=["logs.collect"],
+        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    )
+
+    collect_result = collect_logs(
+        project_name="landingpage",
+        source_keys=["app_file"],
+        workspace="workflow",
+        settings=settings,
+        access_token=token,
+    )
+    collect_payload = collect_result.structured_content
+    assert collect_payload is not None
+
+    metadata_file = Path(collect_payload["metadata_file"])
+    metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
+    metadata["files"][0]["output_file"] = str(outside_file)
+    metadata_file.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+    read_result = read_log_snapshot_file(
+        snapshot_id="latest",
+        source_key="app_file",
+        workspace="workflow",
+        project_name="landingpage",
+        settings=settings,
+        access_token=token,
+    )
+    read_payload = read_result.structured_content
+    assert read_payload is not None
+    assert read_payload["content"] == "safe content\n"
+
+
+def test_grep_log_snapshot_rejects_unknown_source_keys(
+    tmp_path,
+    settings_fixture: Settings,
+    file_source_manifest_factory: FileSourceManifestFactory,
+) -> None:
+    log_file = tmp_path / "logs.txt"
+    log_file.write_text("alpha\nmatch one\n", encoding="utf-8")
+    logs_dir = tmp_path / "collected-logs"
+    manifest_path = file_source_manifest_factory.create(target=str(log_file))
+    settings = settings_fixture.model_copy(
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
+    )
+    token = AccessToken(
+        token="workflow-dev-token",
+        client_id="workflow-agent",
+        scopes=["logs.collect"],
+        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    )
+
+    collect_logs(
+        project_name="landingpage",
+        source_keys=["app_file"],
+        workspace="workflow",
+        settings=settings,
+        access_token=token,
+    )
+
+    grep_result = grep_log_snapshot(
+        snapshot_id="latest",
+        grep="match",
+        workspace="workflow",
+        project_name="landingpage",
+        source_keys=["typo"],
+        settings=settings,
+        access_token=token,
+    )
+    grep_payload = grep_result.structured_content
+    assert grep_payload is not None
+    assert grep_payload["status"] == "error"
+    assert grep_payload["error_code"] == "snapshot_source_key_not_found"
+
+
+def test_grep_log_snapshot_supports_paged_match_windows(
+    tmp_path,
+    settings_fixture: Settings,
+    file_source_manifest_factory: FileSourceManifestFactory,
+) -> None:
+    log_file = tmp_path / "logs.txt"
+    log_file.write_text(
+        "match one\nmatch two\nmatch three\nmatch four\n",
+        encoding="utf-8",
+    )
+    logs_dir = tmp_path / "collected-logs"
+    manifest_path = file_source_manifest_factory.create(target=str(log_file))
+    settings = settings_fixture.model_copy(
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
+    )
+    token = AccessToken(
+        token="workflow-dev-token",
+        client_id="workflow-agent",
+        scopes=["logs.collect"],
+        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    )
+
+    collect_logs(
+        project_name="landingpage",
+        source_keys=["app_file"],
+        workspace="workflow",
+        settings=settings,
+        access_token=token,
+    )
+
+    grep_result = grep_log_snapshot(
+        snapshot_id="latest",
+        grep="match",
+        workspace="workflow",
+        project_name="landingpage",
+        source_keys=["app_file"],
+        match_offset=1,
+        match_limit=2,
+        settings=settings,
+        access_token=token,
+    )
+    grep_payload = grep_result.structured_content
+    assert grep_payload is not None
+
+    assert grep_payload["match_offset"] == 1
+    assert grep_payload["match_limit"] == 2
+    assert grep_payload["match_count"] == 4
+    assert grep_payload["returned_match_count"] == 2
+    assert grep_payload["truncated"] is True
+    assert grep_payload["matches"][0]["line"] == "match two"
+    assert grep_payload["matches"][1]["line"] == "match three"
+
+
+def test_grep_log_snapshot_truncates_large_match_lines(
+    tmp_path,
+    settings_fixture: Settings,
+    file_source_manifest_factory: FileSourceManifestFactory,
+) -> None:
+    long_line = "match " + ("x" * 40)
+    log_file = tmp_path / "logs.txt"
+    log_file.write_text(f"{long_line}\n", encoding="utf-8")
+    logs_dir = tmp_path / "collected-logs"
+    manifest_path = file_source_manifest_factory.create(target=str(log_file))
+    settings = settings_fixture.model_copy(
+        update={
+            "MANIFEST_PATH": manifest_path,
+            "LOGS_DIR": logs_dir,
+        }
+    )
+    token = AccessToken(
+        token="workflow-dev-token",
+        client_id="workflow-agent",
+        scopes=["logs.collect"],
+        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    )
+
+    collect_logs(
+        project_name="landingpage",
+        source_keys=["app_file"],
+        workspace="workflow",
+        settings=settings,
+        access_token=token,
+    )
+
+    grep_result = grep_log_snapshot(
+        snapshot_id="latest",
+        grep="match",
+        workspace="workflow",
+        project_name="landingpage",
+        source_keys=["app_file"],
+        settings=settings,
+        access_token=token,
+    )
+    grep_payload = grep_result.structured_content
+    assert grep_payload is not None
+
+    assert grep_payload["match_count"] == 1
+    assert grep_payload["returned_match_count"] == 1
+    assert grep_payload["matches"][0]["line_truncated"] is False
+    assert grep_payload["matches"][0]["line"] == long_line
+
+
+def test_grep_log_snapshot_truncates_very_large_match_lines(
+    tmp_path,
+    settings_fixture: Settings,
+    file_source_manifest_factory: FileSourceManifestFactory,
+) -> None:
+    long_line = "match " + ("x" * 4000)
+    log_file = tmp_path / "logs.txt"
+    log_file.write_text(f"{long_line}\n", encoding="utf-8")
+    logs_dir = tmp_path / "collected-logs"
+    manifest_path = file_source_manifest_factory.create(target=str(log_file))
+    settings = settings_fixture.model_copy(
+        update={
+            "MANIFEST_PATH": manifest_path,
+            "LOGS_DIR": logs_dir,
+        }
+    )
+    token = AccessToken(
+        token="workflow-dev-token",
+        client_id="workflow-agent",
+        scopes=["logs.collect"],
+        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    )
+
+    collect_logs(
+        project_name="landingpage",
+        source_keys=["app_file"],
+        workspace="workflow",
+        settings=settings,
+        access_token=token,
+    )
+
+    grep_result = grep_log_snapshot(
+        snapshot_id="latest",
+        grep="match",
+        workspace="workflow",
+        project_name="landingpage",
+        source_keys=["app_file"],
+        settings=settings,
+        access_token=token,
+    )
+    grep_payload = grep_result.structured_content
+    assert grep_payload is not None
+
+    assert grep_payload["match_count"] == 1
+    assert grep_payload["returned_match_count"] == 1
+    assert grep_payload["matches"][0]["line_truncated"] is True
+    assert grep_payload["matches"][0]["line"] == long_line.encode("utf-8")[:2000].decode(
+        "utf-8",
+        errors="ignore",
+    )
+
+
+def test_read_log_snapshot_file_supports_line_chunks(
+    tmp_path,
+    settings_fixture: Settings,
+    file_source_manifest_factory: FileSourceManifestFactory,
+) -> None:
+    log_file = tmp_path / "logs.txt"
+    log_file.write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
+    logs_dir = tmp_path / "collected-logs"
+    manifest_path = file_source_manifest_factory.create(target=str(log_file))
+    settings = settings_fixture.model_copy(
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
+    )
+    token = AccessToken(
+        token="workflow-dev-token",
+        client_id="workflow-agent",
+        scopes=["logs.collect"],
+        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    )
+
+    collect_logs(
+        project_name="landingpage",
+        source_keys=["app_file"],
+        workspace="workflow",
+        settings=settings,
+        access_token=token,
+    )
+
+    read_result = read_log_snapshot_file(
+        snapshot_id="latest",
+        source_key="app_file",
+        workspace="workflow",
+        project_name="landingpage",
+        start_line=2,
+        line_count=2,
+        max_bytes=100,
+        settings=settings,
+        access_token=token,
+    )
+    read_payload = read_result.structured_content
+    assert read_payload is not None
+    assert read_payload["start_line"] == 2
+    assert read_payload["line_count"] == 2
+    assert read_payload["content"] == "two\nthree\n"
+
+
+def test_grep_log_snapshot_matches_across_multiple_persisted_files(
+    tmp_path,
+    settings_fixture: Settings,
+) -> None:
+    first_log_file = tmp_path / "first.log"
+    second_log_file = tmp_path / "second.log"
+    first_log_file.write_text("alpha\nshared match\nomega\n", encoding="utf-8")
+    second_log_file.write_text(
+        "beta\nshared match two\nshared match three\n",
+        encoding="utf-8",
+    )
+    logs_dir = tmp_path / "collected-logs"
+    manifest_path = tmp_path / "landingpage.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "project_key": "landingpage",
+                "project_summary": (
+                    "Temporary landingpage-style project for multi-source grep tests."
+                ),
+                "sources": [
+                    {
+                        "source_key": "app_first",
+                        "source_type": "file",
+                        "target": str(first_log_file),
+                        "description": "Temporary first file-backed application logs.",
+                        "required": True,
+                        "parser_type": "plain_text",
+                        "normalization_profile": "app_logs",
+                        "retention_class": "short",
+                        "default_noise_profile": "app_noise",
+                        "inspect_path_prefixes": [],
+                    },
+                    {
+                        "source_key": "app_second",
+                        "source_type": "file",
+                        "target": str(second_log_file),
+                        "description": "Temporary second file-backed application logs.",
+                        "required": True,
+                        "parser_type": "plain_text",
+                        "normalization_profile": "app_logs",
+                        "retention_class": "short",
+                        "default_noise_profile": "app_noise",
+                        "inspect_path_prefixes": [],
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    settings = settings_fixture.model_copy(
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
+    )
+    token = AccessToken(
+        token="workflow-dev-token",
+        client_id="workflow-agent",
+        scopes=["logs.collect"],
+        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    )
+
+    collect_result = collect_logs(
+        project_name="landingpage",
+        source_keys=["app_first", "app_second"],
+        workspace="workflow",
+        tail_lines=None,
+        timestamps=False,
+        since=None,
+        until=None,
+        settings=settings,
+        access_token=token,
+    )
+    collect_payload = collect_result.structured_content
+    assert collect_payload is not None
+
+    grep_result = grep_log_snapshot(
+        snapshot_id="latest",
+        grep="shared match",
+        workspace="workflow",
+        project_name="landingpage",
+        source_keys=["app_first", "app_second"],
+        settings=settings,
+        access_token=token,
+    )
+    grep_payload = grep_result.structured_content
+    assert grep_payload is not None
+
+    assert collect_payload["resolved_source_keys"] == ["app_first", "app_second"]
+    assert grep_payload["action"] == "grep_log_snapshot"
+    assert grep_payload["grep"] == "shared match"
+    assert grep_payload["match_offset"] == 0
+    assert grep_payload["match_limit"] == 100
+    assert grep_payload["match_count"] == 3
+    assert grep_payload["returned_match_count"] == 3
+    assert grep_payload["truncated"] is False
+    assert grep_payload["matched_source_keys"] == ["app_first", "app_second"]
+    assert grep_payload["searched_source_keys"] == ["app_first", "app_second"]
+    assert grep_payload["matches"][0]["source_key"] == "app_first"
+    assert grep_payload["matches"][0]["line"] == "shared match"
+    assert grep_payload["matches"][0]["line_truncated"] is False
+    assert grep_payload["matches"][1]["source_key"] == "app_second"
+    assert grep_payload["matches"][1]["line"] == "shared match two"
+    assert grep_payload["matches"][1]["line_truncated"] is False
+    assert grep_payload["matches"][2]["source_key"] == "app_second"
+    assert grep_payload["matches"][2]["line"] == "shared match three"
+    assert grep_payload["matches"][2]["line_truncated"] is False
 
 
 def test_list_projects_returns_manifest_backed_project_inventory(
@@ -819,7 +1575,7 @@ def test_list_projects_returns_multiple_manifest_backed_projects(
 
     file_source_manifest_factory.create(
         target=str(alpha_log),
-        project_name="alpha",
+        project_name="alpha\nshared match\nomega\n",
         project_summary="Alpha project summary.",
     )
     file_source_manifest_factory.create(
@@ -827,10 +1583,10 @@ def test_list_projects_returns_multiple_manifest_backed_projects(
         project_name="beta",
         project_summary="Beta project summary.",
     )
-    settings = settings_fixture.model_copy(update={"manifest_path": tmp_path / "alpha.json"})
+    settings = settings_fixture.model_copy(update={"MANIFEST_PATH": tmp_path / "alpha.json"})
 
     result = list_projects(settings=settings)
 
-    assert [item["project_name"] for item in result] == ["alpha", "beta"]
+    assert [item["project_name"] for item in result] == ["alpha\nshared match\nomega\n", "beta"]
     assert result[0]["project_summary"] == "Alpha project summary."
     assert result[1]["project_summary"] == "Beta project summary."

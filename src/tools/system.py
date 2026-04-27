@@ -44,10 +44,10 @@ def get_mcp_service_status(
         "subject": claims.get("sub", access_token.client_id if access_token is not None else None),
         "client_type": claims.get("client_type"),
         "project_key": claims.get("project_key"),
-        "environment": settings.environment,
-        "host": settings.host,
-        "port": settings.port,
-        "log_level": settings.log_level,
+        "environment": settings.ENVIRONMENT,
+        "host": settings.HOST,
+        "port": settings.PORT,
+        "log_level": settings.LOG_LEVEL,
     }
 
 

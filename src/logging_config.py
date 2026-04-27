@@ -30,11 +30,11 @@ def configure_logging(settings: Settings) -> logging.Logger:
 
     logger = logging.getLogger(LOGGER_NAME)
     logger.handlers.clear()
-    logger.setLevel(settings.log_level.upper())
+    logger.setLevel(settings.LOG_LEVEL.upper())
     logger.propagate = False
 
     handler = logging.StreamHandler()
-    if settings.log_format == "json":
+    if settings.LOG_FORMAT == "json":
         handler.setFormatter(JsonFormatter())
     else:
         handler.setFormatter(

@@ -9,7 +9,7 @@ def test_settings_default_manifest_path_matches_repository_sample(
     settings_fixture: Settings,
 ) -> None:
     assert (
-        settings_fixture.manifest_path
+        settings_fixture.MANIFEST_PATH
         == Path(__file__).resolve().parents[2] / "src/manifests/landingpage.json"
     )
 

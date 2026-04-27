@@ -67,10 +67,124 @@ Authorization: {{workflowAuth}}
     "arguments": {
       "project_name": "landingpage",
       "source_keys": ["nginx", "backend"],
-      "save_to_files": false,
+      "workspace": "workflow",
       "tail_lines": 200,
       "timestamps": true,
       "since": "30m"
+    }
+  }
+}
+
+### Collect bounded logs into the workflow snapshot workspace
+### Workflow does not need session_id. Omitting since uses the default 24h window.
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{workflowAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "collect-logs-workflow",
+  "method": "tools/call",
+  "params": {
+    "name": "collect_logs",
+    "arguments": {
+      "project_name": "landingpage",
+      "source_keys": ["backend"],
+      "workspace": "workflow",
+      "tail_lines": 200,
+      "timestamps": true,
+      "since": "30m"
+    }
+  }
+}
+
+### Collect logs into an agent-owned session workspace
+### Choose session_id yourself. Reuse the same value for later collect/list/read/grep calls in that session.
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{workflowAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "collect-logs-session",
+  "method": "tools/call",
+  "params": {
+    "name": "collect_logs",
+    "arguments": {
+      "project_name": "landingpage",
+      "source_keys": ["backend"],
+      "workspace": "session",
+      "session_id": "redis-timeout-debug-2026-04-27",
+      "tail_lines": 200
+    }
+  }
+}
+
+### List files from the latest persisted workflow snapshot
+### Use snapshot_id "latest" for the newest workflow run, or a concrete snapshot_id returned by collect_logs.
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{workflowAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "list-workflow-snapshot-files",
+  "method": "tools/call",
+  "params": {
+    "name": "list_log_snapshot_files",
+    "arguments": {
+      "project_name": "landingpage",
+      "workspace": "workflow",
+      "snapshot_id": "latest"
+    }
+  }
+}
+
+### Read one saved file from the latest workflow snapshot
+### For a stable archived/session read, replace "latest" with the explicit snapshot_id from collect_logs.
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{workflowAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "read-workflow-snapshot-file",
+  "method": "tools/call",
+  "params": {
+    "name": "read_log_snapshot_file",
+    "arguments": {
+      "project_name": "landingpage",
+      "workspace": "workflow",
+      "snapshot_id": "latest",
+      "source_key": "backend",
+      "max_bytes": 4000
+    }
+  }
+}
+
+### Search one persisted workflow snapshot
+### For repeatable analysis, use an explicit snapshot_id instead of "latest".
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{workflowAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "grep-workflow-snapshot",
+  "method": "tools/call",
+  "params": {
+    "name": "grep_log_snapshot",
+    "arguments": {
+      "project_name": "landingpage",
+      "workspace": "workflow",
+      "snapshot_id": "latest",
+      "grep": "/health",
+      "source_keys": ["backend"]
     }
   }
 }

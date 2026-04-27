@@ -25,6 +25,9 @@ def test_application_registers_expected_mcp_components() -> None:
 
         assert "analyze_daily_log_bundle" in tool_names
         assert "collect_logs" in tool_names
+        assert "list_log_snapshot_files" in tool_names
+        assert "read_log_snapshot_file" in tool_names
+        assert "grep_log_snapshot" in tool_names
         assert "list_projects" in tool_names
         assert "read_container_file" in tool_names
         assert "stat_container_path" in tool_names
@@ -79,6 +82,13 @@ def test_application_registers_expected_mcp_components() -> None:
             item["skill_name"] == "bot_detection" for item in bootstrap_text["optional_skills"]
         )
         assert any(item["tool_name"] == "collect_logs" for item in bootstrap_text["tools"])
+        assert any(
+            item["tool_name"] == "list_log_snapshot_files" for item in bootstrap_text["tools"]
+        )
+        assert any(
+            item["tool_name"] == "read_log_snapshot_file" for item in bootstrap_text["tools"]
+        )
+        assert any(item["tool_name"] == "grep_log_snapshot" for item in bootstrap_text["tools"])
         assert any(item["tool_name"] == "list_projects" for item in bootstrap_text["tools"])
         assert any(
             item["tool_name"] == "get_mcp_service_status" for item in bootstrap_text["tools"]
@@ -90,7 +100,18 @@ def test_application_registers_expected_mcp_components() -> None:
         assert any(
             argument["name"] == "project_name" for argument in collect_logs_tool["arguments"]
         )
+        assert any(argument["name"] == "session_id" for argument in collect_logs_tool["arguments"])
         assert any(argument["name"] == "tail_lines" for argument in collect_logs_tool["arguments"])
+        since_argument = next(
+            argument for argument in collect_logs_tool["arguments"] if argument["name"] == "since"
+        )
+        assert since_argument["default"] == "24h"
+        app_collect_tool = next(tool for tool in tools if tool.name == "collect_logs")
+        since_property = app_collect_tool.parameters["properties"]["since"]
+        assert since_property["default"] == "24h"
+        app_grep_tool = next(tool for tool in tools if tool.name == "grep_log_snapshot")
+        match_limit_property = app_grep_tool.parameters["properties"]["match_limit"]
+        assert match_limit_property["default"] == 100
         list_projects_tool = next(
             item for item in bootstrap_text["tools"] if item["tool_name"] == "list_projects"
         )

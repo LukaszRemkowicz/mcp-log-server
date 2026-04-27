@@ -59,14 +59,14 @@ class JsonRpcFixture:
         with patch.object(dependencies, "get_settings", return_value=settings):
             app = create_application(auth_provider=build_auth_provider(settings))
             asgi_app = app.http_app(
-                path=settings.mcp_path,
-                json_response=settings.mcp_json_response,
-                stateless_http=settings.mcp_stateless_http,
+                path=settings.MCP_PATH,
+                json_response=settings.MCP_JSON_RESPONSE,
+                stateless_http=settings.MCP_STATELESS_HTTP,
             )
             with TestClient(asgi_app) as api_client:
                 yield JsonRpcClient(
                     api_client=api_client,
-                    mcp_path=settings.mcp_path,
+                    mcp_path=settings.MCP_PATH,
                 )
 
 
@@ -123,7 +123,8 @@ class CollectLogsRequestFactory:
         request_id: str = "collect-1",
         project_name: str = "landingpage",
         source_keys: list[str] | None = None,
-        save_to_files: bool = False,
+        workspace: str = "workflow",
+        session_id: str | None = None,
         tail_lines: int | None = 200,
         timestamps: bool = False,
         since: str | None = None,
@@ -132,10 +133,8 @@ class CollectLogsRequestFactory:
         arguments: dict[str, Any] = {
             "project_name": project_name,
             "source_keys": source_keys or [],
-            "save_to_files": save_to_files,
+            "workspace": workspace,
             "timestamps": timestamps,
-            "since": since,
-            "until": until,
         }
         payload: dict[str, Any] = {
             "jsonrpc": "2.0",
@@ -148,26 +147,32 @@ class CollectLogsRequestFactory:
         }
         if tail_lines is not None:
             arguments["tail_lines"] = tail_lines
+        if session_id is not None:
+            arguments["session_id"] = session_id
+        if since is not None:
+            arguments["since"] = since
+        if until is not None:
+            arguments["until"] = until
         return payload
 
 
 @pytest.fixture
 def settings_fixture() -> Settings:
     return Settings(
-        environment="dev",
-        host="127.0.0.1",
-        port=8001,
-        log_level="INFO",
-        log_format="text",
-        jwt_algorithm="HS256",
-        jwt_shared_secret="change-me-local-dev-secret",
-        jwt_issuer="mcp-log-server-dev",
-        jwt_audience="mcp-log-server",
-        jwt_expiration_seconds=86400,
-        manifest_path=Path(__file__).resolve().parents[2] / "src/manifests/landingpage.json",
-        mcp_path="/mcp",
-        mcp_stateless_http=True,
-        mcp_json_response=True,
+        ENVIRONMENT="dev",
+        HOST="127.0.0.1",
+        PORT=8001,
+        LOG_LEVEL="INFO",
+        LOG_FORMAT="text",
+        JWT_ALGORITHM="HS256",
+        JWT_SHARED_SECRET="change-me-local-dev-secret",
+        JWT_ISSUER="mcp-log-server-dev",
+        JWT_AUDIENCE="mcp-log-server",
+        JWT_EXPIRATION_SECONDS=86400,
+        MANIFEST_PATH=Path(__file__).resolve().parents[2] / "src/manifests/landingpage.json",
+        MCP_PATH="/mcp",
+        MCP_STATELESS_HTTP=True,
+        MCP_JSON_RESPONSE=True,
     )
 
 
@@ -185,13 +190,13 @@ def collect_logs_request_factory() -> CollectLogsRequestFactory:
 def create_test_jwt_token(settings_fixture: Settings) -> Callable[[str, list[str], str], str]:
     def build_token(subject: str, scopes: list[str], client_id: str) -> str:
         now = int(time.time())
-        signing_key = OctKey.import_key(settings_fixture.jwt_shared_secret)
-        header = {"alg": settings_fixture.jwt_algorithm, "typ": "JWT"}
+        signing_key = OctKey.import_key(settings_fixture.JWT_SHARED_SECRET)
+        header = {"alg": settings_fixture.JWT_ALGORITHM, "typ": "JWT"}
         payload = {
-            "iss": settings_fixture.jwt_issuer,
-            "aud": settings_fixture.jwt_audience,
+            "iss": settings_fixture.JWT_ISSUER,
+            "aud": settings_fixture.JWT_AUDIENCE,
             "iat": now,
-            "exp": now + settings_fixture.jwt_expiration_seconds,
+            "exp": now + settings_fixture.JWT_EXPIRATION_SECONDS,
             "sub": subject,
             "client_id": client_id,
             "project_key": "landingpage",
@@ -201,7 +206,7 @@ def create_test_jwt_token(settings_fixture: Settings) -> Callable[[str, list[str
             header,
             payload,
             signing_key,
-            algorithms=[settings_fixture.jwt_algorithm],
+            algorithms=[settings_fixture.JWT_ALGORITHM],
         )
 
     return build_token
@@ -211,9 +216,9 @@ def create_test_jwt_token(settings_fixture: Settings) -> Callable[[str, list[str
 def api_client(settings_fixture: Settings) -> Generator[TestClient]:
     app = create_application(auth_provider=build_auth_provider(settings_fixture))
     asgi_app = app.http_app(
-        path=settings_fixture.mcp_path,
-        json_response=settings_fixture.mcp_json_response,
-        stateless_http=settings_fixture.mcp_stateless_http,
+        path=settings_fixture.MCP_PATH,
+        json_response=settings_fixture.MCP_JSON_RESPONSE,
+        stateless_http=settings_fixture.MCP_STATELESS_HTTP,
     )
     with TestClient(asgi_app) as client:
         yield client
@@ -227,6 +232,6 @@ def jsonrpc(
     return JsonRpcFixture(
         client=JsonRpcClient(
             api_client=api_client,
-            mcp_path=settings_fixture.mcp_path,
+            mcp_path=settings_fixture.MCP_PATH,
         )
     )

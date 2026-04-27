@@ -30,7 +30,7 @@ under `src/agent_assets/`.
 
 Current MCP workflow surface includes:
 
-- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `stat_container_path`, `list_container_directory`
+- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `stat_container_path`, `list_container_directory`
 - resources: concrete workflow skill resources such as
   `skill://workflow/project_context`, `skill://workflow/severity_guide`,
   `skill://workflow/bot_detection`
@@ -160,6 +160,9 @@ Current example JWT capabilities:
 
 - `workflow_agent`
   - `collect_logs`
+  - `list_log_snapshot_files`
+  - `read_log_snapshot_file`
+  - `grep_log_snapshot`
   - `list_projects`
   - `analyze_daily_log_bundle`
   - `get_mcp_service_status`
@@ -168,6 +171,9 @@ Current example JWT capabilities:
 
 - `codex_agent`
   - `collect_logs`
+  - `list_log_snapshot_files`
+  - `read_log_snapshot_file`
+  - `grep_log_snapshot`
   - `list_projects`
   - `get_mcp_service_status`
   - `get_mcp_health_check`
@@ -496,7 +502,7 @@ curl -sS \
       "arguments":{
         "project_name":"landingpage",
         "source_keys":["nginx","backend"],
-        "save_to_files":false,
+        "workspace":"workflow",
         "tail_lines":200,
         "timestamps":true,
         "since":"30m"
@@ -509,15 +515,16 @@ curl -sS \
 What it is for:
 
 - first deterministic collection surface after the workflow skeleton
-- explicit project, source, and docker/file option tracking
-- manifest-driven source resolution before later snapshot/filtering work
-- project-scoped persistence under the configured logs root
+- explicit project, source, workspace, and docker/file option tracking
+- manifest-driven source resolution before later snapshot reads or searches
+- project-scoped snapshot persistence under the configured logs root
 
 Agent-facing collect_logs arguments:
 
 - `project_name`
 - `source_keys`
-- `save_to_files`
+- `workspace`
+- `session_id`
 - optional `tail_lines`
 - `timestamps`
 - `since`
@@ -525,9 +532,18 @@ Agent-facing collect_logs arguments:
 
 Important:
 
-- if `tail_lines` is omitted, the server requests full source output where supported
+- if `since` is omitted, the server defaults to `24h`
+- if `tail_lines` is omitted, the server requests full source output inside the selected time window where supported
 - agents should prefer setting `tail_lines` when they do not need the full history
 - when an unbounded source is too slow or too large, the response includes retry guidance pointing back to `tail_lines`
+- `collect_logs` now always persists a snapshot for the requested workspace
+- `workspace="workflow"` does not require `session_id`
+- `workspace="session"` requires an agent-chosen `session_id`
+- the agent must choose `session_id` itself when starting a new session
+- reuse the same `session_id` for later collect/list/read/grep calls that should stay on that same session snapshot
+- pick a different `session_id` only when starting a different analysis session
+- reusing the same `session_id` rewrites that session snapshot directory
+- `collect_logs` does not search log content; persisted snapshot search happens through `grep_log_snapshot`
 
 What it returns:
 
@@ -535,6 +551,11 @@ What it returns:
 - `requested_project_name`
 - `authorized_project_name`
 - `effective_project_name`
+- `workspace`
+- `snapshot_id`
+- `snapshot_dir`
+- `metadata_file`
+- `persisted`
 - `requested_source_keys`
 - `requested_tail_lines`
 - `effective_tail_lines`
@@ -549,12 +570,152 @@ What it returns:
 - `project_output_dir`
 - `latest_output_dir`
 - `archive_dir`
+- `collected_at`
 - `sources`
 
 Important response detail:
 
-- `logs_by_source` is the agent-first field for the actual collected log text
+- `logs_by_source` is the agent-first field for the preview text returned inline
 - `sources` still includes the per-source deterministic metadata and status
+- follow-up file reads and searches should happen through the snapshot tools
+
+Example collection call:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-filtered",
+    "method":"tools/call",
+    "params":{
+      "name":"collect_logs",
+      "arguments":{
+        "project_name":"landingpage",
+        "source_keys":["backend"],
+        "workspace":"workflow",
+        "tail_lines":200,
+        "timestamps":true,
+        "since":"30m"
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Example session collection call with an agent-owned session id:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-session",
+    "method":"tools/call",
+    "params":{
+      "name":"collect_logs",
+      "arguments":{
+        "project_name":"landingpage",
+        "source_keys":["backend"],
+        "workspace":"session",
+        "session_id":"redis-timeout-debug-2026-04-27",
+        "tail_lines":200
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Snapshot follow-up tools:
+
+- `list_log_snapshot_files`
+- `read_log_snapshot_file`
+- `grep_log_snapshot`
+
+Snapshot id guidance:
+
+- use `snapshot_id="latest"` when you want the newest workflow snapshot
+- use the explicit `snapshot_id` returned by `collect_logs` when you want to keep
+  reading or grepping the same archived workflow snapshot later
+- use the caller-owned `session_id` value as the explicit `snapshot_id` for
+  session workspaces
+
+List files from the latest workflow snapshot:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-list-snapshot",
+    "method":"tools/call",
+    "params":{
+      "name":"list_log_snapshot_files",
+      "arguments":{
+        "project_name":"landingpage",
+        "workspace":"workflow",
+        "snapshot_id":"latest"
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Read one saved log file:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-read-snapshot",
+    "method":"tools/call",
+    "params":{
+      "name":"read_log_snapshot_file",
+      "arguments":{
+        "project_name":"landingpage",
+        "workspace":"workflow",
+        "snapshot_id":"latest",
+        "source_key":"backend",
+        "max_bytes":4000
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq -r '.result.structuredContent.content'
+```
+
+Search one saved snapshot with controlled grep semantics:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-grep-snapshot",
+    "method":"tools/call",
+    "params":{
+      "name":"grep_log_snapshot",
+      "arguments":{
+        "project_name":"landingpage",
+        "workspace":"workflow",
+        "snapshot_id":"latest",
+        "grep":"/health",
+        "source_keys":["backend"]
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
 
 ### 2c. Inspect Allowed Container Paths
 
@@ -650,9 +811,9 @@ Current write layout:
 
 - `DOCKER_LOGS_DIR` is the logs root
 - each project writes under:
-  - `<DOCKER_LOGS_DIR>/<project_key>/latest/`
-- the previous `latest` snapshot is moved into:
-  - `<DOCKER_LOGS_DIR>/<project_key>/archive/<timestamp>/`
+  - `<DOCKER_LOGS_DIR>/<project_key>/workflow/latest/`
+  - `<DOCKER_LOGS_DIR>/<project_key>/workflow/archive/<snapshot_id>/`
+  - `<DOCKER_LOGS_DIR>/<project_key>/sessions/<snapshot_id>/`
 
 ### 3. List Concrete Resources
 
@@ -823,8 +984,16 @@ Current checks and release flows:
 - shared `python-tests-uv` workflow running `uv run pytest`
   - covers unit-style FastMCP client tests
   - covers JWT-protected HTTP integration tests
+  - covers docker-backed collection logic with mocks inside pytest
+- curl-driven MCP HTTP end-to-end checks via `infra/scripts/run_http_e2e.sh`
 - Docker Compose validation
 - Docker image build check
 - CodeQL analysis on pull requests and the weekly schedule
 - VERSION bump validation on `dev -> main` pull requests
+
+Important current caveat:
+
+- real live-container log collection is not yet exercised inside pytest
+- that runtime path is currently verified through the HTTP end-to-end script
+  and local manual curl checks instead
 - tag creation from `VERSION` on pushes to `main`
