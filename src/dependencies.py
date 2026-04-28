@@ -1,5 +1,7 @@
 """Dependency injection helpers for FastMCP components."""
 
+from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 from conf import get_settings
