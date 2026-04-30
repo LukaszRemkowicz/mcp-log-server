@@ -30,7 +30,7 @@ under `src/agent_assets/`.
 
 Current MCP workflow surface includes:
 
-- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`
+- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`, `group_errors`, `build_incident_bundle`, `suggest_followup_window`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `stat_container_path`, `list_container_directory`
 - resources: concrete workflow skill resources such as
   `skill://workflow/project_context`, `skill://workflow/severity_guide`,
   `skill://workflow/bot_detection`
@@ -136,15 +136,36 @@ Generate example JWTs locally:
 uv run python infra/scripts/generate_dev_jwt.py
 ```
 
-That prints two signed bearer tokens:
+That prints a JSON payload with:
 
 - `workflow_agent`
 - `codex_agent`
+- `created_at`
+- `updated_at`
+
+The usual local flow is to save it into `.agent/DEV_JWT_TOKENS.json`:
+
+```bash
+uv run python infra/scripts/generate_dev_jwt.py > .agent/DEV_JWT_TOKENS.json
+```
+
+Then export the values you want to use with `curl`:
+
+```bash
+export WORKFLOW_AGENT_JWT="$(jq -r '.workflow_agent' .agent/DEV_JWT_TOKENS.json)"
+export CODEX_AGENT_JWT="$(jq -r '.codex_agent' .agent/DEV_JWT_TOKENS.json)"
+```
 
 Current example JWT capabilities:
 
 - `workflow_agent`
+  - `group_errors`
+  - `build_incident_bundle`
+  - `suggest_followup_window`
   - `collect_logs`
+  - `list_log_snapshot_files`
+  - `read_log_snapshot_file`
+  - `grep_log_snapshot`
   - `list_projects`
   - `analyze_daily_log_bundle`
   - `get_mcp_service_status`
@@ -152,10 +173,19 @@ Current example JWT capabilities:
   - `resources/read` for `skill://workflow/{skill_name}`
 
 - `codex_agent`
+  - `group_errors`
+  - `build_incident_bundle`
+  - `suggest_followup_window`
   - `collect_logs`
+  - `list_log_snapshot_files`
+  - `read_log_snapshot_file`
+  - `grep_log_snapshot`
   - `list_projects`
   - `get_mcp_service_status`
   - `get_mcp_health_check`
+  - `read_container_file`
+  - `stat_container_path`
+  - `list_container_directory`
 
 Important:
 
@@ -311,15 +341,36 @@ Important response note:
 - current workflow entrypoint is a tool, not an MCP prompt
 - current workflow skills are exposed as concrete resources, not resource templates
 
-For local development, generate your own example JWTs with:
+For local development, generate fresh example JWTs with:
 
 ```bash
-uv run python infra/scripts/generate_dev_jwt.py
+uv run python infra/scripts/generate_dev_jwt.py > .agent/DEV_JWT_TOKENS.json
 ```
 
-If you want, you can save the generated tokens in your own local file such as
-`.agent/DEV_JWT_TOKENS.json`, but that file is not part of the project
-contract and should be treated as private local convenience state.
+Refresh them when:
+
+- they are older than 24 hours
+- token structure or expected scopes change
+
+Then export them into your shell:
+
+```bash
+export WORKFLOW_AGENT_JWT="$(jq -r '.workflow_agent' .agent/DEV_JWT_TOKENS.json)"
+export CODEX_AGENT_JWT="$(jq -r '.codex_agent' .agent/DEV_JWT_TOKENS.json)"
+```
+
+Quick terminal helpers:
+
+```bash
+# Pretty-print any MCP JSON body
+curl -k -sS http://127.0.0.1:8001/mcp ... | jq
+
+# Print only file content from read_container_file
+curl -k -sS http://127.0.0.1:8001/mcp ... | jq -r '.result.structuredContent.content'
+
+# Print only discovered entry names from list_container_directory
+curl -k -sS http://127.0.0.1:8001/mcp ... | jq -r '.result.structuredContent.entries[].name'
+```
 
 ### 1. List Visible Tools
 
@@ -348,7 +399,13 @@ What it is for:
 
 What it returns right now for the workflow token:
 
+- `group_errors`
+- `build_incident_bundle`
+- `suggest_followup_window`
 - `collect_logs`
+- `list_log_snapshot_files`
+- `read_log_snapshot_file`
+- `grep_log_snapshot`
 - `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
@@ -356,10 +413,19 @@ What it returns right now for the workflow token:
 
 What it returns right now for the codex token:
 
+- `group_errors`
+- `build_incident_bundle`
+- `suggest_followup_window`
 - `collect_logs`
+- `list_log_snapshot_files`
+- `read_log_snapshot_file`
+- `grep_log_snapshot`
 - `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
+- `read_container_file`
+- `stat_container_path`
+- `list_container_directory`
 
 ### 2. Get Workflow Bootstrap
 
@@ -454,7 +520,7 @@ curl -sS \
       "arguments":{
         "project_name":"landingpage",
         "source_keys":["nginx","backend"],
-        "save_to_files":false,
+        "workspace":"workflow",
         "tail_lines":200,
         "timestamps":true,
         "since":"30m"
@@ -467,15 +533,16 @@ curl -sS \
 What it is for:
 
 - first deterministic collection surface after the workflow skeleton
-- explicit project, source, and docker/file option tracking
-- manifest-driven source resolution before later snapshot/filtering work
-- project-scoped persistence under the configured logs root
+- explicit project, source, workspace, and docker/file option tracking
+- manifest-driven source resolution before later snapshot reads or searches
+- project-scoped snapshot persistence under the configured logs root
 
 Agent-facing collect_logs arguments:
 
 - `project_name`
 - `source_keys`
-- `save_to_files`
+- `workspace`
+- `session_id`
 - optional `tail_lines`
 - `timestamps`
 - `since`
@@ -483,9 +550,18 @@ Agent-facing collect_logs arguments:
 
 Important:
 
-- if `tail_lines` is omitted, the server requests full source output where supported
+- if `since` is omitted, the server defaults to `24h`
+- if `tail_lines` is omitted, the server requests full source output inside the selected time window where supported
 - agents should prefer setting `tail_lines` when they do not need the full history
 - when an unbounded source is too slow or too large, the response includes retry guidance pointing back to `tail_lines`
+- `collect_logs` now always persists a snapshot for the requested workspace
+- `workspace="workflow"` does not require `session_id`
+- `workspace="session"` requires an agent-chosen `session_id`
+- the agent must choose `session_id` itself when starting a new session
+- reuse the same `session_id` for later collect/list/read/grep calls that should stay on that same session snapshot
+- pick a different `session_id` only when starting a different analysis session
+- reusing the same `session_id` rewrites that session snapshot directory
+- `collect_logs` does not search log content; persisted snapshot search happens through `grep_log_snapshot`
 
 What it returns:
 
@@ -493,6 +569,11 @@ What it returns:
 - `requested_project_name`
 - `authorized_project_name`
 - `effective_project_name`
+- `workspace`
+- `snapshot_id`
+- `snapshot_dir`
+- `metadata_file`
+- `persisted`
 - `requested_source_keys`
 - `requested_tail_lines`
 - `effective_tail_lines`
@@ -507,20 +588,321 @@ What it returns:
 - `project_output_dir`
 - `latest_output_dir`
 - `archive_dir`
+- `collected_at`
 - `sources`
 
 Important response detail:
 
-- `logs_by_source` is the agent-first field for the actual collected log text
+- `logs_by_source` is the agent-first field for the preview text returned inline
 - `sources` still includes the per-source deterministic metadata and status
+- follow-up file reads and searches should happen through the snapshot tools
+
+Example collection call:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-filtered",
+    "method":"tools/call",
+    "params":{
+      "name":"collect_logs",
+      "arguments":{
+        "project_name":"landingpage",
+        "source_keys":["backend"],
+        "workspace":"workflow",
+        "tail_lines":200,
+        "timestamps":true,
+        "since":"30m"
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Example session collection call with an agent-owned session id:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-session",
+    "method":"tools/call",
+    "params":{
+      "name":"collect_logs",
+      "arguments":{
+        "project_name":"landingpage",
+        "source_keys":["backend"],
+        "workspace":"session",
+        "session_id":"redis-timeout-debug-2026-04-27",
+        "tail_lines":200
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Snapshot follow-up tools:
+
+- `list_log_snapshot_files`
+- `read_log_snapshot_file`
+- `grep_log_snapshot`
+- `group_errors`
+- `build_incident_bundle`
+- `suggest_followup_window`
+
+Snapshot id guidance:
+
+- use `snapshot_id="latest"` when you want the newest workflow snapshot
+- use the explicit `snapshot_id` returned by `collect_logs` when you want to keep
+  reading or grepping the same archived workflow snapshot later
+- use the caller-owned `session_id` value as the explicit `snapshot_id` for
+  session workspaces
+
+List files from the latest workflow snapshot:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-list-snapshot",
+    "method":"tools/call",
+    "params":{
+      "name":"list_log_snapshot_files",
+      "arguments":{
+        "project_name":"landingpage",
+        "snapshot_id":"latest"
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Read one saved log file:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-read-snapshot",
+    "method":"tools/call",
+    "params":{
+      "name":"read_log_snapshot_file",
+      "arguments":{
+        "project_name":"landingpage",
+        "snapshot_id":"latest",
+        "source_key":"backend",
+        "max_bytes":4000
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq -r '.result.structuredContent.content'
+```
+
+Search one saved snapshot with controlled grep semantics:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-grep-snapshot",
+    "method":"tools/call",
+    "params":{
+      "name":"grep_log_snapshot",
+      "arguments":{
+        "project_name":"landingpage",
+        "snapshot_id":"latest",
+        "grep":"/health",
+        "source_keys":["backend"]
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Group repeated error-like findings from one saved snapshot:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-group-errors",
+    "method":"tools/call",
+    "params":{
+      "name":"group_errors",
+      "arguments":{
+        "project_name":"landingpage",
+        "snapshot_id":"latest",
+        "source_keys":["backend"],
+        "max_groups":20
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Build one compact incident bundle from a saved snapshot:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-incident-bundle",
+    "method":"tools/call",
+    "params":{
+      "name":"build_incident_bundle",
+      "arguments":{
+        "project_name":"landingpage",
+        "snapshot_id":"latest",
+        "source_keys":["backend"],
+        "max_groups":20
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Suggest a narrower recollection window from grouped-analysis timestamps:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-followup-window",
+    "method":"tools/call",
+    "params":{
+      "name":"suggest_followup_window",
+      "arguments":{
+        "first_timestamp":"2026-04-29T10:00:00Z",
+        "last_timestamp":"2026-04-29T10:05:00Z",
+        "padding_minutes":5
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+### 2c. Inspect Allowed Container Paths
+
+Use these specialist tools with the codex token when an agent needs to verify
+deployed project files inside an approved container.
+
+Important:
+
+- these tools are not part of the workflow bootstrap inventory
+- they are available to the codex token because it includes
+  `container.files.read`
+- `source_key` is the manifest container alias such as `backend`, `frontend`,
+  `nginx`, or `traefik`
+- `path` is the filesystem path inside that container
+
+List an allowed directory:
+
+```bash
+curl -k -sS \
+  -H 'Authorization: Bearer '"$CODEX_AGENT_JWT" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2c-list",
+    "method":"tools/call",
+    "params":{
+      "name":"list_container_directory",
+      "arguments":{
+        "project_name":"landingpage",
+        "source_key":"backend",
+        "path":"/app"
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Read one allowed file:
+
+```bash
+curl -k -sS \
+  -H 'Authorization: Bearer '"$CODEX_AGENT_JWT" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2c-read",
+    "method":"tools/call",
+    "params":{
+      "name":"read_container_file",
+      "arguments":{
+        "project_name":"landingpage",
+        "source_key":"backend",
+        "path":"/app/manage.py",
+        "max_bytes":4000
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq -r '.result.structuredContent.content'
+```
+
+Stat one allowed path:
+
+```bash
+curl -k -sS \
+  -H 'Authorization: Bearer '"$CODEX_AGENT_JWT" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2c-stat",
+    "method":"tools/call",
+    "params":{
+      "name":"stat_container_path",
+      "arguments":{
+        "project_name":"landingpage",
+        "source_key":"nginx",
+        "path":"/etc/nginx/nginx.conf"
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+The manifest path whitelist still applies. For example:
+
+- `backend` and `frontend` can inspect approved `/app/...` paths
+- `nginx` can inspect approved `/etc/nginx/...` paths
+- `traefik` can inspect approved `/etc/traefik/...` paths
 
 Current write layout:
 
 - `DOCKER_LOGS_DIR` is the logs root
 - each project writes under:
-  - `<DOCKER_LOGS_DIR>/<project_key>/latest/`
-- the previous `latest` snapshot is moved into:
-  - `<DOCKER_LOGS_DIR>/<project_key>/archive/<timestamp>/`
+  - `<DOCKER_LOGS_DIR>/<project_key>/workflow/latest/`
+  - `<DOCKER_LOGS_DIR>/<project_key>/workflow/archive/<snapshot_id>/`
+  - `<DOCKER_LOGS_DIR>/<project_key>/sessions/<snapshot_id>/`
 
 ### 3. List Concrete Resources
 
@@ -691,8 +1073,16 @@ Current checks and release flows:
 - shared `python-tests-uv` workflow running `uv run pytest`
   - covers unit-style FastMCP client tests
   - covers JWT-protected HTTP integration tests
+  - covers docker-backed collection logic with mocks inside pytest
+- curl-driven MCP HTTP end-to-end checks via `infra/scripts/run_http_e2e.sh`
 - Docker Compose validation
 - Docker image build check
 - CodeQL analysis on pull requests and the weekly schedule
 - VERSION bump validation on `dev -> main` pull requests
+
+Important current caveat:
+
+- real live-container log collection is not yet exercised inside pytest
+- that runtime path is currently verified through the HTTP end-to-end script
+  and local manual curl checks instead
 - tag creation from `VERSION` on pushes to `main`

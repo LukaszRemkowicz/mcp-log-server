@@ -1,12 +1,17 @@
 @baseUrl = http://127.0.0.1:8001
 @workflowJwt = {{$dotenv WORKFLOW_AGENT_JWT}}
 @codexJwt = {{$dotenv CODEX_AGENT_JWT}}
+@workflowAuth = Bearer {{workflowJwt}}
+@codexAuth = Bearer {{codexJwt}}
+
+### Note
+# Shell playbook and curl helpers live in README.md.
 
 ### List visible tools for the current workflow JWT
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{workflowJwt}}
+Authorization: {{workflowAuth}}
 
 {
   "jsonrpc": "2.0",
@@ -19,7 +24,7 @@ Authorization: Bearer {{workflowJwt}}
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{workflowJwt}}
+Authorization: {{workflowAuth}}
 
 {
   "jsonrpc": "2.0",
@@ -35,7 +40,7 @@ Authorization: Bearer {{workflowJwt}}
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{workflowJwt}}
+Authorization: {{workflowAuth}}
 
 {
   "jsonrpc": "2.0",
@@ -51,7 +56,7 @@ Authorization: Bearer {{workflowJwt}}
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{workflowJwt}}
+Authorization: {{workflowAuth}}
 
 {
   "jsonrpc": "2.0",
@@ -62,10 +67,163 @@ Authorization: Bearer {{workflowJwt}}
     "arguments": {
       "project_name": "landingpage",
       "source_keys": ["nginx", "backend"],
-      "save_to_files": false,
+      "workspace": "workflow",
       "tail_lines": 200,
       "timestamps": true,
       "since": "30m"
+    }
+  }
+}
+
+### Collect bounded logs into the workflow snapshot workspace
+### Workflow does not need session_id. Omitting since uses the default 24h window.
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{workflowAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "collect-logs-workflow",
+  "method": "tools/call",
+  "params": {
+    "name": "collect_logs",
+    "arguments": {
+      "project_name": "landingpage",
+      "source_keys": ["backend"],
+      "workspace": "workflow",
+      "tail_lines": 200,
+      "timestamps": true,
+      "since": "30m"
+    }
+  }
+}
+
+### Collect logs into an agent-owned session workspace
+### Choose session_id yourself. Reuse the same value for later collect/list/read/grep calls in that session.
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{workflowAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "collect-logs-session",
+  "method": "tools/call",
+  "params": {
+    "name": "collect_logs",
+    "arguments": {
+      "project_name": "landingpage",
+      "source_keys": ["backend"],
+      "workspace": "session",
+      "session_id": "redis-timeout-debug-2026-04-27",
+      "tail_lines": 200
+    }
+  }
+}
+
+### List files from the latest persisted workflow snapshot
+### Use snapshot_id "latest" for the newest workflow run, or a concrete snapshot_id returned by collect_logs.
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{workflowAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "list-workflow-snapshot-files",
+  "method": "tools/call",
+  "params": {
+    "name": "list_log_snapshot_files",
+    "arguments": {
+      "project_name": "landingpage",
+      "snapshot_id": "latest"
+    }
+  }
+}
+
+### Read one saved file from the latest workflow snapshot
+### For a stable archived/session read, replace "latest" with the explicit snapshot_id from collect_logs.
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{workflowAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "read-workflow-snapshot-file",
+  "method": "tools/call",
+  "params": {
+    "name": "read_log_snapshot_file",
+    "arguments": {
+      "project_name": "landingpage",
+      "snapshot_id": "latest",
+      "source_key": "backend",
+      "max_bytes": 4000
+    }
+  }
+}
+
+### Search one persisted workflow snapshot
+### For repeatable analysis, use an explicit snapshot_id instead of "latest".
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{workflowAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "grep-workflow-snapshot",
+  "method": "tools/call",
+  "params": {
+    "name": "grep_log_snapshot",
+    "arguments": {
+      "project_name": "landingpage",
+      "snapshot_id": "latest",
+      "grep": "/health",
+      "source_keys": ["backend"]
+    }
+  }
+}
+
+### Group repeated error-like findings from one persisted workflow snapshot
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{workflowAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "group-workflow-errors",
+  "method": "tools/call",
+  "params": {
+    "name": "group_errors",
+    "arguments": {
+      "project_name": "landingpage",
+      "snapshot_id": "latest",
+      "source_keys": ["backend"],
+      "max_groups": 20
+    }
+  }
+}
+
+### Build one compact incident bundle from a persisted workflow snapshot
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{workflowAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "incident-bundle-workflow",
+  "method": "tools/call",
+  "params": {
+    "name": "build_incident_bundle",
+    "arguments": {
+      "project_name": "landingpage",
+      "snapshot_id": "latest",
+      "source_keys": ["backend"],
+      "max_groups": 20
     }
   }
 }
@@ -74,7 +232,7 @@ Authorization: Bearer {{workflowJwt}}
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{workflowJwt}}
+Authorization: {{workflowAuth}}
 
 {
   "jsonrpc": "2.0",
@@ -89,7 +247,7 @@ Authorization: Bearer {{workflowJwt}}
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{workflowJwt}}
+Authorization: {{workflowAuth}}
 
 {
   "jsonrpc": "2.0",
@@ -102,11 +260,72 @@ Authorization: Bearer {{workflowJwt}}
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
-Authorization: Bearer {{codexJwt}}
+Authorization: {{codexAuth}}
 
 {
   "jsonrpc": "2.0",
   "id": "codex-tools-list",
   "method": "tools/list",
   "params": {}
+}
+
+### List allowed files and folders in the landingpage backend container
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{codexAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "list-backend-app-dir",
+  "method": "tools/call",
+  "params": {
+    "name": "list_container_directory",
+    "arguments": {
+      "project_name": "landingpage",
+      "source_key": "backend",
+      "path": "/app"
+    }
+  }
+}
+
+### Read one file from the landingpage backend container
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{codexAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "read-backend-manage-py",
+  "method": "tools/call",
+  "params": {
+    "name": "read_container_file",
+    "arguments": {
+      "project_name": "landingpage",
+      "source_key": "backend",
+      "path": "/app/manage.py",
+      "max_bytes": 4000
+    }
+  }
+}
+
+### Stat one file from the landingpage nginx container
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{codexAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "stat-nginx-config",
+  "method": "tools/call",
+  "params": {
+    "name": "stat_container_path",
+    "arguments": {
+      "project_name": "landingpage",
+      "source_key": "nginx",
+      "path": "/etc/nginx/nginx.conf"
+    }
+  }
 }

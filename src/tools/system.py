@@ -4,13 +4,12 @@ from __future__ import annotations
 
 import logging
 
-from fastmcp.dependencies import CurrentAccessToken, Depends
+from fastmcp.dependencies import CurrentAccessToken
 from fastmcp.server.auth import AccessToken
 
 from auth.scopes import MCP_HEALTH_READ_SCOPE, MCP_STATUS_READ_SCOPE
-from dependencies import get_settings_dependency
+from conf import settings
 from logging_config import get_logger
-from settings import Settings
 from tools.registry import workflow_discoverable_tool
 from utils.types import JSONObject
 
@@ -19,7 +18,6 @@ logger: logging.Logger = get_logger("tools.system")
 
 @workflow_discoverable_tool(MCP_STATUS_READ_SCOPE)
 def get_mcp_service_status(
-    settings: Settings = Depends(get_settings_dependency),
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> JSONObject:
     """Return a compact MCP service status payload for diagnostics.
@@ -36,19 +34,36 @@ def get_mcp_service_status(
     operational health or metrics endpoint.
     """
 
-    logger.info("tool call: get_mcp_service_status")
+    logger.info(
+        "tool call",
+        extra={
+            "event": "tool_call",
+            "tool_name": "get_mcp_service_status",
+        },
+    )
     claims = access_token.claims if access_token is not None else {}
-    return {
+    payload: JSONObject = {
         "name": "mcp-log-server",
         "status": "ok",
         "subject": claims.get("sub", access_token.client_id if access_token is not None else None),
         "client_type": claims.get("client_type"),
         "project_key": claims.get("project_key"),
-        "environment": settings.environment,
-        "host": settings.host,
-        "port": settings.port,
-        "log_level": settings.log_level,
+        "environment": settings.ENVIRONMENT,
+        "host": settings.HOST,
+        "port": settings.PORT,
+        "log_level": settings.LOG_LEVEL,
     }
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "get_mcp_service_status",
+            "client_type": payload["client_type"],
+            "project_key": payload["project_key"],
+            "environment": payload["environment"],
+        },
+    )
+    return payload
 
 
 @workflow_discoverable_tool(MCP_HEALTH_READ_SCOPE)
@@ -60,7 +75,22 @@ def get_mcp_health_check() -> JSONObject:
     details, unlike `get_mcp_service_status`.
     """
 
-    logger.info("tool call: get_mcp_health_check")
-    return {
+    logger.info(
+        "tool call",
+        extra={
+            "event": "tool_call",
+            "tool_name": "get_mcp_health_check",
+        },
+    )
+    payload: JSONObject = {
         "status": "ok",
     }
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "get_mcp_health_check",
+            "status": payload["status"],
+        },
+    )
+    return payload

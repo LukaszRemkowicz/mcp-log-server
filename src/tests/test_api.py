@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from unittest.mock import patch
 
 import pytest
 
 from auth.scopes import (
+    CONTAINER_FILES_READ_SCOPE,
     LOGS_COLLECT_SCOPE,
     MCP_HEALTH_READ_SCOPE,
     MCP_STATUS_READ_SCOPE,
@@ -15,6 +17,7 @@ from auth.scopes import (
 )
 from settings import Settings
 from tests.conftest import CollectLogsRequestFactory, FileSourceManifestFactory, JsonRpcFixture
+from utils.container_inspection_commands import ContainerPathStat
 
 
 @pytest.mark.parametrize(
@@ -34,17 +37,47 @@ from tests.conftest import CollectLogsRequestFactory, FileSourceManifestFactory,
             {
                 "analyze_daily_log_bundle",
                 "collect_logs",
+                "list_log_snapshot_files",
+                "read_log_snapshot_file",
+                "grep_log_snapshot",
+                "group_errors",
+                "build_incident_bundle",
+                "suggest_followup_window",
                 "list_projects",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
             },
-            set(),
+            {
+                "read_container_file",
+                "stat_container_path",
+                "list_container_directory",
+            },
         ),
         (
             "codex-agent",
-            [PROJECTS_READ_SCOPE, LOGS_COLLECT_SCOPE, MCP_STATUS_READ_SCOPE, MCP_HEALTH_READ_SCOPE],
+            [
+                PROJECTS_READ_SCOPE,
+                LOGS_COLLECT_SCOPE,
+                CONTAINER_FILES_READ_SCOPE,
+                MCP_STATUS_READ_SCOPE,
+                MCP_HEALTH_READ_SCOPE,
+            ],
             "codex-agent",
-            {"collect_logs", "list_projects", "get_mcp_service_status", "get_mcp_health_check"},
+            {
+                "collect_logs",
+                "list_log_snapshot_files",
+                "read_log_snapshot_file",
+                "grep_log_snapshot",
+                "group_errors",
+                "build_incident_bundle",
+                "suggest_followup_window",
+                "list_projects",
+                "read_container_file",
+                "stat_container_path",
+                "list_container_directory",
+                "get_mcp_service_status",
+                "get_mcp_health_check",
+            },
             {
                 "analyze_daily_log_bundle",
             },
@@ -120,9 +153,21 @@ def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
         for item in payload["optional_skills"]
     )
     assert any(item["tool_name"] == "collect_logs" for item in payload["tools"])
+    assert any(item["tool_name"] == "list_log_snapshot_files" for item in payload["tools"])
+    assert any(item["tool_name"] == "read_log_snapshot_file" for item in payload["tools"])
+    assert any(item["tool_name"] == "grep_log_snapshot" for item in payload["tools"])
+    assert all(item["tool_name"] != "group_errors" for item in payload["tools"])
+    assert all(item["tool_name"] != "build_incident_bundle" for item in payload["tools"])
+    assert all(item["tool_name"] != "suggest_followup_window" for item in payload["tools"])
     assert any(item["tool_name"] == "list_projects" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_service_status" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_health_check" for item in payload["tools"])
+    collect_logs_tool = next(
+        item for item in payload["tools"] if item["tool_name"] == "collect_logs"
+    )
+    assert any(argument["name"] == "project_name" for argument in collect_logs_tool["arguments"])
+    assert any(argument["name"] == "source_keys" for argument in collect_logs_tool["arguments"])
+    assert any(argument["name"] == "session_id" for argument in collect_logs_tool["arguments"])
 
 
 def test_collect_logs_api_returns_requested_and_resolved_file_sources(
@@ -137,7 +182,10 @@ def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     log_file.write_text("line 1\nline 2\nline 3\n", encoding="utf-8")
     manifest_path = file_source_manifest_factory.create(target=str(log_file))
 
-    settings = settings_fixture.model_copy(update={"manifest_path": manifest_path})
+    logs_dir = tmp_path / "collected-logs"
+    settings = settings_fixture.model_copy(
+        update={"MANIFEST_PATH": manifest_path, "LOGS_DIR": logs_dir}
+    )
     token = create_test_jwt_token(
         "workflow-agent",
         [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
@@ -158,12 +206,12 @@ def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     assert response.status_code == 200
     assert payload["requested_project_name"] == "landingpage"
     assert payload["authorized_project_name"] == "landingpage"
+    assert payload["workspace"] == "workflow"
     assert payload["requested_source_keys"] == ["app_file", "missing_source"]
-    assert payload["save_to_files"] is False
     assert payload["requested_tail_lines"] == 2
     assert payload["effective_tail_lines"] == 2
     assert payload["requested_timestamps"] is False
-    assert payload["requested_since"] is None
+    assert payload["requested_since"] == "24h"
     assert payload["requested_until"] is None
     assert payload["tail_lines_limited"] is False
     assert payload["unknown_requested_source_keys"] == ["missing_source"]
@@ -174,14 +222,20 @@ def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     assert payload["retry_tips"] == [
         "Retry with only source_keys returned by the manifest-backed project configuration."
     ]
-    assert payload["logs_by_source"] == {"app_file": "line 2\nline 3"}
-    assert payload["project_output_dir"] is None
-    assert payload["latest_output_dir"] is None
-    assert payload["archive_dir"] is None
+    assert payload["logs_by_source"] == {"app_file": "line 2\nline 3\n"}
+    assert payload["project_output_dir"] == str(logs_dir / "landingpage")
+    assert payload["latest_output_dir"] == str(logs_dir / "landingpage" / "workflow" / "latest")
+    assert payload["archive_dir"] == str(logs_dir / "landingpage" / "workflow" / "archive")
+    assert payload["snapshot_dir"] == str(logs_dir / "landingpage" / "workflow" / "latest")
+    assert payload["persisted"] is True
     assert payload["sources"][0]["source_key"] == "app_file"
     assert payload["sources"][0]["status"] == "collected"
-    assert payload["sources"][0]["output_file"] is None
-    assert payload["sources"][0]["content"] == "line 2\nline 3"
+    assert payload["sources"][0]["output_file"] == str(
+        logs_dir / "landingpage" / "workflow" / "latest" / "app_file.log"
+    )
+    assert payload["sources"][0]["content_truncated"] is False
+    assert payload["sources"][0]["byte_count"] == len(b"line 2\nline 3\n")
+    assert payload["sources"][0]["content"] == "line 2\nline 3\n"
 
 
 def test_list_projects_api_returns_manifest_backed_projects(
@@ -216,6 +270,68 @@ def test_list_projects_api_returns_manifest_backed_projects(
     assert "docker" in landingpage["source_types"]
 
 
+def test_read_container_file_api_returns_file_contents(
+    tmp_path,
+    settings_fixture: Settings,
+    create_test_jwt_token: Callable[[str, list[str], str], str],
+    file_source_manifest_factory: FileSourceManifestFactory,
+    jsonrpc: JsonRpcFixture,
+) -> None:
+    manifest_path = file_source_manifest_factory.create(
+        target="backend-container",
+        source_key="backend",
+        source_type="docker",
+        inspect_path_prefixes=["/app/"],
+    )
+    settings = settings_fixture.model_copy(update={"MANIFEST_PATH": manifest_path})
+    token = create_test_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+    )
+
+    with (
+        patch(
+            "tools.container_inspection.run_stat_container_path",
+            return_value=ContainerPathStat(
+                path="/app/VERSION",
+                is_dir=False,
+                size=12,
+                mode=0o100644,
+                modified_at="2026-04-26T10:00:00+00:00",
+            ),
+        ),
+        patch(
+            "tools.container_inspection.run_read_container_file",
+            return_value=("release-123\n", False),
+        ),
+    ):
+        with jsonrpc.with_settings(settings) as custom_jsonrpc:
+            response = custom_jsonrpc.post(
+                token=token,
+                data={
+                    "jsonrpc": "2.0",
+                    "id": "read-container-file",
+                    "method": "tools/call",
+                    "params": {
+                        "name": "read_container_file",
+                        "arguments": {
+                            "project_name": "landingpage",
+                            "source_key": "backend",
+                            "path": "/app/VERSION",
+                        },
+                    },
+                },
+            )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert payload["action"] == "read_container_file"
+    assert payload["content"] == "release-123\n"
+    assert payload["file"]["name"] == "VERSION"
+
+
 def test_list_projects_api_returns_multiple_manifest_backed_projects(
     tmp_path,
     settings_fixture: Settings,
@@ -237,7 +353,7 @@ def test_list_projects_api_returns_multiple_manifest_backed_projects(
         project_name="beta",
         project_summary="Beta project summary.",
     )
-    settings = settings_fixture.model_copy(update={"manifest_path": tmp_path / "alpha.json"})
+    settings = settings_fixture.model_copy(update={"MANIFEST_PATH": tmp_path / "alpha.json"})
     token = create_test_jwt_token(
         "workflow-agent",
         [PROJECTS_READ_SCOPE],
@@ -451,12 +567,85 @@ def test_codex_cannot_access_workflow_components(
     assert "Unknown resource" in resource_response.json()["error"]["message"]
 
 
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("tools/list", {}),
+        ("tools/call", {"name": "list_projects", "arguments": {}}),
+        ("resources/read", {"uri": "skill://workflow/severity_guide"}),
+    ],
+)
 def test_api_requires_bearer_token(
     jsonrpc: JsonRpcFixture,
+    method: str,
+    params: dict[str, object],
 ) -> None:
     response = jsonrpc.post(
         token=None,
-        data={"jsonrpc": "2.0", "id": "7", "method": "tools/list", "params": {}},
+        data={"jsonrpc": "2.0", "id": "7", "method": method, "params": params},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"] == "invalid_token"
+
+
+@pytest.mark.parametrize(
+    ("token_factory", "label"),
+    [
+        (
+            lambda create_test_jwt_token: create_test_jwt_token(
+                "workflow-agent",
+                [LOGS_COLLECT_SCOPE],
+                "workflow-agent",
+                {"exp": 1},
+            ),
+            "expired",
+        ),
+        (
+            lambda create_test_jwt_token: create_test_jwt_token(
+                "workflow-agent",
+                [LOGS_COLLECT_SCOPE],
+                "workflow-agent",
+                {"signing_secret": "wrong-test-secret"},
+            ),
+            "wrong-secret",
+        ),
+        (
+            lambda create_test_jwt_token: create_test_jwt_token(
+                "workflow-agent",
+                [LOGS_COLLECT_SCOPE],
+                "workflow-agent",
+                {"iss": "wrong-issuer"},
+            ),
+            "wrong-issuer",
+        ),
+        (
+            lambda create_test_jwt_token: create_test_jwt_token(
+                "workflow-agent",
+                [LOGS_COLLECT_SCOPE],
+                "workflow-agent",
+                {"aud": "wrong-audience"},
+            ),
+            "wrong-audience",
+        ),
+        (
+            lambda create_test_jwt_token: "not-a-jwt",
+            "malformed",
+        ),
+    ],
+)
+def test_api_rejects_invalid_bearer_tokens(
+    create_test_jwt_token: Callable[[str, list[str], str, dict[str, object] | None], str],
+    jsonrpc: JsonRpcFixture,
+    token_factory: Callable[
+        [Callable[[str, list[str], str, dict[str, object] | None], str]],
+        str,
+    ],
+    label: str,
+) -> None:
+    response = jsonrpc.post(
+        token=token_factory(create_test_jwt_token),
+        data={"jsonrpc": "2.0", "id": f"invalid-{label}", "method": "tools/list", "params": {}},
     )
 
     assert response.status_code == 401

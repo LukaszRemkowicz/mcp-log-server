@@ -12,7 +12,8 @@
       "parser_type": "nginx_json",
       "normalization_profile": "web_access",
       "retention_class": "short",
-      "default_noise_profile": "web_noise"
+      "default_noise_profile": "web_noise",
+      "inspect_path_prefixes": ["/etc/nginx/"]
     },
     {
       "source_key": "traefik",
@@ -24,7 +25,8 @@
       "parser_type": "traefik_json",
       "normalization_profile": "proxy_access",
       "retention_class": "short",
-      "default_noise_profile": "proxy_noise"
+      "default_noise_profile": "proxy_noise",
+      "inspect_path_prefixes": ["/etc/traefik/"]
     },
     {
       "source_key": "backend",
@@ -36,7 +38,8 @@
       "parser_type": "python_json",
       "normalization_profile": "backend_app",
       "retention_class": "medium",
-      "default_noise_profile": "backend_noise"
+      "default_noise_profile": "backend_noise",
+      "inspect_path_prefixes": ["/app/"]
     },
     {
       "source_key": "frontend",
@@ -48,7 +51,8 @@
       "parser_type": "node_json",
       "normalization_profile": "frontend_app",
       "retention_class": "medium",
-      "default_noise_profile": "frontend_noise"
+      "default_noise_profile": "frontend_noise",
+      "inspect_path_prefixes": ["/app/"]
     }
   ]
 }

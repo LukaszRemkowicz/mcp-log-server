@@ -46,7 +46,7 @@ warn_unused_ignores = true
 warn_unreachable = true
 
 [[tool.mypy.overrides]]
-module = ["docker", "docker.errors", "requests", "requests.*"]
+module = ["docker", "docker.errors", "requests"]
 ignore_missing_imports = true
 
 [tool.uv]

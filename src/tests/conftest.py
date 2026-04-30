@@ -15,10 +15,48 @@ from joserfc import jwt
 from joserfc.jwk import OctKey
 from starlette.testclient import TestClient
 
-import dependencies
+import conf
 from app import create_application
 from auth.auth_provider import build_auth_provider
 from settings import Settings
+from tools import collection as collection_tools
+from tools import container_inspection as container_inspection_tools
+from tools import snapshots as snapshots_tools
+from tools import system as system_tools
+from utils import log_snapshots as log_snapshot_utils
+
+
+@contextmanager
+def override_settings(
+    settings: Settings | None = None,
+    /,
+    **updates: object,
+) -> Generator[Settings]:
+    """Temporarily replace shared app settings for tests.
+
+    Usage styles:
+
+    - `with override_settings(custom_settings):`
+      replace the full settings object
+    - `with override_settings(MANIFEST_PATH=manifest_path):`
+      patch selected fields on top of the current settings object
+    """
+
+    effective_settings = (
+        settings.model_copy(update=updates)
+        if settings is not None
+        else conf.settings.model_copy(update=updates)
+    )
+
+    with (
+        patch.object(conf, "settings", effective_settings),
+        patch.object(collection_tools, "settings", effective_settings),
+        patch.object(container_inspection_tools, "settings", effective_settings),
+        patch.object(snapshots_tools, "settings", effective_settings),
+        patch.object(system_tools, "settings", effective_settings),
+        patch.object(log_snapshot_utils, "settings", effective_settings),
+    ):
+        yield effective_settings
 
 
 @dataclass(slots=True)
@@ -56,17 +94,17 @@ class JsonRpcFixture:
     def with_settings(self, settings: Settings) -> Generator[JsonRpcClient]:
         """Create a temporary JSON-RPC client for a custom settings object."""
 
-        with patch.object(dependencies, "get_settings", return_value=settings):
-            app = create_application(auth_provider=build_auth_provider(settings))
+        with override_settings(settings) as effective_settings:
+            app = create_application(auth_provider=build_auth_provider(effective_settings))
             asgi_app = app.http_app(
-                path=settings.mcp_path,
-                json_response=settings.mcp_json_response,
-                stateless_http=settings.mcp_stateless_http,
+                path=effective_settings.MCP_PATH,
+                json_response=effective_settings.MCP_JSON_RESPONSE,
+                stateless_http=effective_settings.MCP_STATELESS_HTTP,
             )
             with TestClient(asgi_app) as api_client:
                 yield JsonRpcClient(
                     api_client=api_client,
-                    mcp_path=settings.mcp_path,
+                    mcp_path=effective_settings.MCP_PATH,
                 )
 
 
@@ -81,6 +119,8 @@ class FileSourceManifestFactory:
         *,
         target: str,
         source_key: str = "app_file",
+        source_type: str = "file",
+        inspect_path_prefixes: list[str] | None = None,
         project_name: str = "landingpage",
         project_summary: str = "Temporary landingpage-style project for collection tests.",
     ) -> Path:
@@ -93,7 +133,7 @@ class FileSourceManifestFactory:
                     "sources": [
                         {
                             "source_key": source_key,
-                            "source_type": "file",
+                            "source_type": source_type,
                             "target": target,
                             "description": "Temporary file-backed application logs.",
                             "required": True,
@@ -101,6 +141,7 @@ class FileSourceManifestFactory:
                             "normalization_profile": "app_logs",
                             "retention_class": "short",
                             "default_noise_profile": "app_noise",
+                            "inspect_path_prefixes": inspect_path_prefixes or [],
                         }
                     ],
                 }
@@ -120,7 +161,8 @@ class CollectLogsRequestFactory:
         request_id: str = "collect-1",
         project_name: str = "landingpage",
         source_keys: list[str] | None = None,
-        save_to_files: bool = False,
+        workspace: str = "workflow",
+        session_id: str | None = None,
         tail_lines: int | None = 200,
         timestamps: bool = False,
         since: str | None = None,
@@ -129,10 +171,8 @@ class CollectLogsRequestFactory:
         arguments: dict[str, Any] = {
             "project_name": project_name,
             "source_keys": source_keys or [],
-            "save_to_files": save_to_files,
+            "workspace": workspace,
             "timestamps": timestamps,
-            "since": since,
-            "until": until,
         }
         payload: dict[str, Any] = {
             "jsonrpc": "2.0",
@@ -145,26 +185,32 @@ class CollectLogsRequestFactory:
         }
         if tail_lines is not None:
             arguments["tail_lines"] = tail_lines
+        if session_id is not None:
+            arguments["session_id"] = session_id
+        if since is not None:
+            arguments["since"] = since
+        if until is not None:
+            arguments["until"] = until
         return payload
 
 
 @pytest.fixture
 def settings_fixture() -> Settings:
     return Settings(
-        environment="dev",
-        host="127.0.0.1",
-        port=8001,
-        log_level="INFO",
-        log_format="text",
-        jwt_algorithm="HS256",
-        jwt_shared_secret="change-me-local-dev-secret",
-        jwt_issuer="mcp-log-server-dev",
-        jwt_audience="mcp-log-server",
-        jwt_expiration_seconds=86400,
-        manifest_path=Path(__file__).resolve().parents[2] / "src/manifests/landingpage.json",
-        mcp_path="/mcp",
-        mcp_stateless_http=True,
-        mcp_json_response=True,
+        ENVIRONMENT="dev",
+        HOST="127.0.0.1",
+        PORT=8001,
+        LOG_LEVEL="INFO",
+        LOG_FORMAT="text",
+        JWT_ALGORITHM="HS256",
+        JWT_SHARED_SECRET="change-me-local-dev-secret",
+        JWT_ISSUER="mcp-log-server-dev",
+        JWT_AUDIENCE="mcp-log-server",
+        JWT_EXPIRATION_SECONDS=86400,
+        MANIFEST_PATH=Path(__file__).resolve().parents[2] / "src/manifests/landingpage.json",
+        MCP_PATH="/mcp",
+        MCP_STATELESS_HTTP=True,
+        MCP_JSON_RESPONSE=True,
     )
 
 
@@ -179,26 +225,39 @@ def collect_logs_request_factory() -> CollectLogsRequestFactory:
 
 
 @pytest.fixture
-def create_test_jwt_token(settings_fixture: Settings) -> Callable[[str, list[str], str], str]:
-    def build_token(subject: str, scopes: list[str], client_id: str) -> str:
+def create_test_jwt_token(
+    settings_fixture: Settings,
+) -> Callable[[str, list[str], str, dict[str, Any] | None], str]:
+    def build_token(
+        subject: str,
+        scopes: list[str],
+        client_id: str,
+        overrides: dict[str, Any] | None = None,
+    ) -> str:
         now = int(time.time())
-        signing_key = OctKey.import_key(settings_fixture.jwt_shared_secret)
-        header = {"alg": settings_fixture.jwt_algorithm, "typ": "JWT"}
+        effective_overrides = overrides or {}
+        signing_secret = effective_overrides.pop(
+            "signing_secret",
+            settings_fixture.JWT_SHARED_SECRET,
+        )
+        signing_key = OctKey.import_key(signing_secret)
+        header = {"alg": settings_fixture.JWT_ALGORITHM, "typ": "JWT"}
         payload = {
-            "iss": settings_fixture.jwt_issuer,
-            "aud": settings_fixture.jwt_audience,
+            "iss": settings_fixture.JWT_ISSUER,
+            "aud": settings_fixture.JWT_AUDIENCE,
             "iat": now,
-            "exp": now + settings_fixture.jwt_expiration_seconds,
+            "exp": now + settings_fixture.JWT_EXPIRATION_SECONDS,
             "sub": subject,
             "client_id": client_id,
             "project_key": "landingpage",
             "scope": " ".join(scopes),
         }
+        payload.update(effective_overrides)
         return jwt.encode(
             header,
             payload,
             signing_key,
-            algorithms=[settings_fixture.jwt_algorithm],
+            algorithms=[settings_fixture.JWT_ALGORITHM],
         )
 
     return build_token
@@ -208,9 +267,9 @@ def create_test_jwt_token(settings_fixture: Settings) -> Callable[[str, list[str
 def api_client(settings_fixture: Settings) -> Generator[TestClient]:
     app = create_application(auth_provider=build_auth_provider(settings_fixture))
     asgi_app = app.http_app(
-        path=settings_fixture.mcp_path,
-        json_response=settings_fixture.mcp_json_response,
-        stateless_http=settings_fixture.mcp_stateless_http,
+        path=settings_fixture.MCP_PATH,
+        json_response=settings_fixture.MCP_JSON_RESPONSE,
+        stateless_http=settings_fixture.MCP_STATELESS_HTTP,
     )
     with TestClient(asgi_app) as client:
         yield client
@@ -224,6 +283,6 @@ def jsonrpc(
     return JsonRpcFixture(
         client=JsonRpcClient(
             api_client=api_client,
-            mcp_path=settings_fixture.mcp_path,
+            mcp_path=settings_fixture.MCP_PATH,
         )
     )

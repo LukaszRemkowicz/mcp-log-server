@@ -20,6 +20,7 @@ class SourceDefinition(BaseModel):
     retention_class: str
     default_noise_profile: str | None = None
     stream: Literal["stdout", "stderr"] | None = None
+    inspect_path_prefixes: list[str] = Field(default_factory=list)
 
 
 class SourceManifest(BaseModel):

@@ -17,6 +17,7 @@ truth. For broader direction, also read:
 - `README.md`
 - `infra/docs/current_project_state.md`
 - `infra/docs/repository_foundation.md`
+- `infra/docs/NEW/mcp_log_server_architecture.md`
 
 
 ## Short Project Summary
@@ -51,6 +52,8 @@ Important current Python files:
   Local entrypoint. Runs the real FastMCP HTTP server.
 - `src/app.py`
   Creates the FastMCP app, attaches JWT auth, and imports MCP modules.
+- `src/middleware/audit.py`
+  MCP audit middleware for authenticated request logging.
 - `src/settings.py`
   Environment-backed runtime settings.
 - `src/auth/`
@@ -70,7 +73,15 @@ Important current Python files:
 - `src/tools/workflow.py`
   Workflow bootstrap tool.
 - `src/tools/collection.py`
-  Deterministic log collection tool.
+  Project discovery and deterministic log collection tools.
+- `src/tools/snapshots.py`
+  Snapshot inventory, file-read, and grep tools for persisted log snapshots.
+- `src/tools/analysis.py`
+  Snapshot analysis tools such as grouped errors, incident bundles, and
+  follow-up window suggestions.
+- `src/tools/snapshot_support.py`
+  Shared snapshot-tool support helpers for error mapping, timestamp parsing,
+  and chunked snapshot reads.
 - `src/tools/system.py`
   MCP service diagnostics tools.
 - `src/tests/`
@@ -109,6 +120,12 @@ Currently implemented:
 
 - `analyze_daily_log_bundle`
 - `collect_logs`
+- `list_log_snapshot_files`
+- `read_log_snapshot_file`
+- `grep_log_snapshot`
+- `group_errors`
+- `build_incident_bundle`
+- `suggest_followup_window`
 - `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
@@ -121,8 +138,15 @@ Purpose:
 - `collect_logs`
   returns deterministic collection results for the authorized project and
   requested source keys from the manifest. Current agent-facing arguments are:
-  `project_name`, `source_keys`, `save_to_files`, optional `tail_lines`,
-  `timestamps`, `since`, and `until`.
+  `project_name`, `source_keys`, `workspace`, `session_id`, optional
+  `tail_lines`, `timestamps`, `since`, and `until`.
+- `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`
+  operate on one persisted snapshot identified by `snapshot_id`
+- `group_errors`, `build_incident_bundle`
+  summarize one persisted snapshot for triage and follow-up analysis
+- `suggest_followup_window`
+  converts suspicious grouped timestamps into a narrower `collect_logs`
+  `since` / `until` window
 - `list_projects`
   returns the currently available manifest-backed projects with short project
   summaries and source inventory metadata
@@ -230,7 +254,6 @@ Important distinction:
 
 Major missing pieces:
 
-- snapshot inventory and snapshot lifecycle tools
 - real JWT/Keycloak-backed auth
 - final cross-repo rollout/integration behavior
 
@@ -245,14 +268,52 @@ Current auth state:
 - if `updated_at` is older than one day, treat the saved tokens as not valid
   and generate fresh ones with:
   `uv run python infra/scripts/generate_dev_jwt.py`
+- if the expected token structure changes, for example a new required scope is
+  added for MCP checks, treat previously saved tokens as outdated and generate
+  fresh ones even if they are still within the 24-hour window
+- after generating fresh tokens for local MCP checks, save the new values back
+  into `.agent/DEV_JWT_TOKENS.json` before using curl or MCP client requests
 - if you keep generated tokens in `.agent/DEV_JWT_TOKENS.json`, treat that file
   as developer-local state, not as a repository contract
+
+
+## Planning Notes
+
+Use these docs when a task touches near-term design work that is not yet fully
+implemented:
+
+- `infra/docs/NEW/mcp_log_server_architecture.md`
+  broader MCP server implementation direction
+- `infra/docs/NEW/log_search_and_large_log_handling.md`
+  planned direction for adding log-search arguments to `collect_logs` and for
+  handling large log payloads without relying on unbounded in-memory responses
+
+
+## External Skills
+
+This repo may also use the shared local skill library at:
+
+- [antigravity-awesome-skills](/Users/lukaszremkowicz/Projects/antigravity-awesome-skills)
+
+Use it as the first external skill source when a task needs:
+
+- architecture review
+- Python testing patterns
+- code review guidance
+- README/documentation authoring
+- other reusable engineering workflows not already local to this repository
+
+Do not copy skills into this repository by default. Prefer linking to and using
+the shared skill set in place unless the user explicitly asks for a local copy.
 
 
 ## Working Rules For This Repo
 
 - Prefer matching the existing `landingpage` monitoring workflow before
   inventing new abstractions.
+- Check the shared local skill library in
+  `/Users/lukaszremkowicz/Projects/antigravity-awesome-skills` before inventing
+  new process, review, testing, or documentation guidance.
 - Keep prompts small enough that on-demand skills still matter.
 - Do not assume the agent runtime magically understands prompts/tools/skills;
   code still has to orchestrate MCP calls explicitly.
@@ -269,6 +330,13 @@ Current local validation command:
 ```bash
 uv run pytest
 ```
+
+Current collector test caveat:
+
+- collector and snapshot tools have strong unit and API-level coverage
+- docker-backed collection inside pytest is covered with mocks
+- the curl-driven MCP HTTP path is covered by `infra/scripts/run_http_e2e.sh`
+- real live-container log collection is not yet exercised inside pytest
 
 Common run path:
 
