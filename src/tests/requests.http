@@ -137,7 +137,6 @@ Authorization: {{workflowAuth}}
     "name": "list_log_snapshot_files",
     "arguments": {
       "project_name": "landingpage",
-      "workspace": "workflow",
       "snapshot_id": "latest"
     }
   }
@@ -158,7 +157,6 @@ Authorization: {{workflowAuth}}
     "name": "read_log_snapshot_file",
     "arguments": {
       "project_name": "landingpage",
-      "workspace": "workflow",
       "snapshot_id": "latest",
       "source_key": "backend",
       "max_bytes": 4000
@@ -181,7 +179,6 @@ Authorization: {{workflowAuth}}
     "name": "grep_log_snapshot",
     "arguments": {
       "project_name": "landingpage",
-      "workspace": "workflow",
       "snapshot_id": "latest",
       "grep": "/health",
       "source_keys": ["backend"]
@@ -203,7 +200,6 @@ Authorization: {{workflowAuth}}
     "name": "group_errors",
     "arguments": {
       "project_name": "landingpage",
-      "workspace": "workflow",
       "snapshot_id": "latest",
       "source_keys": ["backend"],
       "max_groups": 20
@@ -225,7 +221,6 @@ Authorization: {{workflowAuth}}
     "name": "build_incident_bundle",
     "arguments": {
       "project_name": "landingpage",
-      "workspace": "workflow",
       "snapshot_id": "latest",
       "source_keys": ["backend"],
       "max_groups": 20

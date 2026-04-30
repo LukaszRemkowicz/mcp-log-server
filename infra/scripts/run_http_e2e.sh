@@ -130,13 +130,13 @@ COLLECT_RESPONSE="$(
   json_post '{"jsonrpc":"2.0","id":"collect-workflow","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_name":"landingpage","workspace":"workflow","source_keys":["app_first","app_second"],"tail_lines":200}}}'
 )"
 LIST_RESPONSE="$(
-  json_post '{"jsonrpc":"2.0","id":"list-snapshot","method":"tools/call","params":{"name":"list_log_snapshot_files","arguments":{"project_name":"landingpage","workspace":"workflow","snapshot_id":"latest"}}}'
+  json_post '{"jsonrpc":"2.0","id":"list-snapshot","method":"tools/call","params":{"name":"list_log_snapshot_files","arguments":{"project_name":"landingpage","snapshot_id":"latest"}}}'
 )"
 READ_RESPONSE="$(
-  json_post '{"jsonrpc":"2.0","id":"read-first","method":"tools/call","params":{"name":"read_log_snapshot_file","arguments":{"project_name":"landingpage","workspace":"workflow","snapshot_id":"latest","source_key":"app_first","max_bytes":1000}}}'
+  json_post '{"jsonrpc":"2.0","id":"read-first","method":"tools/call","params":{"name":"read_log_snapshot_file","arguments":{"project_name":"landingpage","snapshot_id":"latest","source_key":"app_first","max_bytes":1000}}}'
 )"
 GREP_RESPONSE="$(
-  json_post '{"jsonrpc":"2.0","id":"grep-shared","method":"tools/call","params":{"name":"grep_log_snapshot","arguments":{"project_name":"landingpage","workspace":"workflow","snapshot_id":"latest","grep":"shared match","source_keys":["app_first","app_second"]}}}'
+  json_post '{"jsonrpc":"2.0","id":"grep-shared","method":"tools/call","params":{"name":"grep_log_snapshot","arguments":{"project_name":"landingpage","snapshot_id":"latest","grep":"shared match","source_keys":["app_first","app_second"]}}}'
 )"
 SESSION_RESPONSE="$(
   json_post '{"jsonrpc":"2.0","id":"collect-session","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_name":"landingpage","workspace":"session","session_id":"ci-session","source_keys":["app_first"],"tail_lines":200}}}'
