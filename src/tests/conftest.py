@@ -15,10 +15,48 @@ from joserfc import jwt
 from joserfc.jwk import OctKey
 from starlette.testclient import TestClient
 
-import dependencies
+import conf
 from app import create_application
 from auth.auth_provider import build_auth_provider
 from settings import Settings
+from tools import collection as collection_tools
+from tools import container_inspection as container_inspection_tools
+from tools import snapshots as snapshots_tools
+from tools import system as system_tools
+from utils import log_snapshots as log_snapshot_utils
+
+
+@contextmanager
+def override_settings(
+    settings: Settings | None = None,
+    /,
+    **updates: object,
+) -> Generator[Settings]:
+    """Temporarily replace shared app settings for tests.
+
+    Usage styles:
+
+    - `with override_settings(custom_settings):`
+      replace the full settings object
+    - `with override_settings(MANIFEST_PATH=manifest_path):`
+      patch selected fields on top of the current settings object
+    """
+
+    effective_settings = (
+        settings.model_copy(update=updates)
+        if settings is not None
+        else conf.settings.model_copy(update=updates)
+    )
+
+    with (
+        patch.object(conf, "settings", effective_settings),
+        patch.object(collection_tools, "settings", effective_settings),
+        patch.object(container_inspection_tools, "settings", effective_settings),
+        patch.object(snapshots_tools, "settings", effective_settings),
+        patch.object(system_tools, "settings", effective_settings),
+        patch.object(log_snapshot_utils, "settings", effective_settings),
+    ):
+        yield effective_settings
 
 
 @dataclass(slots=True)
@@ -56,17 +94,17 @@ class JsonRpcFixture:
     def with_settings(self, settings: Settings) -> Generator[JsonRpcClient]:
         """Create a temporary JSON-RPC client for a custom settings object."""
 
-        with patch.object(dependencies, "get_settings", return_value=settings):
-            app = create_application(auth_provider=build_auth_provider(settings))
+        with override_settings(settings) as effective_settings:
+            app = create_application(auth_provider=build_auth_provider(effective_settings))
             asgi_app = app.http_app(
-                path=settings.MCP_PATH,
-                json_response=settings.MCP_JSON_RESPONSE,
-                stateless_http=settings.MCP_STATELESS_HTTP,
+                path=effective_settings.MCP_PATH,
+                json_response=effective_settings.MCP_JSON_RESPONSE,
+                stateless_http=effective_settings.MCP_STATELESS_HTTP,
             )
             with TestClient(asgi_app) as api_client:
                 yield JsonRpcClient(
                     api_client=api_client,
-                    mcp_path=settings.MCP_PATH,
+                    mcp_path=effective_settings.MCP_PATH,
                 )
 
 
@@ -187,10 +225,22 @@ def collect_logs_request_factory() -> CollectLogsRequestFactory:
 
 
 @pytest.fixture
-def create_test_jwt_token(settings_fixture: Settings) -> Callable[[str, list[str], str], str]:
-    def build_token(subject: str, scopes: list[str], client_id: str) -> str:
+def create_test_jwt_token(
+    settings_fixture: Settings,
+) -> Callable[[str, list[str], str, dict[str, Any] | None], str]:
+    def build_token(
+        subject: str,
+        scopes: list[str],
+        client_id: str,
+        overrides: dict[str, Any] | None = None,
+    ) -> str:
         now = int(time.time())
-        signing_key = OctKey.import_key(settings_fixture.JWT_SHARED_SECRET)
+        effective_overrides = overrides or {}
+        signing_secret = effective_overrides.pop(
+            "signing_secret",
+            settings_fixture.JWT_SHARED_SECRET,
+        )
+        signing_key = OctKey.import_key(signing_secret)
         header = {"alg": settings_fixture.JWT_ALGORITHM, "typ": "JWT"}
         payload = {
             "iss": settings_fixture.JWT_ISSUER,
@@ -202,6 +252,7 @@ def create_test_jwt_token(settings_fixture: Settings) -> Callable[[str, list[str
             "project_key": "landingpage",
             "scope": " ".join(scopes),
         }
+        payload.update(effective_overrides)
         return jwt.encode(
             header,
             payload,

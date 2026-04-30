@@ -140,6 +140,7 @@ class CollectLogsPayload(BaseModel):
     requested_since: str | None
     requested_until: str | None
     tail_lines_limited: bool
+    next_step_tips: list[str]
     warnings: list[str]
     retry_tips: list[str]
     unknown_requested_source_keys: list[str]
@@ -200,6 +201,7 @@ class ListLogSnapshotFilesPayload(BaseModel):
     snapshot_dir: str
     metadata_file: str
     collected_at: str
+    next_step_tips: list[str]
     files: list[LogSnapshotFilePayload]
 
 
@@ -227,6 +229,7 @@ class ReadLogSnapshotFilePayload(BaseModel):
     start_line: int | None
     line_count: int | None
     max_bytes: int
+    next_step_tips: list[str]
     truncated: bool
     content: str
     file: LogSnapshotFilePayload
@@ -279,8 +282,138 @@ class GrepLogSnapshotPayload(BaseModel):
     match_limit: int
     match_count: int
     returned_match_count: int
+    next_step_tips: list[str]
     truncated: bool
     matches: list[GrepLogSnapshotMatchPayload]
+
+
+class SnapshotLineReferencePayload(BaseModel):
+    """Point to one concrete line inside a persisted snapshot file.
+
+    Analysis tools use this shape when they want to summarize or group
+    findings while still giving the caller a direct pointer back to the raw
+    saved file and line number.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_key: str
+    output_file: str
+    line_number: int
+    line: str
+    line_truncated: bool
+
+
+class GroupedErrorPayload(BaseModel):
+    """Describe one deterministic grouped-error finding from a saved snapshot."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    fingerprint: str
+    category: str
+    severity: Literal["high", "medium", "low"]
+    count: int
+    source_keys: list[str]
+    request_paths: list[str]
+    status_codes: list[int]
+    levels: list[str]
+    sample_message: str
+    first_timestamp: str | None
+    last_timestamp: str | None
+    first_seen: SnapshotLineReferencePayload
+    last_seen: SnapshotLineReferencePayload
+
+
+class GroupErrorsPayload(BaseModel):
+    """Structured response returned by `group_errors`.
+
+    This tool condenses repeated error-like log lines into stable grouped
+    findings so an agent can reason about recurring failures without reading
+    every raw line individually.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["group_errors"]
+    requested_project_name: str | None
+    authorized_project_name: str
+    effective_project_name: str
+    workspace: SnapshotWorkspace
+    snapshot_id: str
+    snapshot_dir: str
+    searched_source_keys: list[str]
+    analysis_cautions: list[str]
+    next_step_tips: list[str]
+    grouped_error_count: int
+    matching_line_count: int
+    max_groups: int
+    truncated: bool
+    groups: list[GroupedErrorPayload]
+
+
+class IncidentSourceSummaryPayload(BaseModel):
+    """Summarize one source's contribution to a deterministic incident bundle."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_key: str
+    grouped_error_count: int
+    matching_line_count: int
+    first_timestamp: str | None
+    last_timestamp: str | None
+
+
+class IncidentBundlePayload(BaseModel):
+    """Structured response returned by `build_incident_bundle`.
+
+    This is a compact deterministic bundle for LLM workflows: grouped error
+    signals, source summaries, and concrete line references that point back to
+    the raw persisted snapshot files.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["build_incident_bundle"]
+    requested_project_name: str | None
+    authorized_project_name: str
+    effective_project_name: str
+    workspace: SnapshotWorkspace
+    snapshot_id: str
+    snapshot_dir: str
+    searched_source_keys: list[str]
+    analysis_cautions: list[str]
+    next_step_tips: list[str]
+    grouped_error_count: int
+    matching_line_count: int
+    high_severity_group_count: int
+    medium_severity_group_count: int
+    low_severity_group_count: int
+    top_groups: list[GroupedErrorPayload]
+    source_summaries: list[IncidentSourceSummaryPayload]
+    suggested_next_steps: list[str]
+
+
+class SuggestFollowupWindowPayload(BaseModel):
+    """Structured response returned by `suggest_followup_window`.
+
+    This helper converts a suspicious timestamp span from grouped analysis into
+    a tighter `collect_logs` window so the caller can recollect a narrower
+    snapshot around one incident period.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["suggest_followup_window"]
+    first_timestamp: str
+    last_timestamp: str
+    padding_minutes: int
+    suggested_since: str
+    suggested_until: str
+    suggested_duration_minutes: int
+    ready_for_collect_logs: bool
+    next_step_tips: list[str]
+    explanation: str
+    example_collect_logs_arguments: dict[str, str]
 
 
 class ContainerPathMetadataPayload(BaseModel):

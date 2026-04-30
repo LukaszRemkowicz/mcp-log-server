@@ -192,8 +192,25 @@ def analyze_daily_log_bundle(
     still remains available through normal discovery calls like `tools/list`.
     """
 
-    logger.info("tool call: analyze_daily_log_bundle")
+    logger.info(
+        "tool call",
+        extra={
+            "event": "tool_call",
+            "tool_name": "analyze_daily_log_bundle",
+        },
+    )
+    payload = build_workflow_bootstrap_payload(asset_loader, access_token)
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "analyze_daily_log_bundle",
+            "mandatory_skill_count": len(payload["mandatory_skills"]),
+            "optional_skill_count": len(payload["optional_skills"]),
+            "tool_count": len(payload["tools"]),
+        },
+    )
     return ToolResult(
         content=[],
-        structured_content=build_workflow_bootstrap_payload(asset_loader, access_token),
+        structured_content=payload,
     )

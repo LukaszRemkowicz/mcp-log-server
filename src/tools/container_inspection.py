@@ -21,17 +21,18 @@ It exposes only deterministic, read-only file inspection primitives:
 
 from __future__ import annotations
 
+import logging
 from pathlib import PurePosixPath
 
-from fastmcp.dependencies import CurrentAccessToken, Depends
+from fastmcp.dependencies import CurrentAccessToken
 from fastmcp.server.auth import AccessToken, require_scopes
 from fastmcp.tools.base import ToolResult
 
 from app import mcp
 from auth.scopes import CONTAINER_FILES_READ_SCOPE
-from dependencies import get_settings_dependency
+from conf import settings
+from logging_config import get_logger
 from manifests.models import SourceDefinition
-from settings import Settings
 from tools.errors import build_container_file_error_result
 from tools.models import (
     ContainerPathMetadataPayload,
@@ -46,7 +47,8 @@ from utils.container_inspection_commands import (
 )
 from utils.container_inspection_commands import read_container_file as run_read_container_file
 from utils.container_inspection_commands import stat_container_path as run_stat_container_path
-from utils.mcp_errors import build_agent_tool_error_result
+
+logger: logging.Logger = get_logger("tools.container_inspection")
 
 
 def _normalize_container_path(path: str) -> str:
@@ -147,7 +149,6 @@ def stat_container_path(
     source_key: str,
     path: str,
     project_name: str | None = None,
-    settings: Settings = Depends(get_settings_dependency),
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
     """Return metadata for one approved path inside a docker source container.
@@ -172,15 +173,17 @@ def stat_container_path(
     - internal execution uses only the approved inspection command wrapper
     """
 
-    if access_token is None:
-        return build_agent_tool_error_result(
-            error_code="missing_access_token",
-            message="Authenticated access token is required to inspect container files.",
-            retry_tips=[
-                "Retry with a bearer JWT that includes the container.files.read scope.",
-            ],
-        )
-
+    assert access_token is not None
+    logger.info(
+        "tool call",
+        extra={
+            "event": "tool_call",
+            "tool_name": "stat_container_path",
+            "source_key": source_key,
+            "path": path,
+            "project_name": project_name,
+        },
+    )
     try:
         manifest, authorized_project_name, effective_project_name = (
             load_authorized_project_manifest(
@@ -208,6 +211,17 @@ def stat_container_path(
             stat=_metadata_from_stat(stat_payload),
         )
     except ValueError as error:
+        logger.info(
+            "tool error",
+            extra={
+                "event": "tool_error",
+                "tool_name": "stat_container_path",
+                "error_message": str(error),
+                "source_key": source_key,
+                "path": path,
+                "project_name": project_name,
+            },
+        )
         return build_container_file_error_result(
             action="stat_container_path",
             message=str(error),
@@ -224,6 +238,18 @@ def stat_container_path(
             },
         )
 
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "stat_container_path",
+            "source_key": payload.source_key,
+            "container_name": payload.container_name,
+            "path": payload.path,
+            "is_dir": payload.stat.is_dir,
+            "size": payload.stat.size,
+        },
+    )
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
@@ -233,7 +259,6 @@ def read_container_file(
     path: str,
     project_name: str | None = None,
     max_bytes: int = MAX_CONTAINER_FILE_BYTES,
-    settings: Settings = Depends(get_settings_dependency),
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
     """Read one approved text file from a docker source container.
@@ -252,15 +277,18 @@ def read_container_file(
     arbitrary container exec to agents.
     """
 
-    if access_token is None:
-        return build_agent_tool_error_result(
-            error_code="missing_access_token",
-            message="Authenticated access token is required to inspect container files.",
-            retry_tips=[
-                "Retry with a bearer JWT that includes the container.files.read scope.",
-            ],
-        )
-
+    assert access_token is not None
+    logger.info(
+        "tool call",
+        extra={
+            "event": "tool_call",
+            "tool_name": "read_container_file",
+            "source_key": source_key,
+            "path": path,
+            "project_name": project_name,
+            "max_bytes": max_bytes,
+        },
+    )
     try:
         manifest, authorized_project_name, effective_project_name = (
             load_authorized_project_manifest(
@@ -303,6 +331,18 @@ def read_container_file(
             file=file_metadata,
         )
     except ValueError as error:
+        logger.info(
+            "tool error",
+            extra={
+                "event": "tool_error",
+                "tool_name": "read_container_file",
+                "error_message": str(error),
+                "source_key": source_key,
+                "path": path,
+                "project_name": project_name,
+                "max_bytes": max_bytes,
+            },
+        )
         return build_container_file_error_result(
             action="read_container_file",
             message=str(error),
@@ -322,6 +362,18 @@ def read_container_file(
             },
         )
 
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "read_container_file",
+            "source_key": payload.source_key,
+            "container_name": payload.container_name,
+            "path": payload.path,
+            "truncated": payload.truncated,
+            "size": payload.file.size,
+        },
+    )
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
@@ -330,7 +382,6 @@ def list_container_directory(
     source_key: str,
     path: str,
     project_name: str | None = None,
-    settings: Settings = Depends(get_settings_dependency),
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
     """List immediate entries under one approved directory in a docker source.
@@ -346,15 +397,17 @@ def list_container_directory(
     - same manifest/JWT/path safety checks as the other inspection tools
     """
 
-    if access_token is None:
-        return build_agent_tool_error_result(
-            error_code="missing_access_token",
-            message="Authenticated access token is required to inspect container files.",
-            retry_tips=[
-                "Retry with a bearer JWT that includes the container.files.read scope.",
-            ],
-        )
-
+    assert access_token is not None
+    logger.info(
+        "tool call",
+        extra={
+            "event": "tool_call",
+            "tool_name": "list_container_directory",
+            "source_key": source_key,
+            "path": path,
+            "project_name": project_name,
+        },
+    )
     try:
         manifest, authorized_project_name, effective_project_name = (
             load_authorized_project_manifest(
@@ -391,6 +444,17 @@ def list_container_directory(
             entries=[_metadata_from_stat(entry) for entry in entries],
         )
     except ValueError as error:
+        logger.info(
+            "tool error",
+            extra={
+                "event": "tool_error",
+                "tool_name": "list_container_directory",
+                "error_message": str(error),
+                "source_key": source_key,
+                "path": path,
+                "project_name": project_name,
+            },
+        )
         return build_container_file_error_result(
             action="list_container_directory",
             message=str(error),
@@ -408,4 +472,16 @@ def list_container_directory(
             },
         )
 
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "list_container_directory",
+            "source_key": payload.source_key,
+            "container_name": payload.container_name,
+            "path": payload.path,
+            "entry_count": len(payload.entries),
+            "truncated": payload.truncated,
+        },
+    )
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))

@@ -12,6 +12,8 @@ from auth.scopes import (
     PROJECTS_READ_SCOPE,
     WORKFLOW_BOOTSTRAP_SCOPE,
 )
+from middleware.audit import AccessAuditMiddleware
+from tools.agent_hints import BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION, COLLECT_LOGS_TOOL_DESCRIPTION
 from tools.workflow import build_workflow_bootstrap_payload, get_allowed_workflow_tool_metadata
 from utils.assets import WorkflowAssetLoader
 
@@ -22,12 +24,16 @@ def test_application_registers_expected_mcp_components() -> None:
     async def run_test() -> None:
         tools = await app._local_provider.list_tools()
         tool_names = [tool.name for tool in tools]
+        assert any(isinstance(middleware, AccessAuditMiddleware) for middleware in app.middleware)
 
         assert "analyze_daily_log_bundle" in tool_names
         assert "collect_logs" in tool_names
         assert "list_log_snapshot_files" in tool_names
         assert "read_log_snapshot_file" in tool_names
         assert "grep_log_snapshot" in tool_names
+        assert "group_errors" in tool_names
+        assert "build_incident_bundle" in tool_names
+        assert "suggest_followup_window" in tool_names
         assert "list_projects" in tool_names
         assert "read_container_file" in tool_names
         assert "stat_container_path" in tool_names
@@ -89,6 +95,11 @@ def test_application_registers_expected_mcp_components() -> None:
             item["tool_name"] == "read_log_snapshot_file" for item in bootstrap_text["tools"]
         )
         assert any(item["tool_name"] == "grep_log_snapshot" for item in bootstrap_text["tools"])
+        assert all(item["tool_name"] != "group_errors" for item in bootstrap_text["tools"])
+        assert all(item["tool_name"] != "build_incident_bundle" for item in bootstrap_text["tools"])
+        assert all(
+            item["tool_name"] != "suggest_followup_window" for item in bootstrap_text["tools"]
+        )
         assert any(item["tool_name"] == "list_projects" for item in bootstrap_text["tools"])
         assert any(
             item["tool_name"] == "get_mcp_service_status" for item in bootstrap_text["tools"]
@@ -107,6 +118,11 @@ def test_application_registers_expected_mcp_components() -> None:
         )
         assert since_argument["default"] == "24h"
         app_collect_tool = next(tool for tool in tools if tool.name == "collect_logs")
+        assert app_collect_tool.description == COLLECT_LOGS_TOOL_DESCRIPTION
+        app_incident_bundle_tool = next(
+            tool for tool in tools if tool.name == "build_incident_bundle"
+        )
+        assert app_incident_bundle_tool.description == BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION
         since_property = app_collect_tool.parameters["properties"]["since"]
         assert since_property["default"] == "24h"
         app_grep_tool = next(tool for tool in tools if tool.name == "grep_log_snapshot")

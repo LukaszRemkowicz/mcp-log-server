@@ -32,6 +32,7 @@ from utils.log_snapshots import (
     build_snapshot_file_payloads,
     read_snapshot_metadata,
     resolve_snapshot_dir,
+    resolve_snapshot_dir_by_id,
     resolve_snapshot_file_path,
 )
 
@@ -162,6 +163,31 @@ class LogSnapshotService:
         )
         project_output_dir = self.settings.LOGS_DIR / effective_project_name
         snapshot_dir = resolve_snapshot_dir(project_output_dir, workspace, snapshot_id)
+        metadata = read_snapshot_metadata(snapshot_dir)
+        return AuthorizedSnapshotContext(
+            authorized_project_name=authorized_project_name,
+            effective_project_name=effective_project_name,
+            snapshot_dir=snapshot_dir,
+            metadata=metadata,
+        )
+
+    def resolve_snapshot_context_by_snapshot_id(
+        self,
+        requested_project_name: str | None,
+        snapshot_id: str,
+    ) -> AuthorizedSnapshotContext:
+        """Authorize the caller and load one persisted snapshot by id alone."""
+
+        _, authorized_project_name, effective_project_name = load_authorized_project_manifest(
+            self.settings,
+            self.access_token,
+            requested_project_name,
+        )
+        project_output_dir = self.settings.LOGS_DIR / effective_project_name
+        _resolved_workspace, snapshot_dir = resolve_snapshot_dir_by_id(
+            project_output_dir,
+            snapshot_id,
+        )
         metadata = read_snapshot_metadata(snapshot_dir)
         return AuthorizedSnapshotContext(
             authorized_project_name=authorized_project_name,

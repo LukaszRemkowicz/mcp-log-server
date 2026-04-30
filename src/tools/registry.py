@@ -173,6 +173,7 @@ def workflow_discoverable_tool(
     required_scope: str,
     *,
     argument_default_overrides: dict[str, Any] | None = None,
+    mcp_description: str | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Register a tool in two places: MCP and the workflow bootstrap registry.
 
@@ -220,7 +221,10 @@ def workflow_discoverable_tool(
                 default_overrides=argument_default_overrides,
             ),
         }
-        return mcp.tool(auth=require_scopes(required_scope))(func)
+        return mcp.tool(
+            auth=require_scopes(required_scope),
+            description=mcp_description,
+        )(func)
 
     return decorator
 

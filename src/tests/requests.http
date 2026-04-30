@@ -189,6 +189,50 @@ Authorization: {{workflowAuth}}
   }
 }
 
+### Group repeated error-like findings from one persisted workflow snapshot
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{workflowAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "group-workflow-errors",
+  "method": "tools/call",
+  "params": {
+    "name": "group_errors",
+    "arguments": {
+      "project_name": "landingpage",
+      "workspace": "workflow",
+      "snapshot_id": "latest",
+      "source_keys": ["backend"],
+      "max_groups": 20
+    }
+  }
+}
+
+### Build one compact incident bundle from a persisted workflow snapshot
+POST {{baseUrl}}/mcp
+Content-Type: application/json
+Accept: application/json
+Authorization: {{workflowAuth}}
+
+{
+  "jsonrpc": "2.0",
+  "id": "incident-bundle-workflow",
+  "method": "tools/call",
+  "params": {
+    "name": "build_incident_bundle",
+    "arguments": {
+      "project_name": "landingpage",
+      "workspace": "workflow",
+      "snapshot_id": "latest",
+      "source_keys": ["backend"],
+      "max_groups": 20
+    }
+  }
+}
+
 ### Read one workflow skill resource
 POST {{baseUrl}}/mcp
 Content-Type: application/json

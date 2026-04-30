@@ -8,6 +8,7 @@ from fastmcp.server.auth import AccessToken
 
 from manifests.models import SourceDefinition, SourceManifest
 from settings import Settings
+from tools.agent_hints import COLLECT_LOGS_NEXT_STEP_TIPS
 from tools.models import CollectedSourcePayload, CollectLogsPayload, SnapshotWorkspace
 from tools.utils import load_authorized_project_manifest
 from utils.log_preview import truncate_collected_sources_for_response
@@ -336,6 +337,7 @@ class LogCollectionService:
             requested_since=requested_since,
             requested_until=requested_until,
             tail_lines_limited=tail_lines_limited,
+            next_step_tips=COLLECT_LOGS_NEXT_STEP_TIPS,
             warnings=warnings,
             retry_tips=retry_tips,
             unknown_requested_source_keys=unknown_source_keys,

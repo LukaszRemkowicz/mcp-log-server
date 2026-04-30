@@ -40,6 +40,9 @@ from utils.container_inspection_commands import ContainerPathStat
                 "list_log_snapshot_files",
                 "read_log_snapshot_file",
                 "grep_log_snapshot",
+                "group_errors",
+                "build_incident_bundle",
+                "suggest_followup_window",
                 "list_projects",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
@@ -65,6 +68,9 @@ from utils.container_inspection_commands import ContainerPathStat
                 "list_log_snapshot_files",
                 "read_log_snapshot_file",
                 "grep_log_snapshot",
+                "group_errors",
+                "build_incident_bundle",
+                "suggest_followup_window",
                 "list_projects",
                 "read_container_file",
                 "stat_container_path",
@@ -150,6 +156,9 @@ def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
     assert any(item["tool_name"] == "list_log_snapshot_files" for item in payload["tools"])
     assert any(item["tool_name"] == "read_log_snapshot_file" for item in payload["tools"])
     assert any(item["tool_name"] == "grep_log_snapshot" for item in payload["tools"])
+    assert all(item["tool_name"] != "group_errors" for item in payload["tools"])
+    assert all(item["tool_name"] != "build_incident_bundle" for item in payload["tools"])
+    assert all(item["tool_name"] != "suggest_followup_window" for item in payload["tools"])
     assert any(item["tool_name"] == "list_projects" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_service_status" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_health_check" for item in payload["tools"])
@@ -558,12 +567,85 @@ def test_codex_cannot_access_workflow_components(
     assert "Unknown resource" in resource_response.json()["error"]["message"]
 
 
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("tools/list", {}),
+        ("tools/call", {"name": "list_projects", "arguments": {}}),
+        ("resources/read", {"uri": "skill://workflow/severity_guide"}),
+    ],
+)
 def test_api_requires_bearer_token(
     jsonrpc: JsonRpcFixture,
+    method: str,
+    params: dict[str, object],
 ) -> None:
     response = jsonrpc.post(
         token=None,
-        data={"jsonrpc": "2.0", "id": "7", "method": "tools/list", "params": {}},
+        data={"jsonrpc": "2.0", "id": "7", "method": method, "params": params},
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"] == "invalid_token"
+
+
+@pytest.mark.parametrize(
+    ("token_factory", "label"),
+    [
+        (
+            lambda create_test_jwt_token: create_test_jwt_token(
+                "workflow-agent",
+                [LOGS_COLLECT_SCOPE],
+                "workflow-agent",
+                {"exp": 1},
+            ),
+            "expired",
+        ),
+        (
+            lambda create_test_jwt_token: create_test_jwt_token(
+                "workflow-agent",
+                [LOGS_COLLECT_SCOPE],
+                "workflow-agent",
+                {"signing_secret": "wrong-test-secret"},
+            ),
+            "wrong-secret",
+        ),
+        (
+            lambda create_test_jwt_token: create_test_jwt_token(
+                "workflow-agent",
+                [LOGS_COLLECT_SCOPE],
+                "workflow-agent",
+                {"iss": "wrong-issuer"},
+            ),
+            "wrong-issuer",
+        ),
+        (
+            lambda create_test_jwt_token: create_test_jwt_token(
+                "workflow-agent",
+                [LOGS_COLLECT_SCOPE],
+                "workflow-agent",
+                {"aud": "wrong-audience"},
+            ),
+            "wrong-audience",
+        ),
+        (
+            lambda create_test_jwt_token: "not-a-jwt",
+            "malformed",
+        ),
+    ],
+)
+def test_api_rejects_invalid_bearer_tokens(
+    create_test_jwt_token: Callable[[str, list[str], str, dict[str, object] | None], str],
+    jsonrpc: JsonRpcFixture,
+    token_factory: Callable[
+        [Callable[[str, list[str], str, dict[str, object] | None], str]],
+        str,
+    ],
+    label: str,
+) -> None:
+    response = jsonrpc.post(
+        token=token_factory(create_test_jwt_token),
+        data={"jsonrpc": "2.0", "id": f"invalid-{label}", "method": "tools/list", "params": {}},
     )
 
     assert response.status_code == 401

@@ -30,7 +30,7 @@ under `src/agent_assets/`.
 
 Current MCP workflow surface includes:
 
-- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `stat_container_path`, `list_container_directory`
+- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`, `group_errors`, `build_incident_bundle`, `suggest_followup_window`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `stat_container_path`, `list_container_directory`
 - resources: concrete workflow skill resources such as
   `skill://workflow/project_context`, `skill://workflow/severity_guide`,
   `skill://workflow/bot_detection`
@@ -159,6 +159,9 @@ export CODEX_AGENT_JWT="$(jq -r '.codex_agent' .agent/DEV_JWT_TOKENS.json)"
 Current example JWT capabilities:
 
 - `workflow_agent`
+  - `group_errors`
+  - `build_incident_bundle`
+  - `suggest_followup_window`
   - `collect_logs`
   - `list_log_snapshot_files`
   - `read_log_snapshot_file`
@@ -170,6 +173,9 @@ Current example JWT capabilities:
   - `resources/read` for `skill://workflow/{skill_name}`
 
 - `codex_agent`
+  - `group_errors`
+  - `build_incident_bundle`
+  - `suggest_followup_window`
   - `collect_logs`
   - `list_log_snapshot_files`
   - `read_log_snapshot_file`
@@ -393,7 +399,13 @@ What it is for:
 
 What it returns right now for the workflow token:
 
+- `group_errors`
+- `build_incident_bundle`
+- `suggest_followup_window`
 - `collect_logs`
+- `list_log_snapshot_files`
+- `read_log_snapshot_file`
+- `grep_log_snapshot`
 - `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
@@ -401,7 +413,13 @@ What it returns right now for the workflow token:
 
 What it returns right now for the codex token:
 
+- `group_errors`
+- `build_incident_bundle`
+- `suggest_followup_window`
 - `collect_logs`
+- `list_log_snapshot_files`
+- `read_log_snapshot_file`
+- `grep_log_snapshot`
 - `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
@@ -635,6 +653,9 @@ Snapshot follow-up tools:
 - `list_log_snapshot_files`
 - `read_log_snapshot_file`
 - `grep_log_snapshot`
+- `group_errors`
+- `build_incident_bundle`
+- `suggest_followup_window`
 
 Snapshot id guidance:
 
@@ -659,7 +680,6 @@ curl -sS \
       "name":"list_log_snapshot_files",
       "arguments":{
         "project_name":"landingpage",
-        "workspace":"workflow",
         "snapshot_id":"latest"
       }
     }
@@ -682,7 +702,6 @@ curl -sS \
       "name":"read_log_snapshot_file",
       "arguments":{
         "project_name":"landingpage",
-        "workspace":"workflow",
         "snapshot_id":"latest",
         "source_key":"backend",
         "max_bytes":4000
@@ -707,10 +726,80 @@ curl -sS \
       "name":"grep_log_snapshot",
       "arguments":{
         "project_name":"landingpage",
-        "workspace":"workflow",
         "snapshot_id":"latest",
         "grep":"/health",
         "source_keys":["backend"]
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Group repeated error-like findings from one saved snapshot:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-group-errors",
+    "method":"tools/call",
+    "params":{
+      "name":"group_errors",
+      "arguments":{
+        "project_name":"landingpage",
+        "snapshot_id":"latest",
+        "source_keys":["backend"],
+        "max_groups":20
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Build one compact incident bundle from a saved snapshot:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-incident-bundle",
+    "method":"tools/call",
+    "params":{
+      "name":"build_incident_bundle",
+      "arguments":{
+        "project_name":"landingpage",
+        "snapshot_id":"latest",
+        "source_keys":["backend"],
+        "max_groups":20
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Suggest a narrower recollection window from grouped-analysis timestamps:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-followup-window",
+    "method":"tools/call",
+    "params":{
+      "name":"suggest_followup_window",
+      "arguments":{
+        "first_timestamp":"2026-04-29T10:00:00Z",
+        "last_timestamp":"2026-04-29T10:05:00Z",
+        "padding_minutes":5
       }
     }
   }' \

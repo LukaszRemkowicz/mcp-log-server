@@ -52,6 +52,8 @@ Important current Python files:
   Local entrypoint. Runs the real FastMCP HTTP server.
 - `src/app.py`
   Creates the FastMCP app, attaches JWT auth, and imports MCP modules.
+- `src/middleware/audit.py`
+  MCP audit middleware for authenticated request logging.
 - `src/settings.py`
   Environment-backed runtime settings.
 - `src/auth/`
@@ -71,7 +73,15 @@ Important current Python files:
 - `src/tools/workflow.py`
   Workflow bootstrap tool.
 - `src/tools/collection.py`
-  Deterministic log collection tool.
+  Project discovery and deterministic log collection tools.
+- `src/tools/snapshots.py`
+  Snapshot inventory, file-read, and grep tools for persisted log snapshots.
+- `src/tools/analysis.py`
+  Snapshot analysis tools such as grouped errors, incident bundles, and
+  follow-up window suggestions.
+- `src/tools/snapshot_support.py`
+  Shared snapshot-tool support helpers for error mapping, timestamp parsing,
+  and chunked snapshot reads.
 - `src/tools/system.py`
   MCP service diagnostics tools.
 - `src/tests/`
@@ -110,6 +120,12 @@ Currently implemented:
 
 - `analyze_daily_log_bundle`
 - `collect_logs`
+- `list_log_snapshot_files`
+- `read_log_snapshot_file`
+- `grep_log_snapshot`
+- `group_errors`
+- `build_incident_bundle`
+- `suggest_followup_window`
 - `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
@@ -122,8 +138,15 @@ Purpose:
 - `collect_logs`
   returns deterministic collection results for the authorized project and
   requested source keys from the manifest. Current agent-facing arguments are:
-  `project_name`, `source_keys`, `save_to_files`, optional `tail_lines`,
-  `timestamps`, `since`, and `until`.
+  `project_name`, `source_keys`, `workspace`, `session_id`, optional
+  `tail_lines`, `timestamps`, `since`, and `until`.
+- `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`
+  operate on one persisted snapshot identified by `snapshot_id`
+- `group_errors`, `build_incident_bundle`
+  summarize one persisted snapshot for triage and follow-up analysis
+- `suggest_followup_window`
+  converts suspicious grouped timestamps into a narrower `collect_logs`
+  `since` / `until` window
 - `list_projects`
   returns the currently available manifest-backed projects with short project
   summaries and source inventory metadata
@@ -231,7 +254,6 @@ Important distinction:
 
 Major missing pieces:
 
-- snapshot inventory and snapshot lifecycle tools
 - real JWT/Keycloak-backed auth
 - final cross-repo rollout/integration behavior
 
