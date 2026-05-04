@@ -28,7 +28,7 @@ def get_mcp_service_status(
 
     - static service identity
     - basic process configuration such as environment, host, port, and log level
-    - selected JWT-derived caller fields like subject, client type, and project key
+    - selected JWT-derived caller fields like subject, client type, and project access
 
     It is intentionally lightweight and should not be treated as a full
     operational health or metrics endpoint.
@@ -47,7 +47,8 @@ def get_mcp_service_status(
         "status": "ok",
         "subject": claims.get("sub", access_token.client_id if access_token is not None else None),
         "client_type": claims.get("client_type"),
-        "project_key": claims.get("project_key"),
+        "allowed_projects": claims.get("allowed_projects"),
+        "projects_access": claims.get("projects_access"),
         "environment": settings.ENVIRONMENT,
         "host": settings.HOST,
         "port": settings.PORT,
@@ -59,7 +60,8 @@ def get_mcp_service_status(
             "event": "tool_result",
             "tool_name": "get_mcp_service_status",
             "client_type": payload["client_type"],
-            "project_key": payload["project_key"],
+            "allowed_projects": payload["allowed_projects"],
+            "projects_access": payload["projects_access"],
             "environment": payload["environment"],
         },
     )

@@ -18,12 +18,14 @@ from starlette.testclient import TestClient
 import conf
 from app import create_application
 from auth.auth_provider import build_auth_provider
+from middleware import audit as audit_middleware
+from services import log_collection as log_collection_service
+from services import log_snapshots as log_snapshot_service
+from services import project_manifest as project_manifest_service
 from settings import Settings
 from tools import collection as collection_tools
 from tools import container_inspection as container_inspection_tools
-from tools import snapshots as snapshots_tools
 from tools import system as system_tools
-from utils import log_snapshots as log_snapshot_utils
 
 
 @contextmanager
@@ -50,11 +52,13 @@ def override_settings(
 
     with (
         patch.object(conf, "settings", effective_settings),
+        patch.object(audit_middleware, "settings", effective_settings),
+        patch.object(log_collection_service, "settings", effective_settings),
+        patch.object(log_snapshot_service, "settings", effective_settings),
+        patch.object(project_manifest_service, "settings", effective_settings),
         patch.object(collection_tools, "settings", effective_settings),
         patch.object(container_inspection_tools, "settings", effective_settings),
-        patch.object(snapshots_tools, "settings", effective_settings),
         patch.object(system_tools, "settings", effective_settings),
-        patch.object(log_snapshot_utils, "settings", effective_settings),
     ):
         yield effective_settings
 
@@ -159,20 +163,17 @@ class CollectLogsRequestFactory:
         self,
         *,
         request_id: str = "collect-1",
-        project_name: str = "landingpage",
+        project_names: list[str] | None = None,
         source_keys: list[str] | None = None,
         workspace: str = "workflow",
         session_id: str | None = None,
-        tail_lines: int | None = 200,
-        timestamps: bool = False,
         since: str | None = None,
         until: str | None = None,
     ) -> dict[str, Any]:
         arguments: dict[str, Any] = {
-            "project_name": project_name,
-            "source_keys": source_keys or [],
+            "source_keys": ["all"] if source_keys is None else source_keys,
             "workspace": workspace,
-            "timestamps": timestamps,
+            "project_names": ["landingpage"] if project_names is None else project_names,
         }
         payload: dict[str, Any] = {
             "jsonrpc": "2.0",
@@ -183,8 +184,6 @@ class CollectLogsRequestFactory:
                 "arguments": arguments,
             },
         }
-        if tail_lines is not None:
-            arguments["tail_lines"] = tail_lines
         if session_id is not None:
             arguments["session_id"] = session_id
         if since is not None:
@@ -249,7 +248,7 @@ def create_test_jwt_token(
             "exp": now + settings_fixture.JWT_EXPIRATION_SECONDS,
             "sub": subject,
             "client_id": client_id,
-            "project_key": "landingpage",
+            "allowed_projects": ["landingpage"],
             "scope": " ".join(scopes),
         }
         payload.update(effective_overrides)
