@@ -1,6 +1,24 @@
 {
   "project_key": "landingpage",
   "project_summary": "Portfolio platform with shared ingress, backend API, frontend SSR, and edge proxy logs.",
+  "static_asset_paths": ["/favicon.ico", "/robots.txt", "/sitemap.xml"],
+  "static_asset_extensions": [
+    ".css",
+    ".js",
+    ".map",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".webp",
+    ".ico",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".txt",
+    ".xml"
+  ],
   "sources": [
     {
       "source_key": "nginx",

@@ -9,8 +9,8 @@ from fastmcp.server.auth import AccessToken
 
 from auth.scopes import MCP_HEALTH_READ_SCOPE, MCP_STATUS_READ_SCOPE
 from conf import settings
+from decorators import workflow_discoverable_tool
 from logging_config import get_logger
-from tools.registry import workflow_discoverable_tool
 from utils.types import JSONObject
 
 logger: logging.Logger = get_logger("tools.system")

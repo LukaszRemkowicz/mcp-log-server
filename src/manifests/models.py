@@ -28,4 +28,6 @@ class SourceManifest(BaseModel):
 
     project_key: str
     project_summary: str
+    static_asset_paths: list[str] = Field(default_factory=list)
+    static_asset_extensions: list[str] = Field(default_factory=list)
     sources: list[SourceDefinition] = Field(min_length=1)

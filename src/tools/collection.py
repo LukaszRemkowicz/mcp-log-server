@@ -11,6 +11,7 @@ from fastmcp.tools.base import ToolResult
 
 from auth.scopes import LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE
 from conf import settings
+from decorators import project_authorized_tool, workflow_discoverable_tool
 from logging_config import get_logger
 from services.log_collection import BuildLogsError, LogCollectionService
 from services.project_authorization import (
@@ -22,7 +23,6 @@ from services.project_manifest import ProjectManifestService
 from tools.agent_hints import COLLECT_LOGS_TOOL_DESCRIPTION
 from tools.errors import build_collect_logs_error_result
 from tools.models import CollectLogsPayload, ProjectManifestSummary, SnapshotWorkspace
-from tools.registry import workflow_discoverable_tool
 from utils.mcp_errors import build_agent_tool_error_result
 
 logger: logging.Logger = get_logger("tools.collection")
@@ -117,6 +117,7 @@ def list_projects(
     argument_default_overrides={"since": settings.DEFAULT_LOG_WINDOW},
     mcp_description=COLLECT_LOGS_TOOL_DESCRIPTION,
 )
+@project_authorized_tool
 def collect_logs(
     project_names: list[str] | None = None,
     source_keys: list[str] | None = None,

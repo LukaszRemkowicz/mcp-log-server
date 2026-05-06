@@ -18,7 +18,6 @@ from starlette.testclient import TestClient
 import conf
 from app import create_application
 from auth.auth_provider import build_auth_provider
-from middleware import audit as audit_middleware
 from services import log_collection as log_collection_service
 from services import log_snapshots as log_snapshot_service
 from services import project_manifest as project_manifest_service
@@ -52,7 +51,6 @@ def override_settings(
 
     with (
         patch.object(conf, "settings", effective_settings),
-        patch.object(audit_middleware, "settings", effective_settings),
         patch.object(log_collection_service, "settings", effective_settings),
         patch.object(log_snapshot_service, "settings", effective_settings),
         patch.object(project_manifest_service, "settings", effective_settings),

@@ -31,6 +31,15 @@ The key design boundary remains:
 - deterministic code gathers facts
 - the LLM interprets facts
 
+Current persistence note:
+
+- workflow and session artifacts are still filesystem-backed
+- `snapshot_metadata.json` is a temporary filesystem metadata sidecar for the
+  current non-database session implementation
+- when the planned database phase is implemented, that metadata should move
+  into relational rows and the filesystem should keep only the raw saved log
+  files
+
 ## Phase Status
 
 Phase 1 is ready.

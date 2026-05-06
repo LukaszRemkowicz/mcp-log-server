@@ -30,7 +30,7 @@ under `src/agent_assets/`.
 
 Current MCP workflow surface includes:
 
-- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`, `group_errors`, `build_incident_bundle`, `suggest_followup_window`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `stat_container_path`, `list_container_directory`
+- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`, `create_filtered_view`, `group_errors`, `build_incident_bundle`, `suggest_followup_window`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `stat_container_path`, `list_container_directory`
 - resources: concrete workflow skill resources such as
   `skill://workflow/project_context`, `skill://workflow/severity_guide`,
   `skill://workflow/bot_detection`
@@ -159,6 +159,7 @@ export CODEX_AGENT_JWT="$(jq -r '.codex_agent' .agent/DEV_JWT_TOKENS.json)"
 Current example JWT capabilities:
 
 - `workflow_agent`
+  - `create_filtered_view`
   - `group_errors`
   - `build_incident_bundle`
   - `suggest_followup_window`
@@ -173,6 +174,7 @@ Current example JWT capabilities:
   - `resources/read` for `skill://workflow/{skill_name}`
 
 - `codex_agent`
+  - `create_filtered_view`
   - `group_errors`
   - `build_incident_bundle`
   - `suggest_followup_window`
@@ -493,11 +495,7 @@ What it returns:
 
 - `project_name`
 - `project_summary`
-- `manifest_file`
 - `source_keys`
-- `source_types`
-- `file_sources_available`
-- `docker_sources_available`
 
 ### 2b. Collect Deterministic Logs
 
@@ -518,11 +516,9 @@ curl -sS \
     "params":{
       "name":"collect_logs",
       "arguments":{
-        "project_name":"landingpage",
+        "project_names":["landingpage"],
         "source_keys":["nginx","backend"],
         "workspace":"workflow",
-        "tail_lines":200,
-        "timestamps":true,
         "since":"30m"
       }
     }
@@ -539,63 +535,38 @@ What it is for:
 
 Agent-facing collect_logs arguments:
 
-- `project_name`
+- `project_names`
 - `source_keys`
 - `workspace`
-- `session_id`
-- optional `tail_lines`
-- `timestamps`
+- optional `session_id`
 - `since`
 - `until`
 
 Important:
 
 - if `since` is omitted, the server defaults to `24h`
-- if `tail_lines` is omitted, the server requests full source output inside the selected time window where supported
-- agents should prefer setting `tail_lines` when they do not need the full history
-- when an unbounded source is too slow or too large, the response includes retry guidance pointing back to `tail_lines`
-- `collect_logs` now always persists a snapshot for the requested workspace
+- if `source_keys` is omitted, the server behaves as if `source_keys=["all"]`
+- `collect_logs` now always persists per-project artifacts for the requested workspace
 - `workspace="workflow"` does not require `session_id`
 - `workspace="session"` requires an agent-chosen `session_id`
-- the agent must choose `session_id` itself when starting a new session
-- reuse the same `session_id` for later collect/list/read/grep calls that should stay on that same session snapshot
-- pick a different `session_id` only when starting a different analysis session
-- reusing the same `session_id` rewrites that session snapshot directory
+- the agent must choose `session_id` itself when starting a new investigation
+- reuse the same `session_id` when the investigation later needs logs from another project
+- session follow-up tools use `session_id` plus `project_name`
 - `collect_logs` does not search log content; persisted snapshot search happens through `grep_log_snapshot`
 
 What it returns:
 
 - `action`
-- `requested_project_name`
-- `authorized_project_name`
-- `effective_project_name`
 - `workspace`
-- `snapshot_id`
-- `snapshot_dir`
-- `metadata_file`
-- `persisted`
-- `requested_source_keys`
-- `requested_tail_lines`
-- `effective_tail_lines`
-- `requested_timestamps`
-- `requested_since`
-- `requested_until`
-- `unknown_requested_source_keys`
-- `resolved_source_keys`
-- `logs_by_source`
-- `warnings`
-- `retry_tips`
-- `project_output_dir`
-- `latest_output_dir`
-- `archive_dir`
-- `collected_at`
-- `sources`
-
-Important response detail:
-
-- `logs_by_source` is the agent-first field for the preview text returned inline
-- `sources` still includes the per-source deterministic metadata and status
-- follow-up file reads and searches should happen through the snapshot tools
+- optional `session_id`
+- `requested_project_names`
+- `projects`
+  - each project entry contains its own persisted artifact details such as
+    `snapshot_dir`, `metadata_file`,
+    `resolved_source_keys`, `warnings`, `retry_tips`, `collected_at`, and
+    `sources`
+- `sources` includes per-source deterministic metadata and status
+- follow-up file reads and searches happen through the snapshot tools
 
 Example collection call:
 
@@ -611,11 +582,9 @@ curl -sS \
     "params":{
       "name":"collect_logs",
       "arguments":{
-        "project_name":"landingpage",
+        "project_names":["landingpage"],
         "source_keys":["backend"],
         "workspace":"workflow",
-        "tail_lines":200,
-        "timestamps":true,
         "since":"30m"
       }
     }
@@ -637,11 +606,35 @@ curl -sS \
     "params":{
       "name":"collect_logs",
       "arguments":{
-        "project_name":"landingpage",
+        "project_names":["landingpage"],
         "source_keys":["backend"],
         "workspace":"session",
-        "session_id":"redis-timeout-debug-2026-04-27",
-        "tail_lines":200
+        "session_id":"redis-timeout-debug-2026-04-27"
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Example session collection call that adds another project into the same
+investigation session:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-session-batch",
+    "method":"tools/call",
+    "params":{
+      "name":"collect_logs",
+      "arguments":{
+        "project_names":["landingpage","traefik"],
+        "source_keys":["backend"],
+        "workspace":"session",
+        "session_id":"redis-timeout-debug-2026-04-27"
       }
     }
   }' \
@@ -653,19 +646,32 @@ Snapshot follow-up tools:
 - `list_log_snapshot_files`
 - `read_log_snapshot_file`
 - `grep_log_snapshot`
+- `create_filtered_view`
 - `group_errors`
 - `build_incident_bundle`
 - `suggest_followup_window`
 
-Snapshot id guidance:
+Cleaned-view guidance:
 
-- use `snapshot_id="latest"` when you want the newest workflow snapshot
-- use the explicit `snapshot_id` returned by `collect_logs` when you want to keep
-  reading or grepping the same archived workflow snapshot later
-- use the caller-owned `session_id` value as the explicit `snapshot_id` for
-  session workspaces
+- `collect_logs` always preserves the raw snapshot as the source of truth
+- `create_filtered_view` builds a smaller deterministic cleaned view from that
+  raw snapshot
+- filtering works best when sources emit consistent structured logs
+- the actual filtering route comes from manifest metadata:
+  - `parser_type`
+  - `normalization_profile`
+  - `default_noise_profile`
+- the manifest chooses which built-in noise profile should apply per source,
+  and the filtering service applies those rules deterministically
 
-List files from the latest workflow snapshot:
+Artifact lookup guidance:
+
+- use `project_name` alone when you want the newest workflow artifact
+- use `archive_name` plus `project_name` when you want to keep reading or
+  grepping the same archived workflow artifact later
+- use `session_id` plus `project_name` for session workspaces
+
+List files from the latest workflow artifact:
 
 ```bash
 curl -sS \
@@ -679,8 +685,7 @@ curl -sS \
     "params":{
       "name":"list_log_snapshot_files",
       "arguments":{
-        "project_name":"landingpage",
-        "snapshot_id":"latest"
+        "project_name":"landingpage"
       }
     }
   }' \
@@ -702,7 +707,6 @@ curl -sS \
       "name":"read_log_snapshot_file",
       "arguments":{
         "project_name":"landingpage",
-        "snapshot_id":"latest",
         "source_key":"backend",
         "max_bytes":4000
       }
@@ -726,9 +730,32 @@ curl -sS \
       "name":"grep_log_snapshot",
       "arguments":{
         "project_name":"landingpage",
-        "snapshot_id":"latest",
         "grep":"/health",
         "source_keys":["backend"]
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Create one deterministic cleaned view from a saved raw artifact:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"2b-create-filtered-view",
+    "method":"tools/call",
+    "params":{
+      "name":"create_filtered_view",
+      "arguments":{
+        "project_name":"landingpage",
+        "source_keys":["backend"],
+        "max_lines":100,
+        "excluded_sample_limit":10
       }
     }
   }' \
@@ -750,7 +777,6 @@ curl -sS \
       "name":"group_errors",
       "arguments":{
         "project_name":"landingpage",
-        "snapshot_id":"latest",
         "source_keys":["backend"],
         "max_groups":20
       }
@@ -774,7 +800,6 @@ curl -sS \
       "name":"build_incident_bundle",
       "arguments":{
         "project_name":"landingpage",
-        "snapshot_id":"latest",
         "source_keys":["backend"],
         "max_groups":20
       }
@@ -899,10 +924,11 @@ The manifest path whitelist still applies. For example:
 Current write layout:
 
 - `DOCKER_LOGS_DIR` is the logs root
-- each project writes under:
-  - `<DOCKER_LOGS_DIR>/<project_key>/workflow/latest/`
-  - `<DOCKER_LOGS_DIR>/<project_key>/workflow/archive/<snapshot_id>/`
-  - `<DOCKER_LOGS_DIR>/<project_key>/sessions/<snapshot_id>/`
+- workflow collections write under:
+  - `<DOCKER_LOGS_DIR>/workflow/<project_key>/latest/`
+  - `<DOCKER_LOGS_DIR>/workflow/<project_key>/archive/<archive_name>/`
+- session collections write under:
+  - `<DOCKER_LOGS_DIR>/sessions/<session_id>/<project_key>/`
 
 ### 3. List Concrete Resources
 

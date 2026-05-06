@@ -13,7 +13,11 @@ PROJECT_ACCESS_RETRY_TIPS = [
 
 
 class ProjectAuthorizationError(BaseModel):
-    """Normalized project-authorization failure for tool-facing callers."""
+    """Normalized project-authorization failure for tool-facing callers.
+
+    Tools and decorators use this instead of exceptions for expected auth
+    denials, so they can return one consistent MCP error shape.
+    """
 
     message: str
     error_code: str
@@ -22,7 +26,7 @@ class ProjectAuthorizationError(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class ProjectAccessScope:
-    """Resolved project-access scope from one JWT."""
+    """Resolved project-access claims from one authenticated JWT."""
 
     all_projects: bool
     allowed_projects: set[str]
@@ -118,7 +122,7 @@ class ProjectAuthorizationService:
         project_access_scope: ProjectAccessScope,
         project_name: str,
     ) -> bool:
-        """Return whether one resolved project-access scope includes a project."""
+        """Return whether a resolved JWT project scope includes one project."""
 
         return project_access_scope.all_projects or (
             project_name in project_access_scope.allowed_projects
@@ -216,6 +220,10 @@ class ProjectAuthorizationService:
           - if the JWT has explicit `allowed_projects`, return all of them
           - if the JWT has `projects_access="all"`, return all available
             manifest-backed project names
+
+        The returned list is normalized, deduplicated, and safe for the caller
+        to loop over. The service does not load manifests itself; callers pass
+        `available_project_names` from `ProjectManifestService`.
         """
         # 1) Check token project access
         project_access_scope: ProjectAccessScope | ProjectAuthorizationError = (

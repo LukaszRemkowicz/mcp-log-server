@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from time import perf_counter
-from typing import Any, cast
+from typing import Any
 
 import mcp.types as mt
 from fastmcp.resources.base import ResourceResult
@@ -30,16 +30,9 @@ from fastmcp.server.dependencies import get_access_token
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import Tool, ToolResult
 
-from conf import settings
 from logging_config import get_logger
-from services.project_authorization import ProjectAuthorizationError, ProjectAuthorizationService
-from services.project_manifest import ProjectManifestService
-from tools.errors import build_collect_logs_error_result
-from tools.models import SnapshotWorkspace
 
 logger: logging.Logger = get_logger("middleware.audit")
-project_authorization_service = ProjectAuthorizationService()
-project_manifest_service = ProjectManifestService()
 
 
 def _build_auth_fields(token: AccessToken | None) -> dict[str, Any]:
@@ -140,53 +133,6 @@ class AccessAuditMiddleware(Middleware):
         token = get_access_token()
         started_at = perf_counter()
         tool_name = context.message.name
-        tool_arguments = context.message.arguments or {}
-
-        if tool_name == "collect_logs" and token is not None:
-            requested_project_names = tool_arguments.get("project_names")
-            available_project_names = [
-                project_summary.project_name
-                for project_summary in project_manifest_service.all().root
-            ]
-            authorized_project_names = project_authorization_service.authorize_caller_for_projects(
-                token,
-                requested_project_names=(
-                    requested_project_names if isinstance(requested_project_names, list) else None
-                ),
-                available_project_names=available_project_names,
-            )
-            if isinstance(authorized_project_names, ProjectAuthorizationError):
-                message = authorized_project_names.message
-                logger.info(
-                    "mcp tool authorization rejected",
-                    extra={
-                        "event": "mcp_call_tool_authorization_error",
-                        "tool_name": tool_name,
-                        "duration_ms": round((perf_counter() - started_at) * 1000, 3),
-                        **_build_auth_fields(token),
-                    },
-                )
-                return build_collect_logs_error_result(
-                    message,
-                    settings=settings,
-                    access_token=token,
-                    project_names=(
-                        requested_project_names
-                        if isinstance(requested_project_names, list)
-                        else None
-                    ),
-                    workspace=cast(
-                        SnapshotWorkspace,
-                        tool_arguments.get("workspace") or "workflow",
-                    ),
-                    session_id=tool_arguments.get("session_id"),
-                )
-
-            updated_arguments = dict(tool_arguments)
-            updated_arguments["project_names"] = authorized_project_names
-            context = context.copy(
-                message=context.message.model_copy(update={"arguments": updated_arguments})
-            )
 
         try:
             result = await call_next(context)

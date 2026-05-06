@@ -39,8 +39,17 @@ class CollectLogsErrorRule:
 
 
 COLLECT_LOGS_ERROR_RULES: tuple[CollectLogsErrorRule, ...] = (
-    CollectLogsErrorRule("project_key claim", "missing_project_key_claim"),
+    CollectLogsErrorRule("allowed_projects", "missing_project_access_claim"),
+    CollectLogsErrorRule("projects_access='all'", "missing_project_access_claim"),
+    CollectLogsErrorRule(
+        "project_names must not contain empty values",
+        "invalid_project_names",
+    ),
     CollectLogsErrorRule("authorized by the access token", "project_access_mismatch"),
+    CollectLogsErrorRule(
+        "not allowed by the authenticated access token",
+        "project_access_mismatch",
+    ),
     CollectLogsErrorRule("No manifest file was found", "unknown_project"),
     CollectLogsErrorRule("loaded manifest project_key", "manifest_project_mismatch"),
     CollectLogsErrorRule("Invalid docker time filter", "invalid_docker_time_filter"),
@@ -64,15 +73,20 @@ def classify_collect_logs_error(message: str) -> str:
 def build_collect_logs_error_retry_tips(error_code: str) -> list[str]:
     """Return caller guidance for one normalized collect_logs error code."""
 
-    if error_code == "missing_project_key_claim":
+    if error_code == "missing_project_access_claim":
         return [
-            "Retry with a JWT that includes the project_key claim for the monitored project.",
+            ("Retry with a JWT that includes allowed_projects, or projects_access='all'."),
             "Use get_mcp_service_status to inspect the current caller context if needed.",
         ]
     if error_code == "project_access_mismatch":
         return [
-            "Retry with project_name equal to the project_key authorized by the current JWT.",
-            "Use get_mcp_service_status to confirm the current project_key before retrying.",
+            "Retry with project_names allowed by the current JWT project access rules.",
+            "Use get_mcp_service_status to confirm the current project access before retrying.",
+        ]
+    if error_code == "invalid_project_names":
+        return [
+            "Retry with project_names containing at least one non-empty project name.",
+            "Use list_projects to discover valid project names before retrying.",
         ]
     if error_code == "unknown_project":
         return [
@@ -103,7 +117,7 @@ def build_collect_logs_error_retry_tips(error_code: str) -> list[str]:
             ),
         ]
     return [
-        "Review the collect_logs arguments and retry with a valid project_name and source_keys.",
+        "Review the collect_logs arguments and retry with valid project_names and source_keys.",
     ]
 
 
@@ -112,7 +126,7 @@ def build_collect_logs_error_details(
     *,
     settings: Settings,
     access_token: AccessToken,
-    project_name: str | None,
+    project_names: list[str] | None,
     workspace: SnapshotWorkspace,
     session_id: str | None,
 ) -> JSONObject | None:
@@ -120,13 +134,13 @@ def build_collect_logs_error_details(
 
     if error_code == "project_access_mismatch":
         return {
-            "requested_project_name": project_name,
-            "authorized_project_name": str(access_token.claims.get("project_key") or ""),
+            "requested_project_names": list(project_names) if project_names is not None else None,
+            "allowed_projects": access_token.claims.get("allowed_projects"),
         }
     if error_code in {"unknown_project", "manifest_project_mismatch"}:
         return {
-            "requested_project_name": project_name,
-            "manifests_dir": str(settings.MANIFEST_PATH.parent),
+            "requested_project_names": list(project_names) if project_names is not None else None,
+            "manifests_dir": str(settings.manifests_dir),
         }
     if error_code == "missing_session_id":
         return {
@@ -136,7 +150,7 @@ def build_collect_logs_error_details(
     if error_code == "invalid_snapshot_metadata":
         return {
             "workspace": workspace,
-            "project_name": project_name,
+            "project_names": list(project_names) if project_names is not None else None,
             "logs_dir": str(settings.LOGS_DIR),
         }
     return None
@@ -164,7 +178,7 @@ def build_collect_logs_error_result(
     *,
     settings: Settings,
     access_token: AccessToken,
-    project_name: str | None,
+    project_names: list[str] | None,
     workspace: SnapshotWorkspace,
     session_id: str | None,
 ) -> ToolResult:
@@ -179,7 +193,7 @@ def build_collect_logs_error_result(
             error_code,
             settings=settings,
             access_token=access_token,
-            project_name=project_name,
+            project_names=project_names,
             workspace=workspace,
             session_id=session_id,
         ),
@@ -197,17 +211,31 @@ class ContainerInspectionErrorRule:
 
 CONTAINER_INSPECTION_ERROR_RULES: tuple[ContainerInspectionErrorRule, ...] = (
     ContainerInspectionErrorRule(
-        message_fragment="project_key claim",
-        error_code="missing_project_key_claim",
+        message_fragment="allowed_projects",
+        error_code="missing_project_access_claim",
         retry_tips=[
-            "Retry with a JWT that includes the project_key claim for the monitored project.",
+            ("Retry with a JWT that includes allowed_projects, or projects_access='all'."),
+        ],
+    ),
+    ContainerInspectionErrorRule(
+        message_fragment="projects_access='all'",
+        error_code="missing_project_access_claim",
+        retry_tips=[
+            ("Retry with a JWT that includes allowed_projects, or projects_access='all'."),
         ],
     ),
     ContainerInspectionErrorRule(
         message_fragment="authorized by the access token",
         error_code="project_access_mismatch",
         retry_tips=[
-            "Retry with project_name equal to the project_key authorized by the current JWT.",
+            "Retry with project_name allowed by the current JWT project access rules.",
+        ],
+    ),
+    ContainerInspectionErrorRule(
+        message_fragment="not allowed by the authenticated access token",
+        error_code="project_access_mismatch",
+        retry_tips=[
+            "Retry with project_name allowed by the current JWT project access rules.",
         ],
     ),
     ContainerInspectionErrorRule(
@@ -288,14 +316,17 @@ def build_container_file_error_details(
     if error_code == "project_access_mismatch":
         return {
             "requested_project_name": requested_project_name,
-            "authorized_project_name": str(
-                access_token.claims.get("project_key") if access_token is not None else ""
+            "allowed_projects": (
+                access_token.claims.get("allowed_projects") if access_token is not None else None
+            ),
+            "projects_access": (
+                access_token.claims.get("projects_access") if access_token is not None else None
             ),
         }
     if error_code == "unknown_project":
         return {"requested_project_name": requested_project_name}
     if error_code == "manifest_project_mismatch":
-        return {"manifests_dir": str(settings.MANIFEST_PATH.parent)}
+        return {"manifests_dir": str(settings.manifests_dir)}
     if error_code in {
         "unknown_container_source_key",
         "container_source_type_mismatch",

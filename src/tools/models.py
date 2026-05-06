@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, RootModel
 
 SnapshotWorkspace = Literal["workflow", "session"]
 
@@ -33,8 +33,6 @@ class CollectedSourcePayload(BaseModel):
     Important fields:
 
     - `status`: whether the source was actually collected
-    - `content`: inline preview content returned to the agent
-    - `content_truncated`: whether the inline preview was shortened
     - `output_file`: persisted file path when a snapshot was written
     - `retry_tips`: deterministic next-step guidance for the caller
     """
@@ -49,8 +47,6 @@ class CollectedSourcePayload(BaseModel):
     status: Literal["collected", "unavailable"]
     line_count: int
     byte_count: int
-    content_truncated: bool
-    content: str
     output_file: str | None
     error: str | None
     retry_tips: list[str]
@@ -67,7 +63,7 @@ class LogSnapshotFilePayload(BaseModel):
     Snapshot follow-up tools reuse this shape so agents can understand:
 
     - which source produced the file
-    - where the persisted file lives on disk
+    - where the persisted file lives under the configured logs root
     - how large it is
     - whether it came from a docker or file-backed source
     """
@@ -79,6 +75,9 @@ class LogSnapshotFilePayload(BaseModel):
     description: str
     target: str
     stream: Literal["stdout", "stderr"] | None
+    parser_type: str | None = None
+    normalization_profile: str | None = None
+    default_noise_profile: str | None = None
     file_name: str
     output_file: str
     line_count: int
@@ -104,53 +103,61 @@ class LogSnapshotMetadata(BaseModel):
 
     project_name: str
     workspace: SnapshotWorkspace
-    snapshot_id: str
+    session_id: str | None = None
     collected_at: str
     files: list[LogSnapshotFilePayload]
 
 
-class CollectLogsPayload(BaseModel):
-    """Structured response returned by `collect_logs`.
+class WorkflowArtifactMetadata(BaseModel):
+    """Describe one workflow artifact tracked in the per-project inventory.
 
-    This is the main agent-facing payload for log collection. It combines:
-
-    - request echo fields, so the caller can confirm what was asked for
-    - authorization/effective project fields, so project scoping is explicit
-    - snapshot metadata, so later tools know what to read or search
-    - inline preview content, so agents can react immediately without opening
-      files for every small collection
+    `snapshot_dir` and file `output_file` values are relative to the configured
+    logs root. Runtime code resolves them through `settings.LOGS_DIR`.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    action: Literal["collect_logs"]
-    requested_project_name: str | None
-    authorized_project_name: str
-    effective_project_name: str
+    archive_name: str | None
+    snapshot_dir: str
+    collected_at: str
+    files: list[LogSnapshotFilePayload]
+
+
+class WorkflowProjectInventory(BaseModel):
+    """Describe the per-project workflow inventory stored on disk."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_name: str
+    latest: WorkflowArtifactMetadata | None = None
+    archives: list[WorkflowArtifactMetadata] = []
+
+
+class ProjectCollectLogsPayload(BaseModel):
+    """Describe one per-project collection result inside `collect_logs`.
+
+    `collect_logs` now supports multi-project collection, so each project gets
+    its own persisted artifact summary inside the top-level response.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    requested_project_name: str
+    project_name: str
     workspace: SnapshotWorkspace
     session_id: str | None
-    snapshot_id: str
     snapshot_dir: str
     metadata_file: str
     persisted: bool
     requested_source_keys: list[str]
-    requested_tail_lines: int | None
-    effective_tail_lines: int | None
-    requested_timestamps: bool
     requested_since: str | None
     requested_until: str | None
-    tail_lines_limited: bool
     next_step_tips: list[str]
     warnings: list[str]
     retry_tips: list[str]
     unknown_requested_source_keys: list[str]
     resolved_source_keys: list[str]
-    logs_by_source: dict[str, str]
-    project_output_dir: str | None
-    latest_output_dir: str | None
-    archive_dir: str | None
     collected_at: str
-    collected_at_file: str | None
     sources: list[CollectedSourcePayload]
 
     def __getitem__(self, key: str) -> object:
@@ -159,8 +166,34 @@ class CollectLogsPayload(BaseModel):
         return getattr(self, key)
 
 
-class ProjectListEntry(BaseModel):
-    """Describe one project currently available through bundled manifests.
+class CollectLogsPayload(BaseModel):
+    """Structured response returned by `collect_logs`.
+
+    This is the main agent-facing payload for log collection. It combines:
+
+    - request echo fields, so the caller can confirm what was asked for
+    - one workspace/session context for the investigation
+    - one or more per-project persisted collection artifacts
+    - persisted source metadata for follow-up snapshot tools
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["collect_logs"]
+    workspace: SnapshotWorkspace
+    session_id: str | None
+    requested_project_names: list[str]
+    next_step_tips: list[str]
+    projects: list[ProjectCollectLogsPayload]
+
+    def __getitem__(self, key: str) -> object:
+        """Allow concise dict-style assertions while keeping a typed model contract."""
+
+        return getattr(self, key)
+
+
+class ProjectManifestSummary(BaseModel):
+    """Describe one manifest-backed project summary returned by `list_projects`.
 
     This is the lightweight discovery shape returned by `list_projects`. It is
     intentionally summary-oriented rather than a full manifest dump.
@@ -170,16 +203,16 @@ class ProjectListEntry(BaseModel):
 
     project_name: str
     project_summary: str
-    manifest_file: str
     source_keys: list[str]
-    source_types: list[str]
-    file_sources_available: bool
-    docker_sources_available: bool
 
     def __getitem__(self, key: str) -> object:
         """Allow concise dict-style assertions while keeping a typed model contract."""
 
         return getattr(self, key)
+
+
+class ProjectManifestList(RootModel[list[ProjectManifestSummary]]):
+    """Collection wrapper for manifest-backed project summaries."""
 
 
 class ListLogSnapshotFilesPayload(BaseModel):
@@ -194,10 +227,9 @@ class ListLogSnapshotFilesPayload(BaseModel):
 
     action: Literal["list_log_snapshot_files"]
     requested_project_name: str | None
-    authorized_project_name: str
-    effective_project_name: str
+    project_name: str
     workspace: SnapshotWorkspace
-    snapshot_id: str
+    session_id: str | None
     snapshot_dir: str
     metadata_file: str
     collected_at: str
@@ -220,10 +252,9 @@ class ReadLogSnapshotFilePayload(BaseModel):
 
     action: Literal["read_log_snapshot_file"]
     requested_project_name: str | None
-    authorized_project_name: str
-    effective_project_name: str
+    project_name: str
     workspace: SnapshotWorkspace
-    snapshot_id: str
+    session_id: str | None
     snapshot_dir: str
     source_key: str
     start_line: int | None
@@ -270,10 +301,9 @@ class GrepLogSnapshotPayload(BaseModel):
 
     action: Literal["grep_log_snapshot"]
     requested_project_name: str | None
-    authorized_project_name: str
-    effective_project_name: str
+    project_name: str
     workspace: SnapshotWorkspace
-    snapshot_id: str
+    session_id: str | None
     snapshot_dir: str
     grep: str
     searched_source_keys: list[str]
@@ -317,7 +347,7 @@ class GroupedErrorPayload(BaseModel):
     request_paths: list[str]
     status_codes: list[int]
     levels: list[str]
-    sample_message: str
+    message_summary: str
     first_timestamp: str | None
     last_timestamp: str | None
     first_seen: SnapshotLineReferencePayload
@@ -336,10 +366,9 @@ class GroupErrorsPayload(BaseModel):
 
     action: Literal["group_errors"]
     requested_project_name: str | None
-    authorized_project_name: str
-    effective_project_name: str
+    project_name: str
     workspace: SnapshotWorkspace
-    snapshot_id: str
+    session_id: str | None
     snapshot_dir: str
     searched_source_keys: list[str]
     analysis_cautions: list[str]
@@ -348,6 +377,7 @@ class GroupErrorsPayload(BaseModel):
     matching_line_count: int
     max_groups: int
     truncated: bool
+    summary: str
     groups: list[GroupedErrorPayload]
 
 
@@ -375,10 +405,9 @@ class IncidentBundlePayload(BaseModel):
 
     action: Literal["build_incident_bundle"]
     requested_project_name: str | None
-    authorized_project_name: str
-    effective_project_name: str
+    project_name: str
     workspace: SnapshotWorkspace
-    snapshot_id: str
+    session_id: str | None
     snapshot_dir: str
     searched_source_keys: list[str]
     analysis_cautions: list[str]
@@ -414,6 +443,41 @@ class SuggestFollowupWindowPayload(BaseModel):
     next_step_tips: list[str]
     explanation: str
     example_collect_logs_arguments: dict[str, str]
+
+
+class FilteredViewSourceSummaryPayload(BaseModel):
+    """Summarize one source's contribution to a deterministic cleaned view."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_key: str
+    total_line_count: int
+    kept_line_count: int
+    excluded_line_count: int
+    top_exclusion_reasons: list[str]
+
+
+class CreateFilteredViewPayload(BaseModel):
+    """Structured response returned by `create_filtered_view`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["create_filtered_view"]
+    requested_project_name: str | None
+    project_name: str
+    workspace: SnapshotWorkspace
+    session_id: str | None
+    snapshot_dir: str
+    searched_source_keys: list[str]
+    max_lines: int
+    total_line_count: int
+    kept_line_count: int
+    excluded_line_count: int
+    returned_line_count: int
+    next_step_tips: list[str]
+    truncated: bool
+    cleaned_lines: list[SnapshotLineReferencePayload]
+    source_summaries: list[FilteredViewSourceSummaryPayload]
 
 
 class ContainerPathMetadataPayload(BaseModel):
@@ -455,8 +519,7 @@ class ReadContainerFilePayload(BaseModel):
 
     action: Literal["read_container_file"]
     requested_project_name: str | None
-    authorized_project_name: str
-    effective_project_name: str
+    project_name: str
     source_key: str
     container_name: str
     path: str
@@ -482,8 +545,7 @@ class StatContainerPathPayload(BaseModel):
 
     action: Literal["stat_container_path"]
     requested_project_name: str | None
-    authorized_project_name: str
-    effective_project_name: str
+    project_name: str
     source_key: str
     container_name: str
     path: str
@@ -502,8 +564,7 @@ class ListContainerDirectoryPayload(BaseModel):
 
     action: Literal["list_container_directory"]
     requested_project_name: str | None
-    authorized_project_name: str
-    effective_project_name: str
+    project_name: str
     source_key: str
     container_name: str
     path: str
