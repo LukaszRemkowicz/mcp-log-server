@@ -200,6 +200,29 @@ def build_collect_logs_error_result(
     )
 
 
+def build_snapshot_tool_error_result(
+    *,
+    error_code: str,
+    message: str,
+    retry_tips: list[str],
+    details: JSONObject | None = None,
+) -> ToolResult:
+    """Build the shared structured error response for snapshot tools.
+
+    Snapshot read/search/analysis tools return the same error envelope: status,
+    error code, message, retry tips, and optional request details. Keeping this
+    builder in the tool error module makes the MCP response contract explicit
+    without pushing response formatting into `LogSnapshotService`.
+    """
+
+    return build_agent_tool_error_result(
+        error_code=error_code,
+        message=message,
+        retry_tips=retry_tips,
+        details=details,
+    )
+
+
 @dataclass(frozen=True)
 class ContainerInspectionErrorRule:
     """Describe one ordered message-to-error mapping for inspection failures."""

@@ -29,12 +29,9 @@ from tools.agent_hints import (
     LOG_ANALYSIS_CAUTIONS,
     SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION,
 )
+from tools.errors import build_snapshot_tool_error_result
 from tools.models import GroupedErrorPayload, GroupErrorsPayload, SuggestFollowupWindowPayload
-from utils.log_snapshots import (
-    build_snapshot_tool_error_result,
-    format_followup_timestamp,
-    parse_followup_timestamp,
-)
+from utils.log_snapshots import format_followup_timestamp, parse_followup_timestamp
 from utils.types import JSONValue
 
 logger: logging.Logger = get_logger("tools.analysis")

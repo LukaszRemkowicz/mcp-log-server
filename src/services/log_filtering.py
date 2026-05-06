@@ -11,13 +11,13 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from services.log_snapshots import LogSnapshotService, SnapshotReadError
 from tools.models import (
     CreateFilteredViewPayload,
     FilteredViewSourceSummaryPayload,
     LogSnapshotMetadata,
     SnapshotLineReferencePayload,
 )
-from utils.log_snapshots import resolve_snapshot_file_path
 
 MAX_FILTERED_LINE_BYTES = 2000
 HTTP_NOT_MODIFIED_STATUS = 304
@@ -129,6 +129,9 @@ class LogFilteringService:
     returned payload is only a derived analysis view.
     """
 
+    def __init__(self, snapshot_service: LogSnapshotService | None = None) -> None:
+        self.snapshot_service = snapshot_service or LogSnapshotService()
+
     def create_filtered_view(
         self,
         metadata: LogSnapshotMetadata,
@@ -189,7 +192,13 @@ class LogFilteringService:
                 ),
             )
             summary = source_summaries.setdefault(item.source_key, SourceFilteredSummary(context))
-            output_path = resolve_snapshot_file_path(item)
+            output_path = self.snapshot_service.resolve_snapshot_file_path(item)
+            if isinstance(output_path, SnapshotReadError):
+                return CreateFilteredViewError(
+                    message=output_path.message,
+                    error_code=output_path.error_code,
+                    retry_tips=output_path.retry_tips,
+                )
             with output_path.open("r", encoding="utf-8", errors="replace") as handle:
                 for line_number, raw_line in enumerate(handle, start=1):
                     line = raw_line.rstrip("\n")

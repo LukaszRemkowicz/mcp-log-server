@@ -22,6 +22,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
+from services.log_snapshots import LogSnapshotService, SnapshotReadError
 from tools.models import (
     GroupedErrorPayload,
     IncidentBundlePayload,
@@ -30,7 +31,6 @@ from tools.models import (
     LogSnapshotMetadata,
     SnapshotLineReferencePayload,
 )
-from utils.log_snapshots import resolve_snapshot_file_path
 
 MAX_ANALYSIS_LINE_BYTES = 2000
 
@@ -255,6 +255,9 @@ class LogAnalysisService:
     snapshot through `LogSnapshotService`.
     """
 
+    def __init__(self, snapshot_service: LogSnapshotService | None = None) -> None:
+        self.snapshot_service = snapshot_service or LogSnapshotService()
+
     def group_snapshot_errors(
         self,
         metadata: LogSnapshotMetadata,
@@ -280,7 +283,9 @@ class LogAnalysisService:
         matching_line_count = 0
 
         for item in selected_files:
-            output_path = resolve_snapshot_file_path(item)
+            output_path = self.snapshot_service.resolve_snapshot_file_path(item)
+            if isinstance(output_path, SnapshotReadError):
+                raise ValueError(output_path.message)
             with output_path.open("r", encoding="utf-8", errors="replace") as handle:
                 for line_number, raw_line in enumerate(handle, start=1):
                     event = self._classify_line(
