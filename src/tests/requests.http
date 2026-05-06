@@ -328,10 +328,10 @@ Authorization: {{codexAuth}}
 
 {
   "jsonrpc": "2.0",
-  "id": "stat-nginx-config",
+  "id": "list-nginx-config",
   "method": "tools/call",
   "params": {
-    "name": "stat_container_path",
+    "name": "list_container_directory",
     "arguments": {
       "project_name": "landingpage",
       "source_key": "nginx",

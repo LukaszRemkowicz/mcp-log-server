@@ -529,35 +529,12 @@ class ReadContainerFilePayload(BaseModel):
     file: ContainerPathMetadataPayload
 
 
-class StatContainerPathPayload(BaseModel):
-    """Structured success payload returned by `stat_container_path`.
-
-    This is the lightest inspection response. It answers:
-
-    - does the path exist?
-    - is it a file or directory?
-    - what are its basic metadata fields?
-
-    without reading file contents or listing directory children.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    action: Literal["stat_container_path"]
-    requested_project_name: str | None
-    project_name: str
-    source_key: str
-    container_name: str
-    path: str
-    stat: ContainerPathMetadataPayload
-
-
 class ListContainerDirectoryPayload(BaseModel):
     """Structured success payload returned by `list_container_directory`.
 
-    This is the bounded directory-browsing response for specialist agents. It
-    only returns immediate children for one approved directory and does not act
-    as a recursive filesystem browser.
+    This is the bounded path-browsing response for specialist agents. Directory
+    paths return immediate children, file paths return one metadata entry, and
+    neither mode acts as a recursive filesystem browser.
     """
 
     model_config = ConfigDict(extra="forbid")

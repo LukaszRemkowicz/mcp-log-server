@@ -214,14 +214,14 @@ CONTAINER_INSPECTION_ERROR_RULES: tuple[ContainerInspectionErrorRule, ...] = (
         message_fragment="allowed_projects",
         error_code="missing_project_access_claim",
         retry_tips=[
-            ("Retry with a JWT that includes allowed_projects, or projects_access='all'."),
+            "Retry with a JWT that includes allowed_projects, or projects_access='all'.",
         ],
     ),
     ContainerInspectionErrorRule(
         message_fragment="projects_access='all'",
         error_code="missing_project_access_claim",
         retry_tips=[
-            ("Retry with a JWT that includes allowed_projects, or projects_access='all'."),
+            "Retry with a JWT that includes allowed_projects, or projects_access='all'.",
         ],
     ),
     ContainerInspectionErrorRule(
@@ -302,27 +302,18 @@ CONTAINER_INSPECTION_ERROR_RULES: tuple[ContainerInspectionErrorRule, ...] = (
 )
 
 
-def build_container_file_error_details(
+def build_container_inspection_error_details(
     *,
     error_code: str,
     requested_project_name: str | None,
     source_key: str | None,
     path: str | None,
-    access_token: AccessToken | None,
     settings: Settings,
 ) -> dict[str, Any] | None:
     """Build structured details for one normalized inspection error code."""
 
     if error_code == "project_access_mismatch":
-        return {
-            "requested_project_name": requested_project_name,
-            "allowed_projects": (
-                access_token.claims.get("allowed_projects") if access_token is not None else None
-            ),
-            "projects_access": (
-                access_token.claims.get("projects_access") if access_token is not None else None
-            ),
-        }
+        return {"requested_project_name": requested_project_name}
     if error_code == "unknown_project":
         return {"requested_project_name": requested_project_name}
     if error_code == "manifest_project_mismatch":
@@ -340,7 +331,7 @@ def build_container_file_error_details(
     return None
 
 
-def classify_container_file_error(message: str) -> tuple[str, list[str]]:
+def classify_container_inspection_error(message: str) -> tuple[str, list[str]]:
     """Classify one inspection error message into a stable code and retry tips."""
 
     for rule in CONTAINER_INSPECTION_ERROR_RULES:
@@ -352,26 +343,24 @@ def classify_container_file_error(message: str) -> tuple[str, list[str]]:
     )
 
 
-def build_container_file_error_result(
+def build_container_inspection_error_result(
     *,
     action: str,
     message: str,
     requested_project_name: str | None,
     source_key: str | None,
     path: str | None,
-    access_token: AccessToken | None,
     settings: Settings,
     shape_defaults: dict[str, Any] | None = None,
 ) -> ToolResult:
     """Map one inspection failure into a stable, agent-facing MCP error result."""
 
-    error_code, retry_tips = classify_container_file_error(message)
-    details = build_container_file_error_details(
+    error_code, retry_tips = classify_container_inspection_error(message)
+    details = build_container_inspection_error_details(
         error_code=error_code,
         requested_project_name=requested_project_name,
         source_key=source_key,
         path=path,
-        access_token=access_token,
         settings=settings,
     )
 

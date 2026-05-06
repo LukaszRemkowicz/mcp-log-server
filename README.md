@@ -30,7 +30,7 @@ under `src/agent_assets/`.
 
 Current MCP workflow surface includes:
 
-- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`, `create_filtered_view`, `group_errors`, `build_incident_bundle`, `suggest_followup_window`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `stat_container_path`, `list_container_directory`
+- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`, `create_filtered_view`, `group_errors`, `build_incident_bundle`, `suggest_followup_window`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `list_container_directory`
 - resources: concrete workflow skill resources such as
   `skill://workflow/project_context`, `skill://workflow/severity_guide`,
   `skill://workflow/bot_detection`
@@ -186,7 +186,6 @@ Current example JWT capabilities:
   - `get_mcp_service_status`
   - `get_mcp_health_check`
   - `read_container_file`
-  - `stat_container_path`
   - `list_container_directory`
 
 Important:
@@ -426,7 +425,6 @@ What it returns right now for the codex token:
 - `get_mcp_service_status`
 - `get_mcp_health_check`
 - `read_container_file`
-- `stat_container_path`
 - `list_container_directory`
 
 ### 2. Get Workflow Bootstrap
@@ -892,7 +890,7 @@ curl -k -sS \
   http://127.0.0.1:8001/mcp | jq -r '.result.structuredContent.content'
 ```
 
-Stat one allowed path:
+List one allowed file path:
 
 ```bash
 curl -k -sS \
@@ -901,10 +899,10 @@ curl -k -sS \
   -H 'Accept: application/json' \
   -d '{
     "jsonrpc":"2.0",
-    "id":"2c-stat",
+    "id":"2c-list-file",
     "method":"tools/call",
     "params":{
-      "name":"stat_container_path",
+      "name":"list_container_directory",
       "arguments":{
         "project_name":"landingpage",
         "source_key":"nginx",

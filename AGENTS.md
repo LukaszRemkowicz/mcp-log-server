@@ -134,7 +134,6 @@ Currently implemented:
 - `suggest_followup_window`
 - `list_projects`
 - `read_container_file`
-- `stat_container_path`
 - `list_container_directory`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
@@ -165,7 +164,7 @@ Purpose:
 - `list_projects`
   returns the currently available manifest-backed projects with short project
   summaries and source inventory metadata
-- `read_container_file`, `stat_container_path`, `list_container_directory`
+- `read_container_file`, `list_container_directory`
   expose approved read-only inspection inside manifest-bounded container paths
 - `get_mcp_service_status`, `get_mcp_health_check`
   bootstrap/development diagnostics

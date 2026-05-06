@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import BaseModel
+
 from conf import settings
 from manifests.loader import load_project_manifest
 from manifests.models import SourceDefinition, SourceManifest
@@ -31,6 +33,12 @@ class ManifestSources:
     sources: list[SourceDefinition]
     missing_source_keys: list[str]
     source_keys: list[str]
+
+
+class ProjectManifestError(BaseModel):
+    """Expected manifest lookup failure returned to deterministic tool layers."""
+
+    message: str
 
 
 class ProjectManifestService:
@@ -67,6 +75,21 @@ class ProjectManifestService:
         return ProjectManifestContext(
             manifest=manifest,
             project_name=project_name,
+        )
+
+    def get_or_error(
+        self,
+        project_name: str,
+    ) -> ProjectManifestContext | ProjectManifestError:
+        """Load one manifest or return a structured missing-project error."""
+
+        manifest_context = self.get(project_name)
+        if manifest_context is not None:
+            return manifest_context
+        return ProjectManifestError(
+            message=(
+                f"Unknown project {project_name!r}. No manifest file was found for that project."
+            )
         )
 
     def _all_contexts(
@@ -161,3 +184,15 @@ class ProjectManifestService:
         if not definition.inspect_path_prefixes:
             raise ValueError("Container file inspection is not enabled for the requested source.")
         return definition
+
+    def get_container_source_or_error(
+        self,
+        manifest: SourceManifest,
+        source_key: str,
+    ) -> SourceDefinition | ProjectManifestError:
+        """Return one container-inspection source or a structured lookup error."""
+
+        try:
+            return self.get_container_source(manifest, source_key)
+        except ValueError as error:
+            return ProjectManifestError(message=str(error))

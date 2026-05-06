@@ -14,7 +14,6 @@ Important boundary:
 So this module is intentionally narrower than "run a command in a container".
 It exposes only deterministic, read-only file inspection primitives:
 
-- `stat_container_path`
 - `read_container_file`
 - `list_container_directory`
 """
@@ -22,6 +21,7 @@ It exposes only deterministic, read-only file inspection primitives:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from fastmcp.dependencies import CurrentAccessToken
@@ -31,229 +31,148 @@ from fastmcp.tools.base import ToolResult
 from app import mcp
 from auth.scopes import CONTAINER_FILES_READ_SCOPE
 from conf import settings
+from decorators import project_authorized_tool
 from logging_config import get_logger
 from manifests.models import SourceDefinition
-from tools.errors import build_container_file_error_result
+from services.docker_service import (
+    MAX_CONTAINER_FILE_BYTES,
+    ContainerPathStat,
+    DockerService,
+    DockerServiceError,
+)
+from services.project_manifest import ProjectManifestError, ProjectManifestService
+from tools.agent_hints import (
+    LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
+    READ_CONTAINER_FILE_TOOL_DESCRIPTION,
+)
+from tools.errors import build_container_inspection_error_result
 from tools.models import (
     ContainerPathMetadataPayload,
     ListContainerDirectoryPayload,
     ReadContainerFilePayload,
-    StatContainerPathPayload,
 )
-from tools.utils import load_authorized_project_manifest, resolve_container_source_definition
-from utils.container_inspection_commands import MAX_CONTAINER_FILE_BYTES, ContainerPathStat
-from utils.container_inspection_commands import (
-    list_container_directory as run_list_container_directory,
-)
-from utils.container_inspection_commands import read_container_file as run_read_container_file
-from utils.container_inspection_commands import stat_container_path as run_stat_container_path
 
 logger: logging.Logger = get_logger("tools.container_inspection")
+manifest_service = ProjectManifestService()
+docker_service = DockerService()
 
 
-def _normalize_container_path(path: str) -> str:
-    """Normalize one requested container path into a safe absolute POSIX path.
+@dataclass(frozen=True, slots=True)
+class ContainerInspectionContext:
+    """Resolved project/source/path context shared by container inspection tools."""
 
-    Container inspection requests should operate on one explicit path, not an
-    ambiguous or shell-like string. This helper enforces the minimum path
-    contract before whitelist checks run:
-
-    - path must be absolute
-    - path may not contain `..`
-    - path is normalized as a POSIX path string
-
-    The parent-traversal rejection matters because an agent may otherwise try
-    to escape an allowed prefix like `/app/` with a path such as
-    `/app/../etc/passwd`.
-    """
-
-    stripped_path = path.strip()
-    if not stripped_path.startswith("/"):
-        raise ValueError("Container inspection path must be an absolute path.")
-
-    raw_path = PurePosixPath(stripped_path)
-    if ".." in raw_path.parts:
-        raise ValueError("Container inspection path may not include parent directory traversal.")
-
-    normalized_path = str(raw_path)
-    if not normalized_path.startswith("/"):
-        normalized_path = f"/{normalized_path}"
-    return normalized_path
+    project_name: str
+    definition: SourceDefinition
+    normalized_path: str
 
 
-def _container_path_is_allowed(definition: SourceDefinition, path: str) -> bool:
-    """Return whether the requested path stays inside the manifest whitelist.
-
-    Each docker-backed source can expose `inspect_path_prefixes` in the
-    manifest. Those prefixes are the real filesystem boundary for specialist
-    inspection tools.
-
-    This helper answers the core policy question for the public tools:
-
-    - is the normalized requested path exactly an allowed prefix?
-    - or is it a child of one allowed prefix?
-
-    Anything outside those approved roots must be rejected before internal
-    container commands are executed.
-    """
-
-    normalized_path = _normalize_container_path(path)
-    for prefix in definition.inspect_path_prefixes:
-        normalized_prefix = _normalize_container_path(prefix)
-        if normalized_path == normalized_prefix:
-            return True
-        if normalized_path.startswith(f"{normalized_prefix.rstrip('/')}/"):
-            return True
-    return False
-
-
-def _build_path_metadata(
+def _prepare_container_inspection_context(
     *,
-    path: str,
-    is_dir: bool,
-    size: int,
-    mode: int,
-    modified_at: str | None,
-) -> ContainerPathMetadataPayload:
-    """Convert one internal stat result into the public MCP metadata model."""
-
-    return ContainerPathMetadataPayload(
-        path=path,
-        name=PurePosixPath(path).name or path,
-        is_dir=is_dir,
-        size=size,
-        mode=mode,
-        modified_at=str(modified_at) if modified_at is not None else None,
-    )
-
-
-def _metadata_from_stat(stat_payload: ContainerPathStat) -> ContainerPathMetadataPayload:
-    """Convert one internal command result into public path metadata.
-
-    The command wrapper layer returns strongly typed stat objects. This helper
-    adapts those internal results into the Pydantic payload model shared by
-    the MCP response surface.
-    """
-
-    return _build_path_metadata(
-        path=stat_payload.path,
-        is_dir=stat_payload.is_dir,
-        size=stat_payload.size,
-        mode=stat_payload.mode,
-        modified_at=stat_payload.modified_at,
-    )
-
-
-@mcp.tool(auth=require_scopes(CONTAINER_FILES_READ_SCOPE))
-def stat_container_path(
+    action: str,
+    project_name: str,
     source_key: str,
     path: str,
-    project_name: str | None = None,
-    access_token: AccessToken | None = CurrentAccessToken(),
-) -> ToolResult:
-    """Return metadata for one approved path inside a docker source container.
+    shape_defaults: dict[str, object],
+    log_extra: dict[str, object],
+) -> ContainerInspectionContext | ToolResult:
+    """Resolve manifest, container source, and allowed path for one inspection tool."""
 
-    Use this when an agent needs to verify that a path exists and inspect its
-    basic metadata without fetching file contents.
-
-    Public arguments:
-
-    - `source_key`: manifest container alias such as `backend` or `nginx`
-    - `path`: absolute filesystem path inside that container
-    - `project_name`: optional explicit project override, still constrained by
-      the JWT `project_key`
-
-    Safety model:
-
-    - JWT must include `container.files.read`
-    - source must be docker-backed
-    - source must expose `inspect_path_prefixes`
-    - path must be absolute and free of parent traversal
-    - path must stay inside a manifest-approved prefix
-    - internal execution uses only the approved inspection command wrapper
-    """
-
-    assert access_token is not None
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "stat_container_path",
-            "source_key": source_key,
-            "path": path,
-            "project_name": project_name,
-        },
-    )
-    try:
-        manifest, authorized_project_name, effective_project_name = (
-            load_authorized_project_manifest(
-                settings,
-                access_token,
-                project_name,
-            )
-        )
-        definition = resolve_container_source_definition(manifest, source_key)
-        normalized_path = _normalize_container_path(path)
-        if not _container_path_is_allowed(definition, normalized_path):
-            raise ValueError(
-                "Requested container path is outside the manifest whitelist "
-                "for the selected source."
-            )
-        stat_payload = run_stat_container_path(definition.target, normalized_path)
-        payload = StatContainerPathPayload(
-            action="stat_container_path",
-            requested_project_name=project_name,
-            authorized_project_name=authorized_project_name,
-            effective_project_name=effective_project_name,
-            source_key=definition.source_key,
-            container_name=definition.target,
-            path=normalized_path,
-            stat=_metadata_from_stat(stat_payload),
-        )
-    except ValueError as error:
+    manifest_result = manifest_service.get_or_error(project_name)
+    if isinstance(manifest_result, ProjectManifestError):
         logger.info(
             "tool error",
             extra={
                 "event": "tool_error",
-                "tool_name": "stat_container_path",
-                "error_message": str(error),
-                "source_key": source_key,
-                "path": path,
-                "project_name": project_name,
+                "tool_name": action,
+                "error_message": manifest_result.message,
+                **log_extra,
             },
         )
-        return build_container_file_error_result(
-            action="stat_container_path",
-            message=str(error),
+        return build_container_inspection_error_result(
+            action=action,
+            message=manifest_result.message,
             requested_project_name=project_name,
             source_key=source_key,
             path=path,
-            access_token=access_token,
             settings=settings,
-            shape_defaults={
-                "requested_project_name": project_name,
-                "source_key": source_key,
-                "path": path,
-                "stat": None,
-            },
+            shape_defaults=shape_defaults,
         )
 
-    logger.info(
-        "tool result",
-        extra={
-            "event": "tool_result",
-            "tool_name": "stat_container_path",
-            "source_key": payload.source_key,
-            "container_name": payload.container_name,
-            "path": payload.path,
-            "is_dir": payload.stat.is_dir,
-            "size": payload.stat.size,
-        },
+    definition = manifest_service.get_container_source_or_error(
+        manifest_result.manifest,
+        source_key,
     )
-    return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
+    if isinstance(definition, ProjectManifestError):
+        return build_container_inspection_error_result(
+            action=action,
+            message=definition.message,
+            requested_project_name=project_name,
+            source_key=source_key,
+            path=path,
+            settings=settings,
+            shape_defaults=shape_defaults,
+        )
+
+    normalized_path = docker_service.normalize_container_path_or_error(path)
+    if isinstance(normalized_path, DockerServiceError):
+        return build_container_inspection_error_result(
+            action=action,
+            message=normalized_path.message,
+            requested_project_name=project_name,
+            source_key=source_key,
+            path=path,
+            settings=settings,
+            shape_defaults=shape_defaults,
+        )
+
+    if not docker_service.container_path_is_allowed(definition, normalized_path):
+        return build_container_inspection_error_result(
+            action=action,
+            message=(
+                "Requested container path is outside the manifest whitelist "
+                "for the selected source."
+            ),
+            requested_project_name=project_name,
+            source_key=source_key,
+            path=path,
+            settings=settings,
+            shape_defaults=shape_defaults,
+        )
+
+    return ContainerInspectionContext(
+        project_name=manifest_result.project_name,
+        definition=definition,
+        normalized_path=normalized_path,
+    )
 
 
-@mcp.tool(auth=require_scopes(CONTAINER_FILES_READ_SCOPE))
+def create_container_payload(
+    stat_payload: ContainerPathStat,
+) -> ContainerPathMetadataPayload:
+    """Convert one Docker path stat result into the MCP path metadata payload.
+
+    `DockerService` returns infrastructure-focused `ContainerPathStat` objects.
+    The MCP tool response uses `ContainerPathMetadataPayload`, so this adapter
+    keeps that model conversion explicit at the tool boundary.
+    """
+
+    return ContainerPathMetadataPayload(
+        path=stat_payload.path,
+        name=PurePosixPath(stat_payload.path).name or stat_payload.path,
+        is_dir=stat_payload.is_dir,
+        size=stat_payload.size,
+        mode=stat_payload.mode,
+        modified_at=(
+            str(stat_payload.modified_at) if stat_payload.modified_at is not None else None
+        ),
+    )
+
+
+@mcp.tool(
+    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
+    description=READ_CONTAINER_FILE_TOOL_DESCRIPTION,
+)
+@project_authorized_tool
 def read_container_file(
     source_key: str,
     path: str,
@@ -278,6 +197,7 @@ def read_container_file(
     """
 
     assert access_token is not None
+    assert project_name is not None
     logger.info(
         "tool call",
         extra={
@@ -289,78 +209,74 @@ def read_container_file(
             "max_bytes": max_bytes,
         },
     )
-    try:
-        manifest, authorized_project_name, effective_project_name = (
-            load_authorized_project_manifest(
-                settings,
-                access_token,
-                project_name,
-            )
-        )
-        definition = resolve_container_source_definition(manifest, source_key)
-        normalized_path = _normalize_container_path(path)
-        if not _container_path_is_allowed(definition, normalized_path):
-            raise ValueError(
-                "Requested container path is outside the manifest whitelist "
-                "for the selected source."
-            )
-        if max_bytes < 1:
-            raise ValueError("max_bytes must be a positive integer.")
-        stat_payload = run_stat_container_path(definition.target, normalized_path)
-        file_metadata = _metadata_from_stat(stat_payload)
-        if file_metadata.is_dir:
-            raise ValueError(
-                "Requested container path is a directory, not a readable regular file."
-            )
-        content, truncated = run_read_container_file(
-            definition.target,
-            normalized_path,
-            max_bytes=max_bytes,
-        )
-        payload = ReadContainerFilePayload(
+    shape_defaults: dict[str, object] = {
+        "requested_project_name": project_name,
+        "source_key": source_key,
+        "path": path,
+        "max_bytes": max_bytes,
+        "truncated": False,
+        "content": "",
+        "file": None,
+    }
+    context = _prepare_container_inspection_context(
+        action="read_container_file",
+        project_name=project_name,
+        source_key=source_key,
+        path=path,
+        shape_defaults=shape_defaults,
+        log_extra={
+            "source_key": source_key,
+            "path": path,
+            "project_name": project_name,
+            "max_bytes": max_bytes,
+        },
+    )
+    if isinstance(context, ToolResult):
+        return context
+
+    stat_payload = docker_service.stat_container_path(
+        context.definition.target,
+        context.normalized_path,
+    )
+    if isinstance(stat_payload, DockerServiceError):
+        return build_container_inspection_error_result(
             action="read_container_file",
-            requested_project_name=project_name,
-            authorized_project_name=authorized_project_name,
-            effective_project_name=effective_project_name,
-            source_key=definition.source_key,
-            container_name=definition.target,
-            path=normalized_path,
-            max_bytes=max_bytes,
-            truncated=truncated,
-            content=content,
-            file=file_metadata,
-        )
-    except ValueError as error:
-        logger.info(
-            "tool error",
-            extra={
-                "event": "tool_error",
-                "tool_name": "read_container_file",
-                "error_message": str(error),
-                "source_key": source_key,
-                "path": path,
-                "project_name": project_name,
-                "max_bytes": max_bytes,
-            },
-        )
-        return build_container_file_error_result(
-            action="read_container_file",
-            message=str(error),
+            message=stat_payload.message,
             requested_project_name=project_name,
             source_key=source_key,
             path=path,
-            access_token=access_token,
             settings=settings,
-            shape_defaults={
-                "requested_project_name": project_name,
-                "source_key": source_key,
-                "path": path,
-                "max_bytes": max_bytes,
-                "truncated": False,
-                "content": "",
-                "file": None,
-            },
+            shape_defaults=shape_defaults,
         )
+
+    read_result = docker_service.read_container_file(
+        context.definition.target,
+        context.normalized_path,
+        max_bytes=max_bytes,
+    )
+    if isinstance(read_result, DockerServiceError):
+        return build_container_inspection_error_result(
+            action="read_container_file",
+            message=read_result.message,
+            requested_project_name=project_name,
+            source_key=source_key,
+            path=path,
+            settings=settings,
+            shape_defaults=shape_defaults,
+        )
+    content, truncated = read_result
+    payload = ReadContainerFilePayload(
+        action="read_container_file",
+        requested_project_name=project_name,
+        project_name=context.project_name,
+        source_key=context.definition.source_key,
+        container_name=context.definition.target,
+        path=context.normalized_path,
+        max_bytes=max_bytes,
+        truncated=truncated,
+        content=content,
+        file=create_container_payload(stat_payload),
+    )
 
     logger.info(
         "tool result",
@@ -377,17 +293,24 @@ def read_container_file(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(auth=require_scopes(CONTAINER_FILES_READ_SCOPE))
+@mcp.tool(
+    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
+    description=LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
+)
+@project_authorized_tool
 def list_container_directory(
     source_key: str,
-    path: str,
+    path: str | None = None,
     project_name: str | None = None,
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
-    """List immediate entries under one approved directory in a docker source.
+    """List files/directories inside an approved container directory.
 
-    Use this when an agent needs to discover which files or subdirectories are
-    available inside an allowed root before requesting a specific file.
+    Use this as the navigation starting point for a source container. If
+    `path` is omitted or blank, the tool lists the source's first
+    manifest-approved inspection prefix, usually the main project folder such
+    as `/app/`, similar to starting with `ls -la` in a terminal. After seeing
+    that structure, pass an explicit child directory path to keep drilling down.
 
     The behavior is intentionally narrow:
 
@@ -398,6 +321,7 @@ def list_container_directory(
     """
 
     assert access_token is not None
+    assert project_name is not None
     logger.info(
         "tool call",
         extra={
@@ -408,69 +332,103 @@ def list_container_directory(
             "project_name": project_name,
         },
     )
-    try:
-        manifest, authorized_project_name, effective_project_name = (
-            load_authorized_project_manifest(
-                settings,
-                access_token,
-                project_name,
-            )
-        )
-        definition = resolve_container_source_definition(manifest, source_key)
-        normalized_path = _normalize_container_path(path)
-        if not _container_path_is_allowed(definition, normalized_path):
-            raise ValueError(
-                "Requested container path is outside the manifest whitelist "
-                "for the selected source."
-            )
-        directory_metadata = _metadata_from_stat(
-            run_stat_container_path(definition.target, normalized_path)
-        )
-        if not directory_metadata.is_dir:
-            raise ValueError("Requested container path is not a directory.")
-        entries, truncated = run_list_container_directory(
-            definition.target,
-            normalized_path,
-        )
-        payload = ListContainerDirectoryPayload(
-            action="list_container_directory",
-            requested_project_name=project_name,
-            authorized_project_name=authorized_project_name,
-            effective_project_name=effective_project_name,
-            source_key=definition.source_key,
-            container_name=definition.target,
-            path=normalized_path,
-            truncated=truncated,
-            entries=[_metadata_from_stat(entry) for entry in entries],
-        )
-    except ValueError as error:
+    shape_defaults: dict[str, object] = {
+        "requested_project_name": project_name,
+        "source_key": source_key,
+        "path": path,
+        "truncated": False,
+        "entries": [],
+    }
+    manifest_result = manifest_service.get_or_error(project_name)
+    if isinstance(manifest_result, ProjectManifestError):
         logger.info(
             "tool error",
             extra={
                 "event": "tool_error",
                 "tool_name": "list_container_directory",
-                "error_message": str(error),
+                "error_message": manifest_result.message,
                 "source_key": source_key,
                 "path": path,
                 "project_name": project_name,
             },
         )
-        return build_container_file_error_result(
+        return build_container_inspection_error_result(
             action="list_container_directory",
-            message=str(error),
+            message=manifest_result.message,
             requested_project_name=project_name,
             source_key=source_key,
             path=path,
-            access_token=access_token,
             settings=settings,
-            shape_defaults={
-                "requested_project_name": project_name,
-                "source_key": source_key,
-                "path": path,
-                "truncated": False,
-                "entries": [],
-            },
+            shape_defaults=shape_defaults,
         )
+    manifest = manifest_result.manifest
+    project_name_value = manifest_result.project_name
+    definition = manifest_service.get_container_source_or_error(manifest, source_key)
+    if isinstance(definition, ProjectManifestError):
+        return build_container_inspection_error_result(
+            action="list_container_directory",
+            message=definition.message,
+            requested_project_name=project_name,
+            source_key=source_key,
+            path=path,
+            settings=settings,
+            shape_defaults=shape_defaults,
+        )
+
+    normalized_path = docker_service.resolve_container_directory_path_or_error(
+        definition,
+        path,
+    )
+    if isinstance(normalized_path, DockerServiceError):
+        return build_container_inspection_error_result(
+            action="list_container_directory",
+            message=normalized_path.message,
+            requested_project_name=project_name,
+            source_key=source_key,
+            path=path,
+            settings=settings,
+            shape_defaults=shape_defaults,
+        )
+
+    if not docker_service.container_path_is_allowed(definition, normalized_path):
+        return build_container_inspection_error_result(
+            action="list_container_directory",
+            message=(
+                "Requested container path is outside the manifest whitelist "
+                "for the selected source."
+            ),
+            requested_project_name=project_name,
+            source_key=source_key,
+            path=path,
+            settings=settings,
+            shape_defaults=shape_defaults,
+        )
+
+    list_result = docker_service.list_container_directory(
+        definition.target,
+        normalized_path,
+    )
+    if isinstance(list_result, DockerServiceError):
+        return build_container_inspection_error_result(
+            action="list_container_directory",
+            message=list_result.message,
+            requested_project_name=project_name,
+            source_key=source_key,
+            path=path,
+            settings=settings,
+            shape_defaults=shape_defaults,
+        )
+    entries, truncated = list_result
+    payload = ListContainerDirectoryPayload(
+        action="list_container_directory",
+        requested_project_name=project_name,
+        project_name=project_name_value,
+        source_key=definition.source_key,
+        container_name=definition.target,
+        path=normalized_path,
+        truncated=truncated,
+        entries=[create_container_payload(entry) for entry in entries],
+    )
 
     logger.info(
         "tool result",

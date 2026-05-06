@@ -17,7 +17,7 @@ from logging_config import get_logger
 from services.log_analysis import LogAnalysisService
 from services.log_filtering import CreateFilteredViewError, LogFilteringService, SourceNoiseContext
 from services.log_snapshots import LogSnapshotService, SnapshotContext, SnapshotLookupError
-from services.project_manifest import ProjectManifestService
+from services.project_manifest import ProjectManifestError, ProjectManifestService
 from tools.agent_hints import (
     BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION,
     CREATE_FILTERED_VIEW_TOOL_DESCRIPTION,
@@ -556,14 +556,11 @@ def create_filtered_view(
     if isinstance(context, ToolResult):
         return context
 
-    manifest_result = manifest_service.get(project_name)
-    if manifest_result is None:
+    manifest_result = manifest_service.get_or_error(project_name)
+    if isinstance(manifest_result, ProjectManifestError):
         return _build_filtered_view_source_key_error_result(
             error=CreateFilteredViewError(
-                message=(
-                    f"Unknown project {project_name!r}. "
-                    "No manifest file was found for that project."
-                ),
+                message=manifest_result.message,
                 error_code="snapshot_source_key_not_found",
                 retry_tips=[
                     "Retry with a valid archive_name and source_keys for the authorized project.",

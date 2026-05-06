@@ -54,6 +54,22 @@ SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION = (
     "session_id; pass the returned since/until values into collect_logs."
 )
 
+READ_CONTAINER_FILE_TOOL_DESCRIPTION = (
+    "Read text content from one explicit file path inside a manifest-approved "
+    "docker source container. Use list_container_directory first to navigate "
+    "from the source's main project folder. The path argument is required and "
+    "must be an absolute path inside the selected container. "
+    "This tool rejects directories and bounds the returned content with max_bytes."
+)
+
+LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION = (
+    "List files and directories inside a manifest-approved docker source "
+    "container, like running ls -la in a terminal. If path is omitted or blank, "
+    "the tool lists the source's first approved inspection root, usually the "
+    "main project folder such as /app/. Directory paths return immediate "
+    "children; file paths return one metadata entry for that file."
+)
+
 LOG_ANALYSIS_CAUTIONS = [
     "Use grouped findings for triage, not as the final incident conclusion.",
     (

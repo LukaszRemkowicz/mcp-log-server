@@ -19,7 +19,7 @@ from services.project_authorization import (
     ProjectAuthorizationError,
     ProjectAuthorizationService,
 )
-from services.project_manifest import ProjectManifestService
+from services.project_manifest import ProjectManifestError, ProjectManifestService
 from tools.agent_hints import COLLECT_LOGS_TOOL_DESCRIPTION
 from tools.errors import build_collect_logs_error_result
 from tools.models import CollectLogsPayload, ProjectManifestSummary, SnapshotWorkspace
@@ -175,17 +175,14 @@ def collect_logs(
 
     project_payloads = []
     for project_name in project_names:
-        manifest_result = manifest_service.get(project_name)
-        if manifest_result is None:
-            message = (
-                f"Unknown project {project_name!r}. No manifest file was found for that project."
-            )
+        manifest_result = manifest_service.get_or_error(project_name)
+        if isinstance(manifest_result, ProjectManifestError):
             logger.info(
                 "tool error",
                 extra={
                     "event": "tool_error",
                     "tool_name": "collect_logs",
-                    "error_message": message,
+                    "error_message": manifest_result.message,
                     "project_names": project_names,
                     "workspace": workspace,
                     "session_id": session_id,
@@ -194,7 +191,7 @@ def collect_logs(
                 },
             )
             return build_collect_logs_error_result(
-                message,
+                manifest_result.message,
                 settings=settings,
                 access_token=access_token,
                 project_names=project_names,
