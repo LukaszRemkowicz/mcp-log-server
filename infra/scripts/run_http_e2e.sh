@@ -139,7 +139,7 @@ GREP_RESPONSE="$(
   json_post '{"jsonrpc":"2.0","id":"grep-shared","method":"tools/call","params":{"name":"grep_log_snapshot","arguments":{"project_name":"landingpage","grep":"shared match","source_keys":["app_first","app_second"]}}}'
 )"
 FILTERED_VIEW_RESPONSE="$(
-  json_post '{"jsonrpc":"2.0","id":"create-filtered-view","method":"tools/call","params":{"name":"create_filtered_view","arguments":{"project_name":"landingpage","source_keys":["app_first","app_second"],"max_lines":10,"excluded_sample_limit":5}}}'
+  json_post '{"jsonrpc":"2.0","id":"create-filtered-view","method":"tools/call","params":{"name":"create_filtered_view","arguments":{"project_name":"landingpage","source_keys":["app_first","app_second"],"max_lines":10}}}'
 )"
 SESSION_RESPONSE="$(
   json_post '{"jsonrpc":"2.0","id":"collect-session","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_names":["landingpage"],"workspace":"session","session_id":"ci-session","source_keys":["app_first"]}}}'
@@ -172,7 +172,11 @@ assert_eq \
 
 assert_file_exists "$LOGS_DIR/workflow/landingpage/latest/app_first.log"
 assert_file_exists "$LOGS_DIR/workflow/landingpage/latest/app_second.log"
-assert_file_exists "$LOGS_DIR/workflow/landingpage/latest/snapshot_metadata.json"
+assert_file_exists "$LOGS_DIR/workflow/landingpage/workflow_inventory.json"
+assert_eq \
+  "$(jq -r '.latest.files | length' "$LOGS_DIR/workflow/landingpage/workflow_inventory.json")" \
+  "2" \
+  "workflow inventory should describe both latest files"
 
 assert_eq \
   "$(printf '%s' "$LIST_RESPONSE" | jq -r '.result.structuredContent.files | length')" \
@@ -190,6 +194,14 @@ assert_eq \
   "$(printf '%s' "$GREP_RESPONSE" | jq -r '.result.structuredContent.matched_source_keys | join(",")')" \
   "app_first,app_second" \
   "grep_log_snapshot should report matches from both files"
+if [[ "$(printf '%s' "$FILTERED_VIEW_RESPONSE" | jq -r '.result.isError')" != "false" ]]; then
+  echo "create_filtered_view response:" >&2
+  printf '%s\n' "$FILTERED_VIEW_RESPONSE" | jq . >&2
+fi
+assert_eq \
+  "$(printf '%s' "$FILTERED_VIEW_RESPONSE" | jq -r '.result.isError')" \
+  "false" \
+  "create_filtered_view should succeed for workflow collection"
 assert_eq \
   "$(printf '%s' "$FILTERED_VIEW_RESPONSE" | jq -r '.result.structuredContent.cleaned_lines | length')" \
   "6" \
