@@ -1,0 +1,2 @@
+{"timestamp":"2026-05-05T10:00:00Z","level":"INFO","project":"shop","status_code":200,"message":"checkout request completed"}
+{"timestamp":"2026-05-05T10:01:00Z","level":"INFO","project":"shop","items":42,"message":"inventory sync completed"}
