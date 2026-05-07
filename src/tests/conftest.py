@@ -1,62 +1,136 @@
 from __future__ import annotations
 
-import json
+import shutil
 import time
-from collections.abc import Callable, Generator
+from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-from unittest.mock import patch
+from typing import Any, Protocol, overload
 
 import httpx
 import pytest
+from fastmcp.server.auth import AccessToken
 from joserfc import jwt
 from joserfc.jwk import OctKey
 from starlette.testclient import TestClient
 
-import conf
 from app import create_application
 from auth.auth_provider import build_auth_provider
+from auth.scopes import LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE
+from conf import set_settings, settings
 from settings import Settings
-from tools import collection as collection_tools
-from tools import container_inspection as container_inspection_tools
-from tools import snapshots as snapshots_tools
-from tools import system as system_tools
-from utils import log_snapshots as log_snapshot_utils
+
+JwtOverrides = dict[str, Any] | None
+AccessTokenClaims = dict[str, Any] | None
+TEST_FIXTURES_ROOT = Path(__file__).parent / "fixtures"
+TEST_MANIFESTS_DIR = TEST_FIXTURES_ROOT / "manifests"
+TEST_FILE_SOURCE_ROOT = TEST_FIXTURES_ROOT / "logs"
+
+set_settings(
+    settings.model_copy(
+        update={
+            "MANIFEST_PATH": TEST_MANIFESTS_DIR,
+            "FILE_SOURCE_ROOT": TEST_FILE_SOURCE_ROOT,
+        }
+    )
+)
+
+
+class CustomJwtToken(Protocol):
+    """Callable fixture type for creating test JWTs with optional claim overrides."""
+
+    @overload
+    def __call__(self, subject: str, scopes: list[str], client_id: str) -> str: ...
+
+    @overload
+    def __call__(
+        self,
+        subject: str,
+        scopes: list[str],
+        client_id: str,
+        overrides: JwtOverrides,
+    ) -> str: ...
+
+    def __call__(
+        self,
+        subject: str,
+        scopes: list[str],
+        client_id: str,
+        overrides: JwtOverrides = None,
+    ) -> str: ...
+
+
+class CustomAccessToken(Protocol):
+    """Callable fixture type for creating direct FastMCP access tokens."""
+
+    def __call__(
+        self,
+        subject: str,
+        scopes: list[str],
+        client_id: str,
+        claims: AccessTokenClaims = None,
+    ) -> AccessToken: ...
+
+
+class FakeDockerExecResult:
+    """Small Docker SDK exec result fake with UTF-8 encoded output."""
+
+    def __init__(self, *, exit_code: int = 0, output: str = "") -> None:
+        self.exit_code = exit_code
+        self.output = output.encode("utf-8")
+
+
+class FakeDockerClient:
+    """Small Docker SDK fake for container log and inspection tests."""
+
+    containers: FakeDockerClient
+
+    def __init__(self) -> None:
+        self.containers = self
+        self.outputs_by_command: dict[tuple[str, ...], str] = {}
+        self.commands: list[list[str]] = []
+        self.captured_logs_kwargs: dict[str, object] = {}
+        self.logs_exception: Exception | None = None
+
+    def get(self, container_name: str) -> FakeDockerClient:
+        assert container_name == "backend-container"
+        return self
+
+    def exec_run(
+        self,
+        command: list[str],
+        stdout: bool = True,
+        stderr: bool = True,
+    ) -> FakeDockerExecResult:
+        assert stdout is True
+        assert stderr is True
+        self.commands.append(command)
+        command_key = tuple(command)
+        return FakeDockerExecResult(output=self.outputs_by_command[command_key])
+
+    def logs(self, **kwargs: object):
+        if self.logs_exception is not None:
+            raise self.logs_exception
+        self.captured_logs_kwargs.update(kwargs)
+        yield b"log line 1\n"
+        yield b"log line 2\n"
 
 
 @contextmanager
 def override_settings(
-    settings: Settings | None = None,
-    /,
     **updates: object,
 ) -> Generator[Settings]:
-    """Temporarily replace shared app settings for tests.
+    """Temporarily patch selected shared app settings for tests."""
 
-    Usage styles:
+    previous_settings = settings.model_copy()
+    effective_settings = previous_settings.model_copy(update=updates)
 
-    - `with override_settings(custom_settings):`
-      replace the full settings object
-    - `with override_settings(MANIFEST_PATH=manifest_path):`
-      patch selected fields on top of the current settings object
-    """
-
-    effective_settings = (
-        settings.model_copy(update=updates)
-        if settings is not None
-        else conf.settings.model_copy(update=updates)
-    )
-
-    with (
-        patch.object(conf, "settings", effective_settings),
-        patch.object(collection_tools, "settings", effective_settings),
-        patch.object(container_inspection_tools, "settings", effective_settings),
-        patch.object(snapshots_tools, "settings", effective_settings),
-        patch.object(system_tools, "settings", effective_settings),
-        patch.object(log_snapshot_utils, "settings", effective_settings),
-    ):
+    set_settings(effective_settings)
+    try:
         yield effective_settings
+    finally:
+        set_settings(previous_settings)
 
 
 @dataclass(slots=True)
@@ -81,153 +155,118 @@ class JsonRpcClient:
         return self.api_client.post(self.mcp_path, headers=headers, json=data)
 
 
-@dataclass(slots=True)
-class JsonRpcFixture:
-    """Provide JSON-RPC helpers for default and custom app settings."""
+def build_collect_logs_request(
+    *,
+    request_id: str = "collect-1",
+    project_names: list[str] | None = None,
+    source_keys: list[str] | None = None,
+    workspace: str = "workflow",
+    session_id: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+) -> dict[str, Any]:
+    """Build a JSON-RPC payload for the `collect_logs` tool."""
 
-    client: JsonRpcClient
-
-    def post(self, *, token: str | None, data: dict[str, Any]) -> httpx.Response:
-        return self.client.post(token=token, data=data)
-
-    @contextmanager
-    def with_settings(self, settings: Settings) -> Generator[JsonRpcClient]:
-        """Create a temporary JSON-RPC client for a custom settings object."""
-
-        with override_settings(settings) as effective_settings:
-            app = create_application(auth_provider=build_auth_provider(effective_settings))
-            asgi_app = app.http_app(
-                path=effective_settings.MCP_PATH,
-                json_response=effective_settings.MCP_JSON_RESPONSE,
-                stateless_http=effective_settings.MCP_STATELESS_HTTP,
-            )
-            with TestClient(asgi_app) as api_client:
-                yield JsonRpcClient(
-                    api_client=api_client,
-                    mcp_path=effective_settings.MCP_PATH,
-                )
-
-
-@dataclass(slots=True)
-class FileSourceManifestFactory:
-    """Create temporary single-file manifests for collection tests."""
-
-    tmp_path: Path
-
-    def create(
-        self,
-        *,
-        target: str,
-        source_key: str = "app_file",
-        source_type: str = "file",
-        inspect_path_prefixes: list[str] | None = None,
-        project_name: str = "landingpage",
-        project_summary: str = "Temporary landingpage-style project for collection tests.",
-    ) -> Path:
-        manifest_path = self.tmp_path / f"{project_name}.json"
-        manifest_path.write_text(
-            json.dumps(
-                {
-                    "project_key": project_name,
-                    "project_summary": project_summary,
-                    "sources": [
-                        {
-                            "source_key": source_key,
-                            "source_type": source_type,
-                            "target": target,
-                            "description": "Temporary file-backed application logs.",
-                            "required": True,
-                            "parser_type": "plain_text",
-                            "normalization_profile": "app_logs",
-                            "retention_class": "short",
-                            "default_noise_profile": "app_noise",
-                            "inspect_path_prefixes": inspect_path_prefixes or [],
-                        }
-                    ],
-                }
-            ),
-            encoding="utf-8",
-        )
-        return manifest_path
+    arguments: dict[str, Any] = {
+        "source_keys": ["all"] if source_keys is None else source_keys,
+        "workspace": workspace,
+        "project_names": ["landingpage"] if project_names is None else project_names,
+    }
+    payload: dict[str, Any] = {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "method": "tools/call",
+        "params": {
+            "name": "collect_logs",
+            "arguments": arguments,
+        },
+    }
+    if session_id is not None:
+        arguments["session_id"] = session_id
+    if since is not None:
+        arguments["since"] = since
+    if until is not None:
+        arguments["until"] = until
+    return payload
 
 
 @dataclass(slots=True)
-class CollectLogsRequestFactory:
-    """Build JSON-RPC payloads for the `collect_logs` tool."""
+class FileBackedProjectContext:
+    """API test paths for the single file-backed landingpage manifest scenario."""
 
-    def create(
-        self,
-        *,
-        request_id: str = "collect-1",
-        project_name: str = "landingpage",
-        source_keys: list[str] | None = None,
-        workspace: str = "workflow",
-        session_id: str | None = None,
-        tail_lines: int | None = 200,
-        timestamps: bool = False,
-        since: str | None = None,
-        until: str | None = None,
-    ) -> dict[str, Any]:
-        arguments: dict[str, Any] = {
-            "project_name": project_name,
-            "source_keys": source_keys or [],
-            "workspace": workspace,
-            "timestamps": timestamps,
-        }
-        payload: dict[str, Any] = {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "method": "tools/call",
-            "params": {
-                "name": "collect_logs",
-                "arguments": arguments,
-            },
-        }
-        if tail_lines is not None:
-            arguments["tail_lines"] = tail_lines
-        if session_id is not None:
-            arguments["session_id"] = session_id
-        if since is not None:
-            arguments["since"] = since
-        if until is not None:
-            arguments["until"] = until
-        return payload
+    logs_dir: Path
+    manifests_dir: Path
+    file_source_root: Path
+
+
+@dataclass(slots=True)
+class MultiProjectCollectContext:
+    """API test paths for the multi-project manifest scenario."""
+
+    logs_dir: Path
+    manifests_dir: Path
+    file_source_root: Path
 
 
 @pytest.fixture
-def settings_fixture() -> Settings:
-    return Settings(
-        ENVIRONMENT="dev",
-        HOST="127.0.0.1",
-        PORT=8001,
-        LOG_LEVEL="INFO",
-        LOG_FORMAT="text",
-        JWT_ALGORITHM="HS256",
-        JWT_SHARED_SECRET="change-me-local-dev-secret",
-        JWT_ISSUER="mcp-log-server-dev",
-        JWT_AUDIENCE="mcp-log-server",
-        JWT_EXPIRATION_SECONDS=86400,
-        MANIFEST_PATH=Path(__file__).resolve().parents[2] / "src/manifests/landingpage.json",
-        MCP_PATH="/mcp",
-        MCP_STATELESS_HTTP=True,
-        MCP_JSON_RESPONSE=True,
+def custom_access_token() -> CustomAccessToken:
+    """Return a builder for direct FastMCP access tokens with custom claims."""
+
+    def build_token(
+        subject: str,
+        scopes: list[str],
+        client_id: str,
+        claims: AccessTokenClaims = None,
+    ) -> AccessToken:
+        effective_claims = {"sub": subject}
+        effective_claims.update(claims or {})
+        return AccessToken(
+            token=f"{client_id}-test-token",
+            client_id=client_id,
+            scopes=scopes,
+            claims=effective_claims,
+        )
+
+    return build_token
+
+
+@pytest.fixture
+def valid_access_token(custom_access_token: CustomAccessToken) -> AccessToken:
+    """Return the common direct-tool token used by most service/tool tests."""
+
+    return custom_access_token(
+        "workflow-agent",
+        [LOGS_COLLECT_SCOPE],
+        "workflow-agent",
+        {"allowed_projects": ["landingpage"]},
     )
 
 
 @pytest.fixture
-def file_source_manifest_factory(tmp_path: Path) -> FileSourceManifestFactory:
-    return FileSourceManifestFactory(tmp_path=tmp_path)
+def fake_docker_client() -> FakeDockerClient:
+    """Return a reusable fake Docker SDK client for tests."""
+
+    return FakeDockerClient()
+
+
+def copy_mutable_log_fixture_root(tmp_path: Path) -> Path:
+    """Copy manifest and log fixtures for tests that rewrite source log files."""
+
+    fixture_root = tmp_path / "fixtures"
+    shutil.copytree(settings.MANIFEST_PATH, fixture_root / "manifests")
+    shutil.copytree(settings.file_source_root, fixture_root / "logs")
+    return fixture_root
 
 
 @pytest.fixture
-def collect_logs_request_factory() -> CollectLogsRequestFactory:
-    return CollectLogsRequestFactory()
+def container_manifests_dir() -> Path:
+    """Return the reusable container-inspection manifest scenario."""
+
+    return settings.MANIFEST_PATH / "container"
 
 
 @pytest.fixture
-def create_test_jwt_token(
-    settings_fixture: Settings,
-) -> Callable[[str, list[str], str, dict[str, Any] | None], str]:
+def custom_jwt_token() -> CustomJwtToken:
     def build_token(
         subject: str,
         scopes: list[str],
@@ -235,21 +274,21 @@ def create_test_jwt_token(
         overrides: dict[str, Any] | None = None,
     ) -> str:
         now = int(time.time())
-        effective_overrides = overrides or {}
+        effective_overrides = dict(overrides or {})
         signing_secret = effective_overrides.pop(
             "signing_secret",
-            settings_fixture.JWT_SHARED_SECRET,
+            settings.JWT_SHARED_SECRET,
         )
         signing_key = OctKey.import_key(signing_secret)
-        header = {"alg": settings_fixture.JWT_ALGORITHM, "typ": "JWT"}
+        header = {"alg": settings.JWT_ALGORITHM, "typ": "JWT"}
         payload = {
-            "iss": settings_fixture.JWT_ISSUER,
-            "aud": settings_fixture.JWT_AUDIENCE,
+            "iss": settings.JWT_ISSUER,
+            "aud": settings.JWT_AUDIENCE,
             "iat": now,
-            "exp": now + settings_fixture.JWT_EXPIRATION_SECONDS,
+            "exp": now + settings.JWT_EXPIRATION_SECONDS,
             "sub": subject,
             "client_id": client_id,
-            "project_key": "landingpage",
+            "allowed_projects": ["landingpage"],
             "scope": " ".join(scopes),
         }
         payload.update(effective_overrides)
@@ -257,32 +296,62 @@ def create_test_jwt_token(
             header,
             payload,
             signing_key,
-            algorithms=[settings_fixture.JWT_ALGORITHM],
+            algorithms=[settings.JWT_ALGORITHM],
         )
 
     return build_token
 
 
 @pytest.fixture
-def api_client(settings_fixture: Settings) -> Generator[TestClient]:
-    app = create_application(auth_provider=build_auth_provider(settings_fixture))
-    asgi_app = app.http_app(
-        path=settings_fixture.MCP_PATH,
-        json_response=settings_fixture.MCP_JSON_RESPONSE,
-        stateless_http=settings_fixture.MCP_STATELESS_HTTP,
+def valid_jwt_token(custom_jwt_token: CustomJwtToken) -> str:
+    """Return the common workflow-agent JWT used by most API tests."""
+
+    return custom_jwt_token(
+        "workflow-agent",
+        [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
+        "workflow-agent",
     )
-    with TestClient(asgi_app) as client:
-        yield client
 
 
 @pytest.fixture
-def jsonrpc(
-    api_client: TestClient,
-    settings_fixture: Settings,
-) -> JsonRpcFixture:
-    return JsonRpcFixture(
-        client=JsonRpcClient(
-            api_client=api_client,
-            mcp_path=settings_fixture.MCP_PATH,
+def jsonrpc() -> Generator[JsonRpcClient]:
+    app = create_application(auth_provider=build_auth_provider(settings))
+    asgi_app = app.http_app(
+        path=settings.MCP_PATH,
+        json_response=settings.MCP_JSON_RESPONSE,
+        stateless_http=settings.MCP_STATELESS_HTTP,
+    )
+    with TestClient(asgi_app) as client:
+        yield JsonRpcClient(
+            api_client=client,
+            mcp_path=settings.MCP_PATH,
         )
+
+
+@pytest.fixture
+def file_backed_project_context(
+    tmp_path: Path,
+) -> FileBackedProjectContext:
+    """Create file-backed project paths for API tests."""
+
+    logs_dir: Path = tmp_path / "collected-logs"
+
+    return FileBackedProjectContext(
+        logs_dir=logs_dir,
+        manifests_dir=settings.MANIFEST_PATH,
+        file_source_root=settings.file_source_root,
+    )
+
+
+@pytest.fixture
+def multi_project_collect_context(
+    tmp_path: Path,
+) -> MultiProjectCollectContext:
+    """Return paths for multi-project collection tests."""
+
+    logs_dir: Path = tmp_path / "collected-logs"
+    return MultiProjectCollectContext(
+        logs_dir=logs_dir,
+        manifests_dir=settings.MANIFEST_PATH,
+        file_source_root=settings.file_source_root,
     )

@@ -38,7 +38,7 @@ def build_example_token_payloads(settings: Settings) -> dict[str, dict[str, obje
         "aud": settings.JWT_AUDIENCE,
         "iat": now,
         "exp": exp,
-        "project_key": "landingpage",
+        "allowed_projects": ["landingpage"],
     }
     return {
         "workflow_agent": {

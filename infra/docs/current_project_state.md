@@ -31,6 +31,15 @@ The key design boundary remains:
 - deterministic code gathers facts
 - the LLM interprets facts
 
+Current persistence note:
+
+- workflow and session artifacts are still filesystem-backed
+- `snapshot_metadata.json` is a temporary filesystem metadata sidecar for the
+  current non-database session implementation
+- when the planned database phase is implemented, that metadata should move
+  into relational rows and the filesystem should keep only the raw saved log
+  files
+
 ## Phase Status
 
 Phase 1 is ready.
@@ -121,6 +130,11 @@ Important collection response note:
 - `tail_lines` is optional; if omitted, agents get a warning that full source
   output may be slow or large
 - `DOCKER_LOGS_DIR` is treated as a logs root, not a flat one-run output path
+- manifests and file-backed source logs are separate:
+  - `MANIFEST_PATH` points to project manifest JSON files
+  - relative manifest `file` source targets resolve under `FILE_SOURCE_ROOT`
+  - if `FILE_SOURCE_ROOT` is omitted, it defaults to the sibling `logs/`
+    directory next to `MANIFEST_PATH`
 - the current on-disk layout is:
   - `<DOCKER_LOGS_DIR>/<project_key>/latest/...`
   - `<DOCKER_LOGS_DIR>/<project_key>/archive/<timestamp>/...`
@@ -141,7 +155,7 @@ This is a development-ready JWT flow, not a final Keycloak production rollout.
 
 The current bundled sample manifest is:
 
-- `src/manifests/landingpage.json`
+- `src/manifests/projects/landingpage.json`
 
 This is runtime project inventory/config for future collector-style tools.
 

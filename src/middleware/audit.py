@@ -52,7 +52,8 @@ def _build_auth_fields(token: AccessToken | None) -> dict[str, Any]:
         "scope_count": len(token.scopes),
         "subject": claims.get("sub", token.client_id),
         "client_type": claims.get("client_type"),
-        "project_key": claims.get("project_key"),
+        "allowed_projects": claims.get("allowed_projects"),
+        "projects_access": claims.get("projects_access"),
     }
 
 

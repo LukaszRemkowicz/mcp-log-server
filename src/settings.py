@@ -45,7 +45,8 @@ class Settings(BaseSettings):
         default="7d",
         alias="LOG_SNAPSHOT_RETENTION",
     )
-    MANIFEST_PATH: Path = REPOSITORY_ROOT / "src/manifests/landingpage.json"
+    MANIFEST_PATH: Path = REPOSITORY_ROOT / "src/manifests/projects"
+    FILE_SOURCE_ROOT: Path | None = None
     MCP_PATH: str = "/mcp"
     MCP_STATELESS_HTTP: bool = True
     MCP_JSON_RESPONSE: bool = True
@@ -55,6 +56,45 @@ class Settings(BaseSettings):
 
         self.LOGS_DIR = self._resolve_repo_path(self.LOGS_DIR)
         self.MANIFEST_PATH = self._resolve_repo_path(self.MANIFEST_PATH)
+        if self.FILE_SOURCE_ROOT is not None:
+            self.FILE_SOURCE_ROOT = self._resolve_repo_path(self.FILE_SOURCE_ROOT)
+
+    @property
+    def workflow_path(self) -> Path:
+        """Return the root path for persisted workflow log snapshots."""
+
+        return self.LOGS_DIR / "workflow"
+
+    def workflow_project_path(self, project_name: str) -> Path:
+        """Return the workflow root directory for one project."""
+
+        return self.workflow_path / project_name
+
+    def workflow_snapshot_paths(self, project_name: str) -> tuple[Path, Path]:
+        """Return workflow latest and archive paths for one project."""
+
+        workflow_project_path = self.workflow_project_path(project_name)
+        latest_output_dir = workflow_project_path / "latest"
+        archive_dir = workflow_project_path / "archive"
+        return latest_output_dir, archive_dir
+
+    @property
+    def session_path(self) -> Path:
+        """Return the root path for persisted session log snapshots."""
+
+        return self.LOGS_DIR / "sessions"
+
+    @property
+    def manifests_dir(self) -> Path:
+        """Return the configured manifests directory."""
+
+        return self.MANIFEST_PATH
+
+    @property
+    def file_source_root(self) -> Path:
+        """Return the root used for relative file-backed source targets."""
+
+        return self.FILE_SOURCE_ROOT or self.MANIFEST_PATH.parent / "logs"
 
     @staticmethod
     def _resolve_repo_path(path: Path) -> Path:

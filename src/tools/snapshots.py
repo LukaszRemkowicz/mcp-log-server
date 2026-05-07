@@ -3,46 +3,147 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from fastmcp.dependencies import CurrentAccessToken
 from fastmcp.server.auth import AccessToken
 from fastmcp.tools.base import ToolResult
 
 from auth.scopes import LOGS_COLLECT_SCOPE
-from conf import settings
+from decorators import project_authorized_tool, workflow_discoverable_tool
 from logging_config import get_logger
-from services.log_snapshots import DEFAULT_GREP_MATCH_LIMIT, LogSnapshotService
+from services.log_snapshots import (
+    DEFAULT_GREP_MATCH_LIMIT,
+    LogSnapshotService,
+    SnapshotContext,
+    SnapshotGrepError,
+    SnapshotLookupError,
+    SnapshotReadChunk,
+    SnapshotReadError,
+)
 from tools.agent_hints import (
     GREP_SNAPSHOT_NEXT_STEP_TIPS,
     LIST_SNAPSHOT_NEXT_STEP_TIPS,
     READ_SNAPSHOT_NEXT_STEP_TIPS,
 )
+from tools.errors import build_snapshot_tool_error_result
 from tools.models import (
+    GrepLogSnapshotMatchPayload,
     GrepLogSnapshotPayload,
     ListLogSnapshotFilesPayload,
+    LogSnapshotFilePayload,
     ReadLogSnapshotFilePayload,
 )
-from tools.registry import workflow_discoverable_tool
 from utils.log_preview import truncate_log_preview
-from utils.log_snapshots import (
-    build_snapshot_tool_error_result,
-    find_snapshot_file,
-    resolve_snapshot_context_or_error,
-    resolve_snapshot_file_path,
-    select_snapshot_read_chunk,
-)
-from utils.types import JSONValue
+from utils.types import JSONObject, JSONValue
 
 logger: logging.Logger = get_logger("tools.snapshots")
 
 MAX_INLINE_LOG_BYTES = 200_000
 MAX_GREP_MATCHES = 500
+snapshot_service = LogSnapshotService()
+
+
+def _load_snapshot_context(
+    *,
+    project_name: str,
+    session_id: str | None,
+    archive_name: str | None,
+) -> SnapshotContext | SnapshotLookupError:
+    """Load one snapshot context or return the domain lookup error model."""
+
+    return snapshot_service.load_snapshot(
+        project_name=project_name,
+        workspace="session" if session_id is not None else "workflow",
+        session_id=session_id,
+        archive_name=archive_name,
+    )
+
+
+def _build_snapshot_lookup_error_result(
+    *,
+    lookup_error: SnapshotLookupError,
+    tool_name: str,
+    project_name: str,
+    session_id: str | None,
+    archive_name: str | None,
+    details: JSONObject | None = None,
+    log_extra: dict[str, object] | None = None,
+) -> ToolResult:
+    """Build the shared MCP error response for one snapshot lookup failure."""
+
+    logger.info(
+        "tool error",
+        extra={
+            "event": "tool_error",
+            "tool_name": tool_name,
+            "error_message": lookup_error.message,
+            "session_id": session_id,
+            "archive_name": archive_name,
+            "project_name": project_name,
+            **(log_extra or {}),
+        },
+    )
+    error_details: JSONObject = {
+        "project_name": project_name,
+        "session_id": session_id,
+        "archive_name": archive_name,
+    }
+    if details is not None:
+        error_details.update(details)
+    return build_snapshot_tool_error_result(
+        error_code=lookup_error.error_code,
+        message=lookup_error.message,
+        retry_tips=lookup_error.retry_tips,
+        details=error_details,
+    )
+
+
+def _build_snapshot_read_error_result(
+    *,
+    read_error: SnapshotReadError,
+    project_name: str,
+    session_id: str | None,
+    archive_name: str | None,
+    source_key: str,
+    start_line: int | None = None,
+    line_count: int | None = None,
+) -> ToolResult:
+    """Build the read-file error response for one expected service error."""
+
+    logger.info(
+        "tool error",
+        extra={
+            "event": "tool_error",
+            "tool_name": "read_log_snapshot_file",
+            "error_message": read_error.message,
+            "session_id": session_id,
+            "archive_name": archive_name,
+            "source_key": source_key,
+            "project_name": project_name,
+        },
+    )
+    return build_snapshot_tool_error_result(
+        error_code=read_error.error_code,
+        message=read_error.message,
+        retry_tips=read_error.retry_tips,
+        details={
+            "project_name": project_name,
+            "session_id": session_id,
+            "archive_name": archive_name,
+            "source_key": source_key,
+            "start_line": start_line,
+            "line_count": line_count,
+        },
+    )
 
 
 @workflow_discoverable_tool(LOGS_COLLECT_SCOPE)
+@project_authorized_tool
 def list_log_snapshot_files(
-    snapshot_id: str,
-    project_name: str | None = None,
+    project_name: str,
+    session_id: str | None = None,
+    archive_name: str | None = None,
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
     """List saved log files for one persisted snapshot.
@@ -51,15 +152,9 @@ def list_log_snapshot_files(
     file bodies or search content. It only describes which persisted files
     exist inside one snapshot and how large they are.
 
-    Use `snapshot_id="latest"` when the caller wants the newest workflow
-    snapshot and does not need to pin a historical run.
-
-    Use an explicit `snapshot_id` returned by `collect_logs` when the caller
-    wants:
-
-    - a stable archived workflow snapshot
-    - one specific caller-owned session snapshot
-    - repeatable multi-step analysis over the same persisted artifact
+    Use `session_id` plus `project_name` for session investigations.
+    Use `project_name` alone for the newest workflow artifact, or add
+    `archive_name` to reopen an archived workflow artifact.
 
     Typical next steps after this tool:
 
@@ -73,38 +168,33 @@ def list_log_snapshot_files(
         extra={
             "event": "tool_call",
             "tool_name": "list_log_snapshot_files",
-            "snapshot_id": snapshot_id,
+            "session_id": session_id,
+            "archive_name": archive_name,
             "project_name": project_name,
         },
     )
-    context, error_result = resolve_snapshot_context_or_error(
-        access_token=access_token,
+    context: SnapshotContext | SnapshotLookupError = _load_snapshot_context(
         project_name=project_name,
-        snapshot_id=snapshot_id,
-        default_error_code="log_snapshot_not_found",
-        invalid_retry_tips=[
-            "Retry with a snapshot_id returned by collect_logs for the authorized project.",
-        ],
-        details={
-            "project_name": project_name,
-            "snapshot_id": snapshot_id,
-        },
-        logger=logger,
-        tool_name="list_log_snapshot_files",
+        session_id=session_id,
+        archive_name=archive_name,
     )
-    if error_result is not None:
-        return error_result
-    assert context is not None
+    if isinstance(context, SnapshotLookupError):
+        return _build_snapshot_lookup_error_result(
+            lookup_error=context,
+            tool_name="list_log_snapshot_files",
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
+        )
 
     payload = ListLogSnapshotFilesPayload(
         action="list_log_snapshot_files",
         requested_project_name=project_name,
-        authorized_project_name=context.authorized_project_name,
-        effective_project_name=context.effective_project_name,
+        project_name=context.project_name,
         workspace=context.metadata.workspace,
-        snapshot_id=context.metadata.snapshot_id,
+        session_id=context.metadata.session_id,
         snapshot_dir=str(context.snapshot_dir),
-        metadata_file=str(context.snapshot_dir / "snapshot_metadata.json"),
+        metadata_file=str(context.metadata_file),
         collected_at=context.metadata.collected_at,
         next_step_tips=LIST_SNAPSHOT_NEXT_STEP_TIPS,
         files=context.metadata.files,
@@ -114,7 +204,8 @@ def list_log_snapshot_files(
         extra={
             "event": "tool_result",
             "tool_name": "list_log_snapshot_files",
-            "snapshot_id": payload.snapshot_id,
+            "session_id": payload.session_id,
+            "archive_name": archive_name,
             "workspace": payload.workspace,
             "file_count": len(payload.files),
         },
@@ -123,10 +214,12 @@ def list_log_snapshot_files(
 
 
 @workflow_discoverable_tool(LOGS_COLLECT_SCOPE)
+@project_authorized_tool
 def read_log_snapshot_file(
-    snapshot_id: str,
+    project_name: str,
     source_key: str,
-    project_name: str | None = None,
+    session_id: str | None = None,
+    archive_name: str | None = None,
     start_line: int | None = None,
     line_count: int | None = None,
     max_bytes: int = MAX_INLINE_LOG_BYTES,
@@ -139,9 +232,9 @@ def read_log_snapshot_file(
     file it wants to inspect, either from `collect_logs` or from
     `list_log_snapshot_files`.
 
-    Use `snapshot_id="latest"` for the newest workflow snapshot when the agent
-    does not need to pin a previous run. Use an explicit `snapshot_id` when
-    the agent must keep reading the same persisted snapshot across multiple steps.
+    Use `session_id` plus `project_name` for session investigations. Omit
+    `archive_name` for the newest workflow artifact, or pass an archive
+    folder name when the agent must keep reading one older workflow artifact.
 
     `start_line` and `line_count` can be used to read a smaller line-range
     chunk instead of the whole file. This is the main way to inspect very
@@ -177,7 +270,8 @@ def read_log_snapshot_file(
         extra={
             "event": "tool_call",
             "tool_name": "read_log_snapshot_file",
-            "snapshot_id": snapshot_id,
+            "session_id": session_id,
+            "archive_name": archive_name,
             "source_key": source_key,
             "project_name": project_name,
             "start_line": start_line,
@@ -185,88 +279,80 @@ def read_log_snapshot_file(
             "max_bytes": max_bytes,
         },
     )
-    context, error_result = resolve_snapshot_context_or_error(
-        access_token=access_token,
+    context: SnapshotContext | SnapshotLookupError = _load_snapshot_context(
         project_name=project_name,
-        snapshot_id=snapshot_id,
-        default_error_code="log_snapshot_not_found",
-        invalid_retry_tips=[
-            (
-                "Retry with a valid snapshot_id and source_key returned by "
-                "collect_logs or list_log_snapshot_files."
-            ),
-        ],
-        details={
-            "project_name": project_name,
-            "snapshot_id": snapshot_id,
-            "source_key": source_key,
-            "start_line": start_line,
-            "line_count": line_count,
-        },
-        logger=logger,
-        tool_name="read_log_snapshot_file",
-        log_context={"source_key": source_key},
+        session_id=session_id,
+        archive_name=archive_name,
     )
-    if error_result is not None:
-        return error_result
-    assert context is not None
-
-    try:
-        file_payload = find_snapshot_file(
-            context.metadata,
-            source_key=source_key,
-        )
-        file_path = resolve_snapshot_file_path(context.snapshot_dir, file_payload)
-        full_content = file_path.read_text(encoding="utf-8", errors="replace")
-        selected_content, effective_start_line, effective_line_count = select_snapshot_read_chunk(
-            full_content,
-            start_line=start_line,
-            line_count=line_count,
-        )
-        preview_content = truncate_log_preview(selected_content, max_bytes)
-        truncated = preview_content != selected_content
-    except ValueError as error:
-        message = str(error)
-        logger.info(
-            "tool error",
-            extra={
-                "event": "tool_error",
-                "tool_name": "read_log_snapshot_file",
-                "error_message": message,
-                "snapshot_id": snapshot_id,
-                "source_key": source_key,
-                "project_name": project_name,
-            },
-        )
-        return build_snapshot_tool_error_result(
-            error_code="snapshot_source_key_not_found",
-            message=message,
-            retry_tips=[
-                (
-                    "Retry with a valid snapshot_id and source_key returned by "
-                    "collect_logs or list_log_snapshot_files."
-                ),
-            ],
+    if isinstance(context, SnapshotLookupError):
+        return _build_snapshot_lookup_error_result(
+            lookup_error=context,
+            tool_name="read_log_snapshot_file",
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
             details={
-                "project_name": project_name,
-                "snapshot_id": snapshot_id,
                 "source_key": source_key,
                 "start_line": start_line,
                 "line_count": line_count,
             },
+            log_extra={"source_key": source_key},
         )
+
+    file_payload: LogSnapshotFilePayload | SnapshotReadError = snapshot_service.find_snapshot_file(
+        context.metadata,
+        source_key=source_key,
+    )
+    if isinstance(file_payload, SnapshotReadError):
+        return _build_snapshot_read_error_result(
+            read_error=file_payload,
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
+            source_key=source_key,
+            start_line=start_line,
+            line_count=line_count,
+        )
+    file_path: Path | SnapshotReadError = snapshot_service.resolve_snapshot_file_path(file_payload)
+    if isinstance(file_path, SnapshotReadError):
+        return _build_snapshot_read_error_result(
+            read_error=file_path,
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
+            source_key=source_key,
+            start_line=start_line,
+            line_count=line_count,
+        )
+    full_content: str = file_path.read_text(encoding="utf-8", errors="replace")
+    read_chunk: SnapshotReadChunk | SnapshotReadError = snapshot_service.select_snapshot_read_chunk(
+        full_content,
+        start_line=start_line,
+        line_count=line_count,
+    )
+    if isinstance(read_chunk, SnapshotReadError):
+        return _build_snapshot_read_error_result(
+            read_error=read_chunk,
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
+            source_key=source_key,
+            start_line=start_line,
+            line_count=line_count,
+        )
+    preview_content: str = truncate_log_preview(read_chunk.content, max_bytes)
+    truncated: bool = preview_content != read_chunk.content
 
     payload = ReadLogSnapshotFilePayload(
         action="read_log_snapshot_file",
         requested_project_name=project_name,
-        authorized_project_name=context.authorized_project_name,
-        effective_project_name=context.effective_project_name,
+        project_name=context.project_name,
         workspace=context.metadata.workspace,
-        snapshot_id=context.metadata.snapshot_id,
+        session_id=context.metadata.session_id,
         snapshot_dir=str(context.snapshot_dir),
         source_key=source_key,
-        start_line=effective_start_line,
-        line_count=effective_line_count,
+        start_line=read_chunk.start_line,
+        line_count=read_chunk.line_count,
         max_bytes=max_bytes,
         next_step_tips=READ_SNAPSHOT_NEXT_STEP_TIPS,
         truncated=truncated,
@@ -278,7 +364,8 @@ def read_log_snapshot_file(
         extra={
             "event": "tool_result",
             "tool_name": "read_log_snapshot_file",
-            "snapshot_id": payload.snapshot_id,
+            "session_id": payload.session_id,
+            "archive_name": archive_name,
             "workspace": payload.workspace,
             "source_key": payload.source_key,
             "truncated": payload.truncated,
@@ -290,10 +377,12 @@ def read_log_snapshot_file(
 
 
 @workflow_discoverable_tool(LOGS_COLLECT_SCOPE)
+@project_authorized_tool
 def grep_log_snapshot(
-    snapshot_id: str,
+    project_name: str,
     grep: str,
-    project_name: str | None = None,
+    session_id: str | None = None,
+    archive_name: str | None = None,
     source_keys: list[str] | None = None,
     match_offset: int = 0,
     match_limit: int = DEFAULT_GREP_MATCH_LIMIT,
@@ -307,18 +396,16 @@ def grep_log_snapshot(
 
     Public arguments:
 
-    - `snapshot_id`
-      the persisted snapshot to search. This is the real snapshot identity for
-      the tool. Use `snapshot_id="latest"` for ad-hoc searches over the newest
-      workflow snapshot, or pass an explicit snapshot id returned by
-      `collect_logs` when you want to keep searching the same saved artifact
-      across multiple steps.
+    - `project_name`
+      the project artifact to inspect
+    - `session_id`
+      use this for session investigations where one session can contain more
+      than one project
+    - `archive_name`
+      optional workflow archive folder name. Omit it to search the newest
+      workflow artifact, or pass it to reopen one archived workflow run
     - `grep`
       the text pattern to search for inside the persisted snapshot files.
-    - `project_name`
-      optional project scope check. In the current design, snapshot lookup is
-      still project-scoped for authorization and storage resolution, so this
-      can be used when the caller wants to make that project choice explicit.
     - `source_keys`
       optional file subset inside the snapshot. Omit it to search every saved
       source in the snapshot, or provide it to limit the search to specific
@@ -330,7 +417,7 @@ def grep_log_snapshot(
 
     - finding matching lines across one persisted snapshot
     - narrowing analysis before opening a full file with `read_log_snapshot_file`
-    - reusing a stable snapshot id across repeated searches
+    - reusing one archived workflow artifact across repeated searches
     """
 
     assert access_token is not None
@@ -358,7 +445,8 @@ def grep_log_snapshot(
         extra={
             "event": "tool_call",
             "tool_name": "grep_log_snapshot",
-            "snapshot_id": snapshot_id,
+            "session_id": session_id,
+            "archive_name": archive_name,
             "project_name": project_name,
             "source_keys": source_keys,
             "grep_length": len(grep),
@@ -367,78 +455,77 @@ def grep_log_snapshot(
         },
     )
     source_keys_detail: list[JSONValue] = list(source_keys or [])
-    context, error_result = resolve_snapshot_context_or_error(
-        access_token=access_token,
+    context: SnapshotContext | SnapshotLookupError = _load_snapshot_context(
         project_name=project_name,
-        snapshot_id=snapshot_id,
-        default_error_code="log_snapshot_search_error",
-        invalid_retry_tips=[
-            "Retry with a valid snapshot_id and grep pattern for the authorized project.",
-        ],
-        details={
-            "project_name": project_name,
-            "snapshot_id": snapshot_id,
-            "grep": grep,
-            "source_keys": source_keys_detail,
-        },
-        logger=logger,
-        tool_name="grep_log_snapshot",
-        log_context={
-            "source_keys": source_keys,
-            "grep_length": len(grep),
-        },
+        session_id=session_id,
+        archive_name=archive_name,
     )
-    if error_result is not None:
-        return error_result
-    assert context is not None
+    if isinstance(context, SnapshotLookupError):
+        return _build_snapshot_lookup_error_result(
+            lookup_error=context,
+            tool_name="grep_log_snapshot",
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
+            details={
+                "grep": grep,
+                "source_keys": source_keys_detail,
+            },
+            log_extra={
+                "source_keys": source_keys,
+                "grep_length": len(grep),
+            },
+        )
 
-    try:
-        snapshot_service = LogSnapshotService(settings, access_token)
-        matches, total_match_count = snapshot_service.grep_snapshot(
-            context.snapshot_dir,
+    grep_result: tuple[list[GrepLogSnapshotMatchPayload], int] | SnapshotGrepError = (
+        snapshot_service.grep_snapshot(
             context.metadata,
             grep=grep,
             source_keys=source_keys,
             match_offset=match_offset,
             match_limit=match_limit,
         )
-    except ValueError as error:
-        message = str(error)
+    )
+    if isinstance(grep_result, SnapshotGrepError):
         logger.info(
             "tool error",
             extra={
                 "event": "tool_error",
                 "tool_name": "grep_log_snapshot",
-                "error_message": message,
-                "snapshot_id": snapshot_id,
+                "error_message": grep_result.message,
+                "session_id": session_id,
+                "archive_name": archive_name,
                 "project_name": project_name,
                 "source_keys": source_keys,
                 "grep_length": len(grep),
             },
         )
         return build_snapshot_tool_error_result(
-            error_code="snapshot_source_key_not_found",
-            message=message,
-            retry_tips=[
-                "Retry with a valid snapshot_id and grep pattern for the authorized project.",
-            ],
+            error_code=grep_result.error_code,
+            message=grep_result.message,
+            retry_tips=grep_result.retry_tips,
             details={
                 "project_name": project_name,
-                "snapshot_id": snapshot_id,
+                "session_id": session_id,
+                "archive_name": archive_name,
                 "grep": grep,
                 "source_keys": source_keys_detail,
             },
         )
 
-    matched_source_keys = sorted({match.source_key for match in matches})
-    searched_source_keys = source_keys or [item.source_key for item in context.metadata.files]
+    matches: list[GrepLogSnapshotMatchPayload]
+    total_match_count: int
+    matches, total_match_count = grep_result
+    matched_source_keys: list[str] = sorted({match.source_key for match in matches})
+    searched_source_keys: list[str] = source_keys or [
+        item.source_key for item in context.metadata.files
+    ]
     payload = GrepLogSnapshotPayload(
         action="grep_log_snapshot",
         requested_project_name=project_name,
-        authorized_project_name=context.authorized_project_name,
-        effective_project_name=context.effective_project_name,
+        project_name=context.project_name,
         workspace=context.metadata.workspace,
-        snapshot_id=context.metadata.snapshot_id,
+        session_id=context.metadata.session_id,
         snapshot_dir=str(context.snapshot_dir),
         grep=grep,
         searched_source_keys=searched_source_keys,
@@ -456,7 +543,8 @@ def grep_log_snapshot(
         extra={
             "event": "tool_result",
             "tool_name": "grep_log_snapshot",
-            "snapshot_id": payload.snapshot_id,
+            "session_id": payload.session_id,
+            "archive_name": archive_name,
             "workspace": payload.workspace,
             "searched_source_count": len(payload.searched_source_keys),
             "matched_source_count": len(payload.matched_source_keys),

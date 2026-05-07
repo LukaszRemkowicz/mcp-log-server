@@ -1,0 +1,18 @@
+{
+  "project_key": "beta",
+  "project_summary": "Beta project summary.",
+  "sources": [
+    {
+      "source_key": "app_file",
+      "source_type": "file",
+      "target": "beta/app_file.log",
+      "description": "Beta application logs.",
+      "required": true,
+      "parser_type": "json_lines",
+      "normalization_profile": "app_logs",
+      "retention_class": "short",
+      "default_noise_profile": "app_noise",
+      "inspect_path_prefixes": []
+    }
+  ]
+}

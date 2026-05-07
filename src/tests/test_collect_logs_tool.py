@@ -1,25 +1,28 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastmcp.server.auth import AccessToken
 
-from tests.conftest import FileSourceManifestFactory, override_settings
+from tests.conftest import CustomAccessToken, override_settings
 from tools.collection import collect_logs, list_projects
 
 
-def test_collect_logs_returns_agent_error_for_invalid_docker_time_filter() -> None:
-    token = AccessToken(
-        token="workflow-dev-token",
-        client_id="workflow-agent",
-        scopes=["logs.collect"],
-        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+def test_collect_logs_returns_agent_error_for_invalid_docker_time_filter(
+    container_manifests_dir: Path,
+    custom_access_token: CustomAccessToken,
+) -> None:
+    token = custom_access_token(
+        "workflow-agent",
+        ["logs.collect"],
+        "workflow-agent",
+        {"projects_access": "all"},
     )
 
-    with override_settings():
+    with override_settings(MANIFEST_PATH=container_manifests_dir):
         result = collect_logs(
-            project_name="landingpage",
+            project_names=["landingpage"],
             source_keys=["backend"],
-            tail_lines=20,
-            timestamps=False,
             since="thirty-minutes",
             until=None,
             access_token=token,
@@ -34,26 +37,20 @@ def test_collect_logs_returns_agent_error_for_invalid_docker_time_filter() -> No
     ]
 
 
-def test_collect_logs_returns_agent_error_for_project_mismatch(
-    tmp_path,
-    file_source_manifest_factory: FileSourceManifestFactory,
+def test_collect_logs_returns_agent_error_for_unknown_project_without_middleware(
+    custom_access_token: CustomAccessToken,
 ) -> None:
-    log_file = tmp_path / "logs.txt"
-    log_file.write_text("one\n", encoding="utf-8")
-    manifest_path = file_source_manifest_factory.create(target=str(log_file))
-    token = AccessToken(
-        token="workflow-dev-token",
-        client_id="workflow-agent",
-        scopes=["logs.collect"],
-        claims={"sub": "workflow-agent", "project_key": "landingpage"},
+    token = custom_access_token(
+        "workflow-agent",
+        ["logs.collect"],
+        "workflow-agent",
+        {"projects_access": "all"},
     )
 
-    with override_settings(MANIFEST_PATH=manifest_path):
+    with override_settings():
         result = collect_logs(
-            project_name="other-project",
+            project_names=["other-project"],
             source_keys=None,
-            tail_lines=20,
-            timestamps=False,
             since=None,
             until=None,
             access_token=token,
@@ -61,72 +58,25 @@ def test_collect_logs_returns_agent_error_for_project_mismatch(
     mcp_result = result.to_mcp_result()
 
     assert mcp_result.isError is True
-    assert mcp_result.structuredContent["error_code"] == "project_access_mismatch"
+    assert mcp_result.structuredContent["error_code"] == "unknown_project"
     assert mcp_result.structuredContent["retry_tips"] == [
-        "Retry with project_name equal to the project_key authorized by the current JWT.",
-        "Use get_mcp_service_status to confirm the current project_key before retrying.",
-    ]
-
-
-def test_collect_logs_returns_agent_error_for_missing_project_claim(
-    tmp_path,
-    file_source_manifest_factory: FileSourceManifestFactory,
-) -> None:
-    log_file = tmp_path / "logs.txt"
-    log_file.write_text("one\n", encoding="utf-8")
-    manifest_path = file_source_manifest_factory.create(target=str(log_file))
-    token = AccessToken(
-        token="workflow-dev-token",
-        client_id="workflow-agent",
-        scopes=["logs.collect"],
-        claims={"sub": "workflow-agent"},
-    )
-
-    with override_settings(MANIFEST_PATH=manifest_path):
-        result = collect_logs(
-            project_name="landingpage",
-            source_keys=None,
-            tail_lines=20,
-            timestamps=False,
-            since=None,
-            until=None,
-            access_token=token,
-        )
-    mcp_result = result.to_mcp_result()
-
-    assert mcp_result.isError is True
-    assert mcp_result.structuredContent["error_code"] == "missing_project_key_claim"
-    assert mcp_result.structuredContent["retry_tips"] == [
-        "Retry with a JWT that includes the project_key claim for the monitored project.",
-        "Use get_mcp_service_status to inspect the current caller context if needed.",
+        "Call list_projects to discover the project_name values currently available.",
+        "Retry with one of the listed project names.",
     ]
 
 
 def test_collect_logs_returns_agent_error_for_missing_session_id(
-    tmp_path,
-    file_source_manifest_factory: FileSourceManifestFactory,
+    valid_access_token: AccessToken,
 ) -> None:
-    log_file = tmp_path / "logs.txt"
-    log_file.write_text("one\n", encoding="utf-8")
-    manifest_path = file_source_manifest_factory.create(target=str(log_file))
-    token = AccessToken(
-        token="workflow-dev-token",
-        client_id="workflow-agent",
-        scopes=["logs.collect"],
-        claims={"sub": "workflow-agent", "project_key": "landingpage"},
-    )
-
-    with override_settings(MANIFEST_PATH=manifest_path):
+    with override_settings():
         result = collect_logs(
-            project_name="landingpage",
+            project_names=["landingpage"],
             source_keys=["app_file"],
             workspace="session",
             session_id=None,
-            tail_lines=20,
-            timestamps=False,
             since=None,
             until=None,
-            access_token=token,
+            access_token=valid_access_token,
         )
     mcp_result = result.to_mcp_result()
 
@@ -134,44 +84,93 @@ def test_collect_logs_returns_agent_error_for_missing_session_id(
     assert mcp_result.structuredContent["error_code"] == "missing_session_id"
 
 
-def test_list_projects_returns_manifest_backed_project_inventory() -> None:
+def test_collect_logs_uses_accessible_projects_for_empty_project_names(
+    tmp_path: Path,
+    valid_access_token: AccessToken,
+) -> None:
+    with override_settings(LOGS_DIR=tmp_path / "collected-logs"):
+        result = collect_logs(
+            project_names=[],
+            source_keys=["app_file"],
+            since=None,
+            until=None,
+            access_token=valid_access_token,
+        )
+    payload = result.structured_content
+
+    assert payload is not None
+    assert payload["projects"][0]["project_name"] == "landingpage"
+
+
+def test_list_projects_returns_manifest_backed_project_inventory(
+    custom_access_token: CustomAccessToken,
+) -> None:
+    token = custom_access_token(
+        "workflow-agent",
+        ["projects.read"],
+        "workflow-agent",
+        {"allowed_projects": ["landingpage"]},
+    )
     with override_settings():
-        result = list_projects()
+        result = list_projects(access_token=token)
 
     assert any(item["project_name"] == "landingpage" for item in result)
     landingpage = next(item for item in result if item["project_name"] == "landingpage")
-    assert landingpage["project_summary"] == (
-        "Portfolio platform with shared ingress, backend API, frontend SSR, and edge proxy logs."
-    )
-    assert landingpage["manifest_file"] == "landingpage.json"
+    assert landingpage["project_summary"] == "Landingpage project for analysis tests."
     assert "backend" in landingpage["source_keys"]
-    assert "docker" in landingpage["source_types"]
-    assert landingpage["docker_sources_available"] is True
-    assert landingpage["file_sources_available"] is False
 
 
 def test_list_projects_returns_multiple_manifest_backed_projects(
-    tmp_path,
-    file_source_manifest_factory: FileSourceManifestFactory,
+    custom_access_token: CustomAccessToken,
 ) -> None:
-    alpha_log = tmp_path / "alpha.log"
-    alpha_log.write_text("alpha\n", encoding="utf-8")
-    beta_log = tmp_path / "beta.log"
-    beta_log.write_text("beta\n", encoding="utf-8")
-
-    file_source_manifest_factory.create(
-        target=str(alpha_log),
-        project_name="alpha\nshared match\nomega\n",
-        project_summary="Alpha project summary.",
+    token = custom_access_token(
+        "workflow-agent",
+        ["projects.read"],
+        "workflow-agent",
+        {"projects_access": "all"},
     )
-    file_source_manifest_factory.create(
-        target=str(beta_log),
-        project_name="beta",
-        project_summary="Beta project summary.",
-    )
-    with override_settings(MANIFEST_PATH=tmp_path / "alpha.json"):
-        result = list_projects()
+    with override_settings():
+        result = list_projects(access_token=token)
 
-    assert [item["project_name"] for item in result] == ["alpha\nshared match\nomega\n", "beta"]
-    assert result[0]["project_summary"] == "Alpha project summary."
-    assert result[1]["project_summary"] == "Beta project summary."
+    assert [item["project_name"] for item in result] == [
+        "alpha",
+        "beta",
+        "landingpage",
+        "other",
+        "shop",
+    ]
+
+
+def test_collect_logs_can_collect_multiple_projects_into_one_session(
+    tmp_path: Path,
+    custom_access_token: CustomAccessToken,
+) -> None:
+    token = custom_access_token(
+        "codex-agent",
+        ["logs.collect"],
+        "codex-agent",
+        {"projects_access": "all"},
+    )
+    logs_dir = tmp_path / "collected-logs"
+
+    with override_settings(LOGS_DIR=logs_dir):
+        result = collect_logs(
+            project_names=["alpha", "beta"],
+            source_keys=["app_file"],
+            workspace="session",
+            session_id="incident-123",
+            access_token=token,
+        )
+    payload = result.structured_content
+    assert payload is not None
+
+    assert payload["workspace"] == "session"
+    assert payload["session_id"] == "incident-123"
+    assert payload["requested_project_names"] == ["alpha", "beta"]
+    assert [item["project_name"] for item in payload["projects"]] == ["alpha", "beta"]
+    assert payload["projects"][0]["snapshot_dir"] == str(
+        logs_dir / "sessions" / "incident-123" / "alpha"
+    )
+    assert payload["projects"][1]["snapshot_dir"] == str(
+        logs_dir / "sessions" / "incident-123" / "beta"
+    )

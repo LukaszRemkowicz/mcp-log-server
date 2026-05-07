@@ -77,11 +77,16 @@ Important current Python files:
 - `src/tools/snapshots.py`
   Snapshot inventory, file-read, and grep tools for persisted log snapshots.
 - `src/tools/analysis.py`
-  Snapshot analysis tools such as grouped errors, incident bundles, and
-  follow-up window suggestions.
-- `src/tools/snapshot_support.py`
-  Shared snapshot-tool support helpers for error mapping, timestamp parsing,
-  and chunked snapshot reads.
+  Snapshot analysis tools such as cleaned filtered views, grouped errors,
+  incident bundles, and follow-up window suggestions.
+- `src/services/log_filtering.py`
+  Deterministic noise-filtering and cleaned-view generation based on
+  manifest-selected profiles and source log shape.
+- `src/utils/log_snapshots.py`
+  Shared snapshot helpers for persistence metadata, timestamp parsing, read
+  chunk selection, and snapshot error/result support.
+- `src/tools/container_inspection.py`
+  Approved read-only container inspection tools.
 - `src/tools/system.py`
   MCP service diagnostics tools.
 - `src/tests/`
@@ -123,10 +128,13 @@ Currently implemented:
 - `list_log_snapshot_files`
 - `read_log_snapshot_file`
 - `grep_log_snapshot`
+- `create_filtered_view`
 - `group_errors`
 - `build_incident_bundle`
 - `suggest_followup_window`
 - `list_projects`
+- `read_container_file`
+- `list_container_directory`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
 
@@ -136,12 +144,18 @@ Purpose:
   returns structured workflow bootstrap data for the daily log-analysis flow:
   prepared prompt text, skill inventory, and visible tool inventory
 - `collect_logs`
-  returns deterministic collection results for the authorized project and
-  requested source keys from the manifest. Current agent-facing arguments are:
-  `project_name`, `source_keys`, `workspace`, `session_id`, optional
-  `tail_lines`, `timestamps`, `since`, and `until`.
+  returns deterministic collection results for one or more authorized
+  projects and requested source keys from the manifest. Current agent-facing
+  arguments are: `project_names`, `source_keys`, `workspace`, optional
+  `session_id`, `since`, and `until`.
 - `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`
-  operate on one persisted snapshot identified by `snapshot_id`
+  operate on one persisted artifact identified by:
+  - `session_id` + `project_name` for session investigations
+  - `project_name` alone for the newest workflow artifact
+  - `archive_name` + `project_name` for archived workflow artifacts
+- `create_filtered_view`
+  builds a cleaned deterministic view from one persisted raw artifact while
+  keeping the raw collection as the source of truth
 - `group_errors`, `build_incident_bundle`
   summarize one persisted snapshot for triage and follow-up analysis
 - `suggest_followup_window`
@@ -150,6 +164,8 @@ Purpose:
 - `list_projects`
   returns the currently available manifest-backed projects with short project
   summaries and source inventory metadata
+- `read_container_file`, `list_container_directory`
+  expose approved read-only inspection inside manifest-bounded container paths
 - `get_mcp_service_status`, `get_mcp_health_check`
   bootstrap/development diagnostics
 
@@ -199,12 +215,14 @@ Manifest purpose:
 
 - inventory of available project sources
 - short project summary exposed to agent discovery
-- foundation for future deterministic collection tools
+- routing metadata for deterministic collection, normalization, and noise
+  filtering
 - not the same thing as workflow prompts
 
 Simple distinction:
 
 - manifest = what exists
+- manifest profiles = how deterministic normalization/filtering should route
 - prompt/workflow = how the daily agent should think and operate
 
 
@@ -256,6 +274,13 @@ Major missing pieces:
 
 - real JWT/Keycloak-backed auth
 - final cross-repo rollout/integration behavior
+
+Important current boundary:
+
+- `collect_logs` always preserves a raw persisted snapshot
+- cleaned analysis is a derived deterministic view built later through
+  `create_filtered_view`
+- grouped summaries and incident bundles build on those persisted/raw facts
 
 Current auth state:
 

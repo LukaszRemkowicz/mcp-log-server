@@ -106,7 +106,7 @@ export WORKFLOW_AGENT_JWT
   cd "$REPO_ROOT/src"
   PORT="$PORT" \
   HOST="$HOST" \
-  MANIFEST_PATH="$MANIFESTS_DIR/landingpage.json" \
+  MANIFEST_PATH="$MANIFESTS_DIR" \
   DOCKER_LOGS_DIR="$LOGS_DIR" \
   uv run python -m main >"$SERVER_LOG" 2>&1
 ) &
@@ -127,19 +127,22 @@ fi
 
 TOOLS_RESPONSE="$(json_post '{"jsonrpc":"2.0","id":"tools-list","method":"tools/list","params":{}}')"
 COLLECT_RESPONSE="$(
-  json_post '{"jsonrpc":"2.0","id":"collect-workflow","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_name":"landingpage","workspace":"workflow","source_keys":["app_first","app_second"],"tail_lines":200}}}'
+  json_post '{"jsonrpc":"2.0","id":"collect-workflow","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_names":["landingpage"],"workspace":"workflow","source_keys":["app_first","app_second"]}}}'
 )"
 LIST_RESPONSE="$(
-  json_post '{"jsonrpc":"2.0","id":"list-snapshot","method":"tools/call","params":{"name":"list_log_snapshot_files","arguments":{"project_name":"landingpage","snapshot_id":"latest"}}}'
+  json_post '{"jsonrpc":"2.0","id":"list-snapshot","method":"tools/call","params":{"name":"list_log_snapshot_files","arguments":{"project_name":"landingpage"}}}'
 )"
 READ_RESPONSE="$(
-  json_post '{"jsonrpc":"2.0","id":"read-first","method":"tools/call","params":{"name":"read_log_snapshot_file","arguments":{"project_name":"landingpage","snapshot_id":"latest","source_key":"app_first","max_bytes":1000}}}'
+  json_post '{"jsonrpc":"2.0","id":"read-first","method":"tools/call","params":{"name":"read_log_snapshot_file","arguments":{"project_name":"landingpage","source_key":"app_first","max_bytes":1000}}}'
 )"
 GREP_RESPONSE="$(
-  json_post '{"jsonrpc":"2.0","id":"grep-shared","method":"tools/call","params":{"name":"grep_log_snapshot","arguments":{"project_name":"landingpage","snapshot_id":"latest","grep":"shared match","source_keys":["app_first","app_second"]}}}'
+  json_post '{"jsonrpc":"2.0","id":"grep-shared","method":"tools/call","params":{"name":"grep_log_snapshot","arguments":{"project_name":"landingpage","grep":"shared match","source_keys":["app_first","app_second"]}}}'
+)"
+FILTERED_VIEW_RESPONSE="$(
+  json_post '{"jsonrpc":"2.0","id":"create-filtered-view","method":"tools/call","params":{"name":"create_filtered_view","arguments":{"project_name":"landingpage","source_keys":["app_first","app_second"],"max_lines":10}}}'
 )"
 SESSION_RESPONSE="$(
-  json_post '{"jsonrpc":"2.0","id":"collect-session","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_name":"landingpage","workspace":"session","session_id":"ci-session","source_keys":["app_first"],"tail_lines":200}}}'
+  json_post '{"jsonrpc":"2.0","id":"collect-session","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_names":["landingpage"],"workspace":"session","session_id":"ci-session","source_keys":["app_first"]}}}'
 )"
 
 assert_eq \
@@ -151,17 +154,29 @@ assert_eq \
   "true" \
   "tools/list should expose grep_log_snapshot"
 assert_eq \
-  "$(printf '%s' "$COLLECT_RESPONSE" | jq -r '.result.structuredContent.requested_since')" \
+  "$(printf '%s' "$TOOLS_RESPONSE" | jq -r '.result.tools | map(.name) | index("create_filtered_view") != null')" \
+  "true" \
+  "tools/list should expose create_filtered_view"
+assert_eq \
+  "$(printf '%s' "$COLLECT_RESPONSE" | jq -r '.result.isError')" \
+  "false" \
+  "collect_logs should succeed for workflow collection"
+assert_eq \
+  "$(printf '%s' "$COLLECT_RESPONSE" | jq -r '.result.structuredContent.projects[0].requested_since')" \
   "24h" \
   "collect_logs should default to 24h"
 assert_eq \
-  "$(printf '%s' "$COLLECT_RESPONSE" | jq -r '.result.structuredContent.resolved_source_keys | join(",")')" \
+  "$(printf '%s' "$COLLECT_RESPONSE" | jq -r '.result.structuredContent.projects[0].resolved_source_keys | join(",")')" \
   "app_first,app_second" \
   "collect_logs should resolve both file sources"
 
-assert_file_exists "$LOGS_DIR/landingpage/workflow/latest/app_first.log"
-assert_file_exists "$LOGS_DIR/landingpage/workflow/latest/app_second.log"
-assert_file_exists "$LOGS_DIR/landingpage/workflow/latest/snapshot_metadata.json"
+assert_file_exists "$LOGS_DIR/workflow/landingpage/latest/app_first.log"
+assert_file_exists "$LOGS_DIR/workflow/landingpage/latest/app_second.log"
+assert_file_exists "$LOGS_DIR/workflow/landingpage/workflow_inventory.json"
+assert_eq \
+  "$(jq -r '.latest.files | length' "$LOGS_DIR/workflow/landingpage/workflow_inventory.json")" \
+  "2" \
+  "workflow inventory should describe both latest files"
 
 assert_eq \
   "$(printf '%s' "$LIST_RESPONSE" | jq -r '.result.structuredContent.files | length')" \
@@ -179,11 +194,27 @@ assert_eq \
   "$(printf '%s' "$GREP_RESPONSE" | jq -r '.result.structuredContent.matched_source_keys | join(",")')" \
   "app_first,app_second" \
   "grep_log_snapshot should report matches from both files"
+if [[ "$(printf '%s' "$FILTERED_VIEW_RESPONSE" | jq -r '.result.isError')" != "false" ]]; then
+  echo "create_filtered_view response:" >&2
+  printf '%s\n' "$FILTERED_VIEW_RESPONSE" | jq . >&2
+fi
+assert_eq \
+  "$(printf '%s' "$FILTERED_VIEW_RESPONSE" | jq -r '.result.isError')" \
+  "false" \
+  "create_filtered_view should succeed for workflow collection"
+assert_eq \
+  "$(printf '%s' "$FILTERED_VIEW_RESPONSE" | jq -r '.result.structuredContent.cleaned_lines | length')" \
+  "6" \
+  "create_filtered_view should return kept lines from both persisted files"
+assert_eq \
+  "$(printf '%s' "$FILTERED_VIEW_RESPONSE" | jq -r '.result.structuredContent.excluded_line_count')" \
+  "0" \
+  "create_filtered_view should keep all plain-text lines for unknown noise profiles"
 
 assert_eq \
-  "$(printf '%s' "$SESSION_RESPONSE" | jq -r '.result.structuredContent.snapshot_id')" \
+  "$(printf '%s' "$SESSION_RESPONSE" | jq -r '.result.structuredContent.session_id')" \
   "ci-session" \
-  "session snapshot id should reuse caller-provided session_id"
-assert_file_exists "$LOGS_DIR/landingpage/sessions/ci-session/app_first.log"
+  "collect_logs should return the caller-provided session_id"
+assert_file_exists "$LOGS_DIR/sessions/ci-session/landingpage/app_first.log"
 
 echo "HTTP MCP end-to-end checks passed."
