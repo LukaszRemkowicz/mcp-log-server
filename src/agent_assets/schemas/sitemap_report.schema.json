@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "required": ["summary", "issues"],
+  "properties": {
+    "summary": {
+      "type": "string"
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    }
+  },
+  "additionalProperties": true
+}

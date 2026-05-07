@@ -1,0 +1,3 @@
+{"timestamp":"2026-04-29T11:00:00Z","level":"ERROR","message":"Database connection failed","request_path":"/api/orders"}
+{"timestamp":"2026-04-29T11:02:00Z","status_code":502,"request_path":"/api/orders","message":"upstream error"}
+{"message":"ok"}

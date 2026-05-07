@@ -1,0 +1,108 @@
+{
+  "project_key": "landingpage",
+  "project_summary": "Landingpage project for analysis tests.",
+  "static_asset_paths": ["/favicon.ico", "/robots.txt", "/sitemap.xml"],
+  "static_asset_extensions": [
+    ".css",
+    ".js",
+    ".map",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".svg",
+    ".webp",
+    ".ico",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".txt",
+    ".xml"
+  ],
+  "sources": [
+    {
+      "source_key": "backend",
+      "source_type": "file",
+      "target": "landingpage/backend.log",
+      "description": "Backend logs.",
+      "required": true,
+      "parser_type": "json_lines",
+      "normalization_profile": "app_logs",
+      "retention_class": "short",
+      "default_noise_profile": "backend_noise",
+      "inspect_path_prefixes": []
+    },
+    {
+      "source_key": "nginx",
+      "source_type": "file",
+      "target": "landingpage/nginx.log",
+      "description": "Nginx logs.",
+      "required": true,
+      "parser_type": "json_lines",
+      "normalization_profile": "web_logs",
+      "retention_class": "short",
+      "default_noise_profile": "web_noise",
+      "inspect_path_prefixes": []
+    },
+    {
+      "source_key": "app_file",
+      "source_type": "file",
+      "target": "landingpage/app_file.log",
+      "description": "File-backed application logs.",
+      "required": true,
+      "parser_type": "json_lines",
+      "normalization_profile": "app_logs",
+      "retention_class": "short",
+      "default_noise_profile": "app_noise",
+      "inspect_path_prefixes": []
+    },
+    {
+      "source_key": "app_first",
+      "source_type": "file",
+      "target": "landingpage/first.log",
+      "description": "First file-backed application logs.",
+      "required": true,
+      "parser_type": "plain_text",
+      "normalization_profile": "app_logs",
+      "retention_class": "short",
+      "default_noise_profile": "app_noise",
+      "inspect_path_prefixes": []
+    },
+    {
+      "source_key": "app_second",
+      "source_type": "file",
+      "target": "landingpage/second.log",
+      "description": "Second file-backed application logs.",
+      "required": true,
+      "parser_type": "plain_text",
+      "normalization_profile": "app_logs",
+      "retention_class": "short",
+      "default_noise_profile": "app_noise",
+      "inspect_path_prefixes": []
+    },
+    {
+      "source_key": "snapshot_text",
+      "source_type": "file",
+      "target": "landingpage/snapshot_text.log",
+      "description": "Plain text log fixture for snapshot read and grep tests.",
+      "required": true,
+      "parser_type": "plain_text",
+      "normalization_profile": "app_logs",
+      "retention_class": "short",
+      "default_noise_profile": "app_noise",
+      "inspect_path_prefixes": []
+    },
+    {
+      "source_key": "traefik",
+      "source_type": "file",
+      "target": "landingpage/traefik.log",
+      "description": "Traefik edge and routing logs for parsing tests.",
+      "required": true,
+      "parser_type": "json_lines",
+      "normalization_profile": "proxy_access",
+      "retention_class": "short",
+      "default_noise_profile": "proxy_noise",
+      "inspect_path_prefixes": []
+    }
+  ]
+}

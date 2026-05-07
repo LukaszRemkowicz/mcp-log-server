@@ -1,0 +1,92 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: debug-statements
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ["--settings-path", "pyproject.toml"]
+
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        args: ["--config", "pyproject.toml"]
+        language_version: python3.13
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
+    hooks:
+      - id: ruff-check
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: env UV_CACHE_DIR=/tmp/mcp-log-server-uv-cache uv run mypy --explicit-package-bases src
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
+
+      - id: safety
+        name: safety
+        entry: >-
+          env UV_CACHE_DIR=/tmp/mcp-log-server-uv-cache
+          bash -c 'if [ -z "${SAFETY_API_KEY:-}" ] && [ -x /usr/bin/security ]; then
+          export SAFETY_API_KEY="$(/usr/bin/security find-generic-password -s SAFETY_API_KEY -w 2>/dev/null)";
+          fi &&
+          if [ -z "${SAFETY_API_KEY:-}" ]; then
+            echo "SAFETY_API_KEY is required for the safety pre-commit hook. Set it in your shell or store it in macOS Keychain as SAFETY_API_KEY." >&2;
+            exit 1;
+          fi &&
+
+          trap cleanup EXIT &&
+          uv run safety --stage cicd scan --target .'
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock)$
+        always_run: false
+        stages: [pre-commit]
+
+      - id: pip-audit
+        name: pip-audit
+        entry: >-
+          env UV_CACHE_DIR=/tmp/mcp-log-server-uv-cache
+          bash -c 'requirements_file="$(mktemp)" &&
+          cleanup() { rm -f "$requirements_file"; } &&
+          trap cleanup EXIT &&
+          uv export --no-hashes > "$requirements_file" &&
+          grep -v "^pip==" "$requirements_file" > "$requirements_file.filtered" &&
+          mv "$requirements_file.filtered" "$requirements_file" &&
+          uv run pip-audit -r "$requirements_file" --no-deps --disable-pip'
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock)$
+        always_run: false
+        stages: [pre-commit]
+
+      - id: pytest-pre-commit
+        name: pytest (pre-commit)
+        entry: env UV_CACHE_DIR=/tmp/mcp-log-server-uv-cache uv run pytest
+        language: system
+        pass_filenames: false
+        files: ^(src/|pyproject\.toml|uv\.lock)$
+        stages: [pre-commit]
+
+      - id: pytest-pre-push
+        name: pytest (pre-push)
+        entry: env UV_CACHE_DIR=/tmp/mcp-log-server-uv-cache uv run pytest
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

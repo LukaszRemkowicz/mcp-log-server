@@ -1,0 +1,29 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    volumes:
+      - ./src:/app/src
+      - ${LOGS_DIR_HOST:-./logs}:${DOCKER_LOGS_DIR:-/app/logs}
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      DOCKER_LOGS_DIR: ${DOCKER_LOGS_DIR:-/app/logs}
+      HOST: 0.0.0.0
+      PYTHONPATH: /app/src
+    ports:
+      - "8001:8001"
+    command: ["uv", "run", "watchfiles", "--filter", "all", "python -m main", "/app/src"]
+
+  tests:
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+    volumes:
+      - ./src:/app/src
+      - ./logs:/app/logs
+    environment:
+      DOCKER_LOGS_DIR: /app/logs
+      HOST: 0.0.0.0
+      PYTHONPATH: /app/src
+    command: ["uv", "run", "pytest"]
