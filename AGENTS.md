@@ -17,7 +17,7 @@ truth. For broader direction, also read:
 - `README.md`
 - `infra/docs/current_project_state.md`
 - `infra/docs/repository_foundation.md`
-- `infra/docs/NEW/mcp_log_server_architecture.md`
+- `infra/docs/analysis/mcp_log_server_architecture.md`
 
 
 ## Short Project Summary
@@ -307,9 +307,9 @@ Current auth state:
 Use these docs when a task touches near-term design work that is not yet fully
 implemented:
 
-- `infra/docs/NEW/mcp_log_server_architecture.md`
+- `infra/docs/analysis/mcp_log_server_architecture.md`
   broader MCP server implementation direction
-- `infra/docs/NEW/log_search_and_large_log_handling.md`
+- `infra/docs/analysis/log_search_and_large_log_handling.md`
   planned direction for adding log-search arguments to `collect_logs` and for
   handling large log payloads without relying on unbounded in-memory responses
 

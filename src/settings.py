@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import quote
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -50,6 +51,11 @@ class Settings(BaseSettings):
     MCP_PATH: str = "/mcp"
     MCP_STATELESS_HTTP: bool = True
     MCP_JSON_RESPONSE: bool = True
+    DATABASE_HOST: str = "127.0.0.1"
+    DATABASE_PORT: int = 5432
+    DATABASE_NAME: str = "mcp_log_server"
+    DATABASE_USER: str = "mcp_log_server"
+    DATABASE_PASSWORD: str = "mcp-log-server-local-password"
 
     def model_post_init(self, __context: object) -> None:
         """Normalize relative repository paths after settings load."""
@@ -95,6 +101,17 @@ class Settings(BaseSettings):
         """Return the root used for relative file-backed source targets."""
 
         return self.FILE_SOURCE_ROOT or self.MANIFEST_PATH.parent / "logs"
+
+    @property
+    def database_dsn(self) -> str:
+        """Return the Postgres connection DSN for database clients."""
+
+        username = quote(self.DATABASE_USER, safe="")
+        password = quote(self.DATABASE_PASSWORD, safe="")
+        database = quote(self.DATABASE_NAME, safe="")
+        return (
+            f"postgres://{username}:{password}@{self.DATABASE_HOST}:{self.DATABASE_PORT}/{database}"
+        )
 
     @staticmethod
     def _resolve_repo_path(path: Path) -> Path:

@@ -61,7 +61,7 @@ docker-compose.yml
 docker-compose.prod.yml
 infra/docs/
   current_project_state.md
-  NEW/
+  analysis/
   repository_foundation.md
 ```
 
@@ -89,6 +89,12 @@ Production-required secrets/config:
 - `MCP_PATH`
 - `MCP_STATELESS_HTTP`
 - `MCP_JSON_RESPONSE`
+- `DATABASE_HOST`
+- `DATABASE_PORT`
+- `DATABASE_NAME`
+- `DATABASE_USER`
+- `DATABASE_PASSWORD`
+- `TAG`
 
 Production-recommended runtime config:
 
@@ -97,6 +103,7 @@ Production-recommended runtime config:
 - `JWT_ALGORITHM`
 - `JWT_EXPIRATION_SECONDS`
 - `FILE_SOURCE_ROOT` when manifests use relative `file` source targets
+- `MCP_PORT_HOST` when the host-side MCP port should differ from `8001`
 
 Local development defaults:
 
@@ -104,6 +111,77 @@ Local development defaults:
 - local development can run without explicitly setting every variable
 - production should not rely on the built-in JWT defaults, especially
   `JWT_SHARED_SECRET=change-me-local-dev-secret`
+
+### Database Runtime Configuration
+
+Phase 4a adds only the database runtime. ORM setup, models, migrations, and
+service integration are intentionally deferred to later Phase 4 subphases.
+
+- `DATABASE_HOST`
+  Database host used by app code.
+  Default: `127.0.0.1`
+
+  Docker Compose injects `db` for app/test containers so they connect over the
+  Compose network.
+
+- `DATABASE_PORT`
+  Database port used by app code.
+  Default: `5432`
+
+- `DATABASE_PORT_HOST`
+  Host port exposed by the local Compose `db` service.
+  Default: `5432`
+
+- `DATABASE_NAME`
+  PostgreSQL database name.
+  Default: `mcp_log_server`
+
+- `DATABASE_USER`
+  PostgreSQL application user.
+  Default: `mcp_log_server`
+
+- `DATABASE_PASSWORD`
+  PostgreSQL application password.
+  Default: `mcp-log-server-local-password`
+
+The Compose files run PostgreSQL through the official `postgres:18` image.
+Database files are stored in the named `postgres-data` Docker volume, so data
+persists when containers are recreated.
+
+The local Compose file uses a plain local build without an explicit app image
+tag. Production uses the same landingpage-style contract as
+`${ENVIRONMENT}-mcp-log-server:${TAG}`; set `ENVIRONMENT=prod` and a release
+`TAG` for production runs.
+
+Host port bindings are loopback-only to keep the MCP stack safe beside
+`landingpage` on the same VPS:
+
+- MCP HTTP: `127.0.0.1:${MCP_PORT_HOST:-8001}->8001`
+- MCP local Postgres: `127.0.0.1:${DATABASE_PORT_HOST:-5437}->5432`
+
+Inside Docker, services should use service DNS names such as `db`, not static
+container IP addresses. Cross-repository integration should later use an
+explicit shared network or reverse-proxy route rather than hard-coded Docker
+IPs.
+
+Start the local database and app together:
+
+```bash
+doppler run -- docker compose up --build
+```
+
+Start only the local database:
+
+```bash
+doppler run -- docker compose up -d db
+```
+
+Reset local database data:
+
+```bash
+doppler run -- docker compose down --volumes
+doppler run -- docker compose up -d db
+```
 
 ### Auth Configuration
 
@@ -307,6 +385,9 @@ The `app` service mounts `./src` into the container and reloads automatically
 when files under `src/` change, including copied workflow assets such as
 prompts, skills, schemas, and examples.
 
+The local Compose stack also starts a `db` service and stores its data in the
+named `postgres-data` volume.
+
 For a production-like container run without bind mounts or file watching, use
 the dedicated production compose file:
 
@@ -316,7 +397,7 @@ doppler run -- docker compose -f docker-compose.prod.yml up --build -d
 
 Production compose differences:
 
-- runs only the `app` service
+- runs the `app` and `db` services
 - does not mount the local source tree
 - does not use `watchfiles`
 - starts the server with `uv run python -m main`

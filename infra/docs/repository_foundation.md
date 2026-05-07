@@ -31,7 +31,7 @@ This repository does not yet include:
 - `pyproject.toml`
 - `.env.example`
 - `infra/docs/current_project_state.md`
-- `infra/docs/NEW/mcp_log_server_architecture.md`
+- `infra/docs/analysis/mcp_log_server_architecture.md`
 - `docker-compose.yml`
 - `docker/app/Dockerfile`
 - `src/`
@@ -42,7 +42,7 @@ This repository does not yet include:
 - stable application skeleton: yes
 - phase 1 ready: yes
 - clear current project reference: yes, in `infra/docs/current_project_state.md`
-- planning/development direction retained separately: yes, in `infra/docs/NEW/mcp_log_server_architecture.md`
+- planning/development direction retained separately: yes, in `infra/docs/analysis/mcp_log_server_architecture.md`
 - Docker-first local runtime: yes
 - source manifest contract: yes
 - FastMCP JWT verification with per-request component auth: yes

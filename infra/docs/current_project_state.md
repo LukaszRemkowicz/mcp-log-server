@@ -13,7 +13,7 @@ Use it as the stable project-facing reference for:
 - current workflow flow
 - current local and production Docker paths
 
-This is different from `infra/docs/NEW/mcp_log_server_architecture.md`, which
+This is different from `infra/docs/analysis/mcp_log_server_architecture.md`, which
 should be treated as a development/planning document for future direction.
 
 ## Current Repository Role
@@ -51,6 +51,7 @@ Phase 1 currently covers:
 - workflow bootstrap through `analyze_daily_log_bundle`
 - on-demand workflow skill resources
 - local Docker development and production compose paths
+- local PostgreSQL runtime wiring for the Phase 4a database foundation
 - HTTP integration tests and in-memory FastMCP client tests
 
 Phase 2 should focus on deterministic collector-style data tools rather than
@@ -171,7 +172,12 @@ Characteristics:
 
 - bind-mounts `./src`
 - uses `watchfiles`
-- includes `app` and `tests` services
+- includes `app`, `db`, and `tests` services
+- uses the official `postgres:18` image for the `db` service
+- persists local database data in the named `postgres-data` Docker volume
+- binds published service ports to `127.0.0.1` to avoid VPS-wide port exposure
+- uses host port `5437` for local MCP Postgres by default, leaving
+  `landingpage`'s local `5436` binding separate
 
 ### Production Compose
 
@@ -181,7 +187,10 @@ Characteristics:
 
 - no bind mounts
 - no file watching
-- runs only the `app` service
+- runs `app` and `db` services
+- uses the official `postgres:18` image for the `db` service
+- persists database data in the named `postgres-data` Docker volume
+- binds the MCP HTTP host port to `127.0.0.1`
 - starts with `uv run python -m main`
 
 ## Current CI Test Path
@@ -215,5 +224,5 @@ Use these docs with the following intent:
   stable current-state reference
 - `infra/docs/repository_foundation.md`
   what the repository foundation delivered
-- `infra/docs/NEW/mcp_log_server_architecture.md`
+- `infra/docs/analysis/mcp_log_server_architecture.md`
   development/planning direction, not the primary current-state document
