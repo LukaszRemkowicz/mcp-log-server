@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from conf import settings
 from manifests.loader import load_project_manifest
-from manifests.models import SourceDefinition, SourceManifest
+from manifests.models import Manifest, SourceDefinition
 from tools.models import ProjectManifestList, ProjectManifestSummary
 
 
@@ -17,7 +17,7 @@ from tools.models import ProjectManifestList, ProjectManifestSummary
 class ProjectManifestContext:
     """Loaded manifest plus the project name used to resolve it."""
 
-    manifest: SourceManifest
+    manifest: Manifest
     project_name: str
 
 
@@ -129,7 +129,7 @@ class ProjectManifestService:
 
     @staticmethod
     def get_manifest_source_keys(
-        manifest: SourceManifest,
+        manifest: Manifest,
         source_keys: list[str] | None,
     ) -> ManifestSources:
         """Resolve requested source keys against one manifest.
@@ -163,7 +163,7 @@ class ProjectManifestService:
 
     @staticmethod
     def get_container_source(
-        manifest: SourceManifest,
+        manifest: Manifest,
         source_key: str,
     ) -> SourceDefinition:
         """Return one docker source that is enabled for container inspection.
@@ -187,7 +187,7 @@ class ProjectManifestService:
 
     def get_container_source_or_error(
         self,
-        manifest: SourceManifest,
+        manifest: Manifest,
         source_key: str,
     ) -> SourceDefinition | ProjectManifestError:
         """Return one container-inspection source or a structured lookup error."""

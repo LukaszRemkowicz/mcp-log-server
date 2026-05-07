@@ -130,6 +130,11 @@ Important collection response note:
 - `tail_lines` is optional; if omitted, agents get a warning that full source
   output may be slow or large
 - `DOCKER_LOGS_DIR` is treated as a logs root, not a flat one-run output path
+- manifests and file-backed source logs are separate:
+  - `MANIFEST_PATH` points to project manifest JSON files
+  - relative manifest `file` source targets resolve under `FILE_SOURCE_ROOT`
+  - if `FILE_SOURCE_ROOT` is omitted, it defaults to the sibling `logs/`
+    directory next to `MANIFEST_PATH`
 - the current on-disk layout is:
   - `<DOCKER_LOGS_DIR>/<project_key>/latest/...`
   - `<DOCKER_LOGS_DIR>/<project_key>/archive/<timestamp>/...`
@@ -150,7 +155,7 @@ This is a development-ready JWT flow, not a final Keycloak production rollout.
 
 The current bundled sample manifest is:
 
-- `src/manifests/landingpage.json`
+- `src/manifests/projects/landingpage.json`
 
 This is runtime project inventory/config for future collector-style tools.
 

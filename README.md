@@ -19,10 +19,9 @@ Current repository foundation:
 This repo does not yet implement real log collection parity with the existing
 collector.
 
-The repository now includes a sample source manifest at
-`src/manifests/landingpage.json`. This manifest is the project
-inventory/config
-that later collection tools will consume after authorization selects the
+The repository now includes project source manifests under
+`src/manifests/projects/`. These manifests are the project inventory/config
+that later collection tools consume after authorization selects the
 project/resources.
 
 The repository also now includes a copied MCP-owned monitoring asset bundle
@@ -97,6 +96,7 @@ Production-recommended runtime config:
 - `LOG_FORMAT`
 - `JWT_ALGORITHM`
 - `JWT_EXPIRATION_SECONDS`
+- `FILE_SOURCE_ROOT` when manifests use relative `file` source targets
 
 Local development defaults:
 
@@ -243,17 +243,28 @@ LOG_LEVEL=DEBUG LOG_FORMAT=text doppler run -- docker compose up --build
 These variables control how the local FastMCP HTTP server starts.
 
 - `MANIFEST_PATH`
-  Path to the project source manifest file.
-  Default: `src/manifests/landingpage.json`
+  Path to the directory containing project source manifests.
+  Default: `src/manifests/projects`
 
   This is resolved relative to the repository root, so:
 
-  - `MANIFEST_PATH=src/manifests/landingpage.json`
-    resolves to `/app/src/manifests/landingpage.json` in Docker
+  - `MANIFEST_PATH=src/manifests/projects`
+    resolves to `/app/src/manifests/projects` in Docker
   - an absolute path is also allowed
 
   The manifest is the project inventory/config that later collector-style
   tools will use to know what sources exist for the selected project.
+
+- `FILE_SOURCE_ROOT`
+  Root path used only for relative `file` source targets inside manifests.
+  Default: sibling `logs/` directory next to `MANIFEST_PATH`.
+
+  Manifests and logs are intentionally separate:
+
+  - `MANIFEST_PATH` points at project manifest JSON files
+  - `FILE_SOURCE_ROOT` points at the filesystem root for file-backed log
+    sources
+  - absolute file source targets bypass `FILE_SOURCE_ROOT`
 
 - `MCP_PATH`
   HTTP path where the FastMCP endpoint is exposed.

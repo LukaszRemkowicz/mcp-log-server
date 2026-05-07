@@ -14,7 +14,7 @@ from requests import exceptions as requests_exceptions
 
 import docker
 from conf import settings
-from manifests.models import SourceDefinition, SourceManifest
+from manifests.models import Manifest, SourceDefinition
 from tools.agent_hints import COLLECT_LOGS_NEXT_STEP_TIPS
 from tools.models import (
     CollectedSourcePayload,
@@ -113,7 +113,7 @@ class LogCollectionService:
     def build_logs(
         self,
         *,
-        manifest: SourceManifest,
+        manifest: Manifest,
         sources: list[SourceDefinition],
         missing_source_keys: list[str],
         source_keys: list[str],
@@ -333,9 +333,38 @@ class LogCollectionService:
         *,
         output_file: Path,
     ) -> LogSnapshotFilePayload | CollectSourceError:
-        """Collect one file-backed source from the path declared in the manifest."""
+        """Collect one file-backed source declared by the manifest.
 
-        path = Path(definition.target)
+        Absolute targets are read as-is. Relative targets are resolved under
+        `FILE_SOURCE_ROOT`, not under the manifest directory, because manifests
+        describe sources but do not own the log files themselves.
+        """
+
+        target_path = Path(definition.target)
+        path = target_path if target_path.is_absolute() else settings.file_source_root / target_path
+        if not target_path.is_absolute():
+            try:
+                path.resolve(strict=False).relative_to(settings.file_source_root.resolve())
+            except ValueError:
+                return CollectSourceError(
+                    source_key=definition.source_key,
+                    source_type=definition.source_type,
+                    target=definition.target,
+                    description=definition.description,
+                    stream=definition.stream,
+                    parser_type=definition.parser_type,
+                    normalization_profile=definition.normalization_profile,
+                    default_noise_profile=definition.default_noise_profile,
+                    error=(
+                        "Relative file source resolves outside the configured file source root."
+                    ),
+                    retry_tips=[
+                        (
+                            "Use a clean relative path inside FILE_SOURCE_ROOT or "
+                            "an explicit absolute path."
+                        )
+                    ],
+                )
         if not path.exists():
             return CollectSourceError(
                 source_key=definition.source_key,

@@ -106,7 +106,7 @@ export WORKFLOW_AGENT_JWT
   cd "$REPO_ROOT/src"
   PORT="$PORT" \
   HOST="$HOST" \
-  MANIFEST_PATH="$MANIFESTS_DIR/landingpage.json" \
+  MANIFEST_PATH="$MANIFESTS_DIR" \
   DOCKER_LOGS_DIR="$LOGS_DIR" \
   uv run python -m main >"$SERVER_LOG" 2>&1
 ) &

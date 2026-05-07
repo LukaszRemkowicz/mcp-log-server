@@ -1,27 +1,31 @@
 from __future__ import annotations
 
-import pytest
-from fastmcp.server.auth import AccessToken
+from pathlib import Path
 
-from settings import Settings
-from tools.errors import build_container_file_error_details, classify_container_file_error
+import pytest
+
+from tests.conftest import override_settings
+from tools.errors import (
+    build_container_inspection_error_details,
+    classify_container_inspection_error,
+)
 
 
 @pytest.mark.parametrize(
     ("message", "expected_error_code", "expected_retry_tips"),
     [
         (
-            "JWT is missing the required project_key claim.",
-            "missing_project_key_claim",
+            "Authenticated access token must include allowed_projects, or projects_access='all'.",
+            "missing_project_access_claim",
             [
-                "Retry with a JWT that includes the project_key claim for the monitored project.",
+                ("Retry with a JWT that includes allowed_projects, or projects_access='all'."),
             ],
         ),
         (
             "Requested project is not authorized by the access token.",
             "project_access_mismatch",
             [
-                "Retry with project_name equal to the project_key authorized by the current JWT.",
+                "Retry with project_name allowed by the current JWT project access rules.",
             ],
         ),
         (
@@ -94,12 +98,12 @@ from tools.errors import build_container_file_error_details, classify_container_
         ),
     ],
 )
-def test_classify_container_file_error_returns_expected_mapping(
+def test_classify_container_inspection_error_returns_expected_mapping(
     message: str,
     expected_error_code: str,
     expected_retry_tips: list[str],
 ) -> None:
-    error_code, retry_tips = classify_container_file_error(message)
+    error_code, retry_tips = classify_container_inspection_error(message)
 
     assert error_code == expected_error_code
     assert retry_tips == expected_retry_tips
@@ -119,10 +123,7 @@ def test_classify_container_file_error_returns_expected_mapping(
             "wrong-project",
             "backend",
             "/app/missing.py",
-            {
-                "requested_project_name": "wrong-project",
-                "authorized_project_name": "landingpage",
-            },
+            {"requested_project_name": "wrong-project"},
         ),
         (
             "unknown_project",
@@ -205,34 +206,27 @@ def test_classify_container_file_error_returns_expected_mapping(
         ),
     ],
 )
-def test_build_container_file_error_details_returns_expected_details(
-    settings_fixture: Settings,
+def test_build_container_inspection_error_details_returns_expected_details(
+    tmp_path: Path,
     error_code: str,
     requested_project_name: str,
     source_key: str,
     path: str,
-    expected_details: dict[str, str] | None,
+    expected_details: dict[str, str | None] | None,
 ) -> None:
-    settings = settings_fixture.model_copy(
-        update={"MANIFEST_PATH": settings_fixture.MANIFEST_PATH.parent / "landingpage.json"}
-    )
-    access_token = AccessToken(
-        token="codex-dev-token",
-        client_id="codex-agent",
-        scopes=["container.files.read"],
-        claims={"sub": "codex-agent", "project_key": "landingpage"},
-    )
+    manifest_path = tmp_path / "landingpage.json"
+    manifest_path.write_text("{}", encoding="utf-8")
 
-    details = build_container_file_error_details(
-        error_code=error_code,
-        requested_project_name=requested_project_name,
-        source_key=source_key,
-        path=path,
-        access_token=access_token,
-        settings=settings,
-    )
+    with override_settings(MANIFEST_PATH=manifest_path.parent) as effective_settings:
+        details = build_container_inspection_error_details(
+            error_code=error_code,
+            requested_project_name=requested_project_name,
+            source_key=source_key,
+            path=path,
+            settings=effective_settings,
+        )
 
     if error_code == "manifest_project_mismatch":
-        assert details == {"manifests_dir": str(settings_fixture.MANIFEST_PATH.parent)}
+        assert details == {"manifests_dir": str(effective_settings.MANIFEST_PATH)}
     else:
         assert details == expected_details

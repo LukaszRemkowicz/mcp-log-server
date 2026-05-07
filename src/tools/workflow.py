@@ -44,6 +44,7 @@ from fastmcp.tools.base import ToolResult
 
 from app import mcp, register_mcp_components
 from auth.scopes import WORKFLOW_BOOTSTRAP_SCOPE
+from decorators import list_workflow_discoverable_tool_registrations
 from dependencies import get_workflow_asset_loader
 from logging_config import get_logger
 from prompts.workflow import build_daily_log_prompt
@@ -52,7 +53,6 @@ from skills.workflow import (
     list_mandatory_workflow_skill_definitions,
     list_optional_workflow_skill_definitions,
 )
-from tools.registry import list_workflow_discoverable_tool_registrations
 from utils.assets import WorkflowAssetLoader
 
 logger: logging.Logger = get_logger("tools.workflow")
