@@ -41,27 +41,22 @@ Current persistence note:
 - when database-backed services are implemented, filesystem metadata must remain
   in place until a later explicit migration removes it as a source of truth
 
-## Phase Status
+## Implementation Status
 
-Phase 1 is ready.
-
-Phase 4a database foundation is complete.
-
-Phase 1 currently covers:
+The repository currently includes:
 
 - FastMCP application skeleton
 - JWT-protected per-request tool/resource access
 - workflow bootstrap through `analyze_daily_log_bundle`
 - on-demand workflow skill resources
 - local Docker development and production compose paths
-- local PostgreSQL runtime wiring for the Phase 4a database foundation
-- Tortoise ORM and Aerich migration configuration for database metadata models
+- local PostgreSQL runtime wiring
+- Tortoise ORM and Aerich migration configuration
 - initial database migration generated through the local `uv run makemigrations`
   alias
+- backup and restore scripts for the local/prod metadata database
+- prod build/deploy scripts following the landingpage release-script shape
 - HTTP integration tests and in-memory FastMCP client tests
-
-Phase 2 should focus on deterministic collector-style data tools rather than
-further reshaping the workflow bootstrap surface.
 
 Current next-step note:
 

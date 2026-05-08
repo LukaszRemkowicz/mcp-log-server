@@ -6,6 +6,9 @@ inspection.
 This repository is the implementation home for the MCP server described in
 [infra/docs/current_project_state.md](infra/docs/current_project_state.md).
 
+Operational database backup/restore and prod build/deploy scripts are documented
+in [infra/scripts/README.md](infra/scripts/README.md).
+
 ## Current Status
 
 Current repository foundation:
@@ -63,6 +66,10 @@ infra/docs/
   current_project_state.md
   analysis/
   repository_foundation.md
+infra/scripts/
+  README.md
+  db_backup/
+  release/
 ```
 
 ## Local Development
@@ -235,6 +242,50 @@ uv run migrate
 Review generated files under `migrations/` before committing them. Production
 deployments should apply already-committed migrations with `aerich upgrade`;
 they should not generate new migration files on the server.
+
+### Database Backup, Restore, Build, And Deploy
+
+Operational scripts live in [infra/scripts/](/Users/lukaszremkowicz/Projects/mcp-log-server/infra/scripts/README.md:1).
+They support only `local` and `prod`; this repository does not have a staging
+environment.
+
+Create a local database backup:
+
+```bash
+ENVIRONMENT=local infra/scripts/db_backup/backup_db.sh
+```
+
+Restore a local database backup:
+
+```bash
+ENVIRONMENT=local infra/scripts/db_backup/restore_db.sh .agent/backups/db/local/<backup>.dump
+```
+
+Build the tagged production image:
+
+```bash
+TAG=v1.2.3 infra/scripts/release/build.sh
+```
+
+The build script refuses to build with uncommitted changes unless
+`EMERGENCY=true` is set.
+
+Deploy the already-built production image:
+
+```bash
+TAG=v1.2.3 infra/scripts/release/deploy.sh
+```
+
+For build and deploy, `TAG` may be provided through the environment. If it is
+omitted, the scripts use the exact Git tag checked out in the working tree.
+
+The deploy script verifies the local image, creates a DB backup by default,
+applies committed migrations with `uv run migrate`, starts the app service, and
+checks that the app accepts TCP connections inside the container. It asks for
+confirmation before mutating the target stack unless `AUTO_APPROVE=true`, and
+starts the app with `--force-recreate` so the selected image is rerun. Use
+`SKIP_BACKUP=true` or `SKIP_MIGRATE=true` only for an intentional
+operator-controlled run.
 
 ### Auth Configuration
 

@@ -18,6 +18,7 @@ truth. For broader direction, also read:
 - `infra/docs/current_project_state.md`
 - `infra/docs/repository_foundation.md`
 - `infra/docs/analysis/mcp_log_server_architecture.md`
+- `infra/scripts/README.md`
 
 
 ## Short Project Summary
@@ -45,6 +46,9 @@ Top-level directories:
   Docker image definition for the MCP app.
 - `infra/`
   Repository-level infra and foundation notes.
+- `infra/scripts/`
+  Operational scripts and runbook notes for database backup/restore,
+  production image builds, and production deploys.
 
 Important current Python files:
 
