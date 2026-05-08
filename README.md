@@ -114,8 +114,10 @@ Local development defaults:
 
 ### Database Runtime Configuration
 
-Phase 4a adds only the database runtime. ORM setup, models, migrations, and
-service integration are intentionally deferred to later Phase 4 subphases.
+The repository has local and production PostgreSQL runtime wiring, Tortoise ORM
+configuration, initial model definitions, and an initial database migration.
+Future migration files should be generated only after the related model changes
+are reviewed and approved.
 
 - `DATABASE_HOST`
   Database host used by app code.
@@ -130,7 +132,7 @@ service integration are intentionally deferred to later Phase 4 subphases.
 
 - `DATABASE_PORT_HOST`
   Host port exposed by the local Compose `db` service.
-  Default: `5432`
+  Default: `5437`
 
 - `DATABASE_NAME`
   PostgreSQL database name.
@@ -182,6 +184,57 @@ Reset local database data:
 doppler run -- docker compose down --volumes
 doppler run -- docker compose up -d db
 ```
+
+### ORM Configuration
+
+Tortoise ORM configuration lives in [src/database/config.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/database/config.py:1).
+Database models live in [src/database/models.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/database/models.py:1).
+Database startup/shutdown helpers live in [src/database/lifecycle.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/database/lifecycle.py:1).
+
+The migration tool is Aerich, configured in [pyproject.toml](/Users/lukaszremkowicz/Projects/mcp-log-server/pyproject.toml:62)
+with:
+
+```toml
+[project.scripts]
+makemigrations = "database.cli:makemigrations"
+migrate = "database.cli:migrate"
+
+[tool.aerich]
+tortoise_orm = "database.config.TORTOISE_ORM"
+location = "./migrations"
+src_folder = "./src"
+```
+
+Generate new migration files only after the related model structure has been
+reviewed and approved.
+
+After model approval, create and apply migrations from the repository root.
+For local host commands, the aliases default to the Compose-published database
+port `127.0.0.1:${DATABASE_PORT_HOST:-5437}` when `DATABASE_HOST` and
+`DATABASE_PORT` are not already set:
+
+```bash
+docker compose up -d db
+uv run makemigrations --name initial
+uv run migrate
+```
+
+`uv run makemigrations` delegates to `aerich migrate` and writes migration
+files. On the first run against a fresh database, it falls back to
+`aerich init-db` when Aerich reports that initialization is required.
+`uv run migrate` delegates to `aerich upgrade` and applies already generated
+migration files.
+
+For later model changes:
+
+```bash
+uv run makemigrations --name <short_name>
+uv run migrate
+```
+
+Review generated files under `migrations/` before committing them. Production
+deployments should apply already-committed migrations with `aerich upgrade`;
+they should not generate new migration files on the server.
 
 ### Auth Configuration
 

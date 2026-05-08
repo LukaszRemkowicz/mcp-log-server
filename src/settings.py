@@ -103,7 +103,7 @@ class Settings(BaseSettings):
         return self.FILE_SOURCE_ROOT or self.MANIFEST_PATH.parent / "logs"
 
     @property
-    def database_dsn(self) -> str:
+    def db(self) -> str:
         """Return the Postgres connection DSN for database clients."""
 
         username = quote(self.DATABASE_USER, safe="")

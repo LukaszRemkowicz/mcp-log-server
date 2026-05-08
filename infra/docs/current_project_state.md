@@ -36,13 +36,16 @@ Current persistence note:
 - workflow and session artifacts are still filesystem-backed
 - `snapshot_metadata.json` is a temporary filesystem metadata sidecar for the
   current non-database session implementation
-- when the planned database phase is implemented, that metadata should move
-  into relational rows and the filesystem should keep only the raw saved log
-  files
+- database model definitions and an initial migration now exist for future audit
+  and snapshot metadata rows, but services do not write those rows yet
+- when database-backed services are implemented, filesystem metadata must remain
+  in place until a later explicit migration removes it as a source of truth
 
 ## Phase Status
 
 Phase 1 is ready.
+
+Phase 4a database foundation is complete.
 
 Phase 1 currently covers:
 
@@ -52,6 +55,9 @@ Phase 1 currently covers:
 - on-demand workflow skill resources
 - local Docker development and production compose paths
 - local PostgreSQL runtime wiring for the Phase 4a database foundation
+- Tortoise ORM and Aerich migration configuration for database metadata models
+- initial database migration generated through the local `uv run makemigrations`
+  alias
 - HTTP integration tests and in-memory FastMCP client tests
 
 Phase 2 should focus on deterministic collector-style data tools rather than

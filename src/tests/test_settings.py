@@ -22,12 +22,12 @@ def test_settings_expose_database_defaults() -> None:
     assert settings.DATABASE_USER == "mcp_log_server"
     assert settings.DATABASE_PASSWORD == "mcp-log-server-local-password"
     assert (
-        settings.database_dsn
+        settings.db
         == "postgres://mcp_log_server:mcp-log-server-local-password@127.0.0.1:5432/mcp_log_server"
     )
 
 
-def test_database_dsn_escapes_credentials() -> None:
+def test_db_escapes_credentials() -> None:
     settings = Settings(
         DATABASE_HOST="db.internal",
         DATABASE_PORT=5433,
@@ -37,6 +37,6 @@ def test_database_dsn_escapes_credentials() -> None:
     )
 
     assert (
-        settings.database_dsn
+        settings.db
         == "postgres://mcp%20user:pass%2Fword%40local@db.internal:5433/mcp%20log%2Fserver"
     )
