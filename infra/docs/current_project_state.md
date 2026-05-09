@@ -36,8 +36,9 @@ Current persistence note:
 - workflow and session artifacts are still filesystem-backed
 - `snapshot_metadata.json` is a temporary filesystem metadata sidecar for the
   current non-database session implementation
-- database model definitions and an initial migration now exist for future audit
-  and snapshot metadata rows, but services do not write those rows yet
+- database model definitions and committed migrations now exist for audit rows,
+  manifest rows, and future collect-log snapshot metadata rows, but MCP services
+  do not write collect-log snapshot rows yet
 - database service modules now wrap ORM access for agent call and project
   manifest metadata, but MCP tools do not call them yet
 - when database-backed services are implemented, filesystem metadata must remain
@@ -54,11 +55,12 @@ The repository currently includes:
 - local Docker development and production compose paths
 - local PostgreSQL runtime wiring
 - Tortoise ORM and Aerich migration configuration
-- initial database migration generated through the local `uv run makemigrations`
-  alias
+- database migrations generated through the local `uv run makemigrations` alias
 - backup and restore scripts for the local/prod metadata database
 - prod build/deploy scripts following the landingpage release-script shape
 - database service modules for agent call and project manifest metadata
+- database models for agent calls, project manifests, collect-log artifacts, and
+  collect-log artifact sources
 - HTTP integration tests and in-memory FastMCP client tests
 
 Current next-step note:
@@ -66,6 +68,43 @@ Current next-step note:
 - an initial `collect_logs` tool now exists, so the next collection work should
   move toward snapshot inventory and retention rather than reworking the basic
   collection contract again.
+
+## Current Phase Status
+
+Phase tracking lives in
+`infra/docs/analysis/mcp_log_server_architecture.md`. This document records only
+the current implemented status.
+
+Completed Phase 4 database-integration subphases:
+
+- Phase 4a. Database Runtime
+  Local/prod Postgres runtime wiring, database settings, Compose services, and
+  persistent volumes are in place.
+- Phase 4b. ORM And Models
+  Tortoise ORM, Aerich migrations, database lifecycle wiring, and model modules
+  are in place. Current models include `AgentCall`, `ProjectManifest`,
+  `CollectLogs`, and `CollectLogsSource`.
+- Phase 4c. Backup And Restore Policy Scripts
+  Backup, restore, build, and deploy scripts are in place and documented.
+- Phase 4d. Database Services
+  Database service modules exist for agent call and project manifest metadata,
+  with DB-marked service tests running against Compose Postgres.
+
+Current Phase 4 boundary:
+
+- collect-log snapshot metadata models and migrations exist
+- real DB tests now prove `CollectLogs`, `CollectLogsSource`, enum fields, JSON
+  fields, relations, and custom `FileField` behavior against Postgres
+- `collect_logs`, snapshot read/grep, and analysis tools still use filesystem
+  metadata as their runtime source of truth
+- no MCP tool currently writes `CollectLogs` or `CollectLogsSource` rows
+
+Next approved phase when started:
+
+- Phase 4e. Service Integration
+  Wire `LogCollectionService` and `LogSnapshotService` to the database service
+  layer while keeping existing filesystem metadata readable during the
+  transition.
 
 ## Current MCP Surface
 

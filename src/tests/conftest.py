@@ -159,7 +159,10 @@ async def database_test_case(request: pytest.FixtureRequest) -> AsyncIterator[No
         await Tortoise._reset_apps()
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+def pytest_collection_modifyitems(
+    config: pytest.Config,  # noqa: ARG001 - pytest hook signature requires it.
+    items: list[pytest.Item],
+) -> None:
     """Pytest hook: attach database setup to db tests and run them last."""
 
     db_items: list[pytest.Item] = []

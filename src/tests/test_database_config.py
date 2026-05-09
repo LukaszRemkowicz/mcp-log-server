@@ -3,14 +3,25 @@
 from __future__ import annotations
 
 import subprocess
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from pytest_mock import MockerFixture
 
 import database.cli as database_cli
 import database.config as database_config
-from database.models import AgentCall, ProjectManifest
+from database.fields import FileField
+from database.models import (
+    AgentCall,
+    AgentCallEvent,
+    CollectLogs,
+    CollectLogsSource,
+    CollectLogsSourceStatus,
+    LogSourceType,
+    LogStream,
+    LogWorkspace,
+    ProjectManifest,
+)
 from tests.conftest import override_settings
 
 
@@ -216,12 +227,87 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
         AgentCall._meta.fields_map["workspace"].description
         == "Agent workspace for the call, currently either 'session' or 'workflow'."
     )
+    assert cast(Any, AgentCall._meta.fields_map["workspace"]).enum_type is LogWorkspace
+    assert cast(Any, AgentCall._meta.fields_map["event"]).enum_type is AgentCallEvent
     assert (
         AgentCall._meta.fields_map["uri"].description
         == "MCP resource URI when event records a resource read, such as a workflow skill URI."
     )
     assert AgentCall.objects is not None
     assert AgentCall.objects._model is AgentCall
+
+    assert CollectLogs.Meta.table == "collect_logs"
+    collect_logs_fields = set(CollectLogs._meta.fields_map)
+    collect_logs_fields.discard("sources")
+    assert collect_logs_fields == {
+        "id",
+        "created_at",
+        "session_id",
+        "workspace",
+        "project_name",
+        "collected_at",
+        "snapshot_dir",
+        "metadata_file",
+        "archive_name",
+        "is_latest",
+        "requested_source_keys",
+        "resolved_source_keys",
+        "unknown_requested_source_keys",
+        "requested_since",
+        "requested_until",
+        "warnings",
+        "retry_tips",
+    }
+    assert cast(Any, CollectLogs._meta.fields_map["workspace"]).enum_type is LogWorkspace
+    assert (
+        CollectLogs._meta.fields_map["snapshot_dir"].description
+        == "Persisted snapshot directory path under the logs root."
+    )
+    assert isinstance(CollectLogs._meta.fields_map["metadata_file"], FileField)
+    assert (
+        CollectLogs._meta.fields_map["archive_name"].description
+        == "Workflow archive name when this workflow artifact is archived."
+    )
+    assert CollectLogs.objects is not None
+    assert CollectLogs.objects._model is CollectLogs
+
+    assert CollectLogsSource.Meta.table == "collect_logs_sources"
+    collect_logs_source_fields = set(CollectLogsSource._meta.fields_map)
+    collect_logs_source_fields.discard("collect_logs_id")
+    assert collect_logs_source_fields == {
+        "id",
+        "created_at",
+        "collect_logs",
+        "source_key",
+        "source_type",
+        "target",
+        "description",
+        "stream",
+        "parser_type",
+        "normalization_profile",
+        "default_noise_profile",
+        "status",
+        "file",
+        "line_count",
+        "error",
+        "retry_tips",
+    }
+    assert cast(Any, CollectLogsSource._meta.fields_map["source_type"]).enum_type is LogSourceType
+    assert cast(Any, CollectLogsSource._meta.fields_map["stream"]).enum_type is LogStream
+    assert (
+        cast(Any, CollectLogsSource._meta.fields_map["status"]).enum_type is CollectLogsSourceStatus
+    )
+    assert (
+        CollectLogsSource._meta.fields_map["collect_logs"].description
+        == "Parent collect_logs artifact this source file belongs to."
+    )
+    assert (
+        CollectLogsSource._meta.fields_map["file"].description
+        == "Persisted source file path under logs root, when collection succeeded."
+    )
+    assert isinstance(CollectLogsSource._meta.fields_map["file"], FileField)
+    assert CollectLogsSource.objects is not None
+    assert CollectLogsSource.objects._model is CollectLogsSource
 
     assert ProjectManifest.Meta.table == "project_manifests"
     assert set(ProjectManifest._meta.fields_map) == {
@@ -245,6 +331,7 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
     assert ProjectManifest.objects is not None
     assert ProjectManifest.objects._model is ProjectManifest
     assert AgentCall.objects is not ProjectManifest.objects
+    assert CollectLogs.objects is not CollectLogsSource.objects
 
 
 @pytest.mark.anyio

@@ -7,6 +7,7 @@ call Tortoise class methods such as ``ProjectManifest.get(...)`` directly.
 
 from __future__ import annotations
 
+from typing import ClassVar
 from uuid import UUID, uuid4
 
 from database.models import ProjectManifest
@@ -17,8 +18,10 @@ from manifests.models import Manifest
 class ProjectManifestService:
     """Wrap ORM access for project manifest metadata rows."""
 
-    @staticmethod
+    model: ClassVar[type[ProjectManifest]] = ProjectManifest
+
     async def create_or_update(
+        self,
         manifest: Manifest,
         *,
         pk: UUID | None = None,
@@ -28,11 +31,13 @@ class ProjectManifestService:
         payload = manifest.model_dump(mode="json")
         payload["id"] = pk or uuid4()
         payload["sources"] = [source.model_dump(mode="json") for source in manifest.sources]
-        existing = await ProjectManifest.objects.filter(project_key=manifest.project_key).first()
+        existing = await self.model.objects.filter(
+            project_key=manifest.project_key,
+        ).first()
         if existing is None:
-            return await ProjectManifest.objects.create(**payload)
+            return await self.model.objects.create(**payload)
 
-        return await ProjectManifestService.update(
+        return await self.update(
             ProjectManifestUpdate(
                 pk=existing.id,
                 project_summary=manifest.project_summary,
@@ -42,23 +47,20 @@ class ProjectManifestService:
             )
         )
 
-    @staticmethod
-    async def get(project_key: str) -> ProjectManifest:
+    async def get(self, project_key: str) -> ProjectManifest:
         """Return one persisted project manifest by project key."""
 
-        return await ProjectManifest.objects.get(project_key=project_key)
+        return await self.model.objects.get(project_key=project_key)
 
-    @staticmethod
-    async def all() -> list[ProjectManifest]:
+    async def all(self) -> list[ProjectManifest]:
         """Return all persisted project manifests ordered by project key."""
 
-        return await ProjectManifest.objects.all().order_by("project_key")
+        return await self.model.objects.all().order_by("project_key")
 
-    @staticmethod
-    async def update(payload: ProjectManifestUpdate) -> ProjectManifest:
+    async def update(self, payload: ProjectManifestUpdate) -> ProjectManifest:
         """Update one project manifest row with the provided metadata fields."""
 
-        row = await ProjectManifest.objects.get(id=payload.pk)
+        row = await self.model.objects.get(id=payload.pk)
         context = payload.model_dump(exclude={"pk"}, exclude_none=True)
         for field_name, field_value in context.items():
             setattr(row, field_name, field_value)
