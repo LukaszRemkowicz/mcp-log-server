@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -10,20 +11,27 @@ from tools.collection import collect_logs
 from tools.snapshots import grep_log_snapshot, list_log_snapshot_files, read_log_snapshot_file
 
 
+def _run(coro):
+    return asyncio.run(coro)
+
+
 def test_list_read_and_grep_log_snapshot_use_persisted_workflow_snapshot(
     tmp_path: Path,
     valid_access_token: AccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        collect_result = collect_logs(
-            project_names=["landingpage"],
-            source_keys=["snapshot_text"],
-            workspace="workflow",
-            since=None,
-            until=None,
-            access_token=valid_access_token,
+        collect_result = _run(
+            collect_logs(
+                project_names=["landingpage"],
+                source_keys=["snapshot_text"],
+                workspace="workflow",
+                since=None,
+                until=None,
+                access_token=valid_access_token,
+            )
         )
         collect_payload = collect_result.structured_content
         assert collect_payload is not None
@@ -79,17 +87,20 @@ def test_list_read_and_grep_log_snapshot_use_persisted_workflow_snapshot(
 def test_read_log_snapshot_file_rejects_tampered_absolute_metadata_path(
     tmp_path: Path,
     valid_access_token: AccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     outside_file = tmp_path / "outside.txt"
     outside_file.write_text("TOP_SECRET\n", encoding="utf-8")
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        collect_result = collect_logs(
-            project_names=["landingpage"],
-            source_keys=["snapshot_text"],
-            workspace="workflow",
-            access_token=valid_access_token,
+        collect_result = _run(
+            collect_logs(
+                project_names=["landingpage"],
+                source_keys=["snapshot_text"],
+                workspace="workflow",
+                access_token=valid_access_token,
+            )
         )
         collect_payload = collect_result.structured_content
         assert collect_payload is not None
@@ -114,15 +125,18 @@ def test_read_log_snapshot_file_rejects_tampered_absolute_metadata_path(
 def test_grep_log_snapshot_rejects_unknown_source_keys(
     tmp_path: Path,
     valid_access_token: AccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        collect_logs(
-            project_names=["landingpage"],
-            source_keys=["snapshot_text"],
-            workspace="workflow",
-            access_token=valid_access_token,
+        _run(
+            collect_logs(
+                project_names=["landingpage"],
+                source_keys=["snapshot_text"],
+                workspace="workflow",
+                access_token=valid_access_token,
+            )
         )
 
         grep_result = grep_log_snapshot(
@@ -140,15 +154,18 @@ def test_grep_log_snapshot_rejects_unknown_source_keys(
 def test_grep_log_snapshot_supports_paged_match_windows(
     tmp_path: Path,
     valid_access_token: AccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        collect_logs(
-            project_names=["landingpage"],
-            source_keys=["snapshot_text"],
-            workspace="workflow",
-            access_token=valid_access_token,
+        _run(
+            collect_logs(
+                project_names=["landingpage"],
+                source_keys=["snapshot_text"],
+                workspace="workflow",
+                access_token=valid_access_token,
+            )
         )
 
         grep_result = grep_log_snapshot(
@@ -174,6 +191,7 @@ def test_grep_log_snapshot_supports_paged_match_windows(
 def test_grep_log_snapshot_truncates_large_match_lines(
     tmp_path: Path,
     valid_access_token: AccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     long_line = "match " + ("x" * 40)
     fixture_root = copy_mutable_log_fixture_root(tmp_path)
@@ -186,11 +204,13 @@ def test_grep_log_snapshot_truncates_large_match_lines(
         FILE_SOURCE_ROOT=fixture_root / "logs",
         LOGS_DIR=logs_dir,
     ):
-        collect_logs(
-            project_names=["landingpage"],
-            source_keys=["app_file"],
-            workspace="workflow",
-            access_token=valid_access_token,
+        _run(
+            collect_logs(
+                project_names=["landingpage"],
+                source_keys=["app_file"],
+                workspace="workflow",
+                access_token=valid_access_token,
+            )
         )
 
         grep_result = grep_log_snapshot(
@@ -211,6 +231,7 @@ def test_grep_log_snapshot_truncates_large_match_lines(
 def test_grep_log_snapshot_truncates_very_large_match_lines(
     tmp_path: Path,
     valid_access_token: AccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     long_line = "match " + ("x" * 4000)
     fixture_root = copy_mutable_log_fixture_root(tmp_path)
@@ -223,11 +244,13 @@ def test_grep_log_snapshot_truncates_very_large_match_lines(
         FILE_SOURCE_ROOT=fixture_root / "logs",
         LOGS_DIR=logs_dir,
     ):
-        collect_logs(
-            project_names=["landingpage"],
-            source_keys=["app_file"],
-            workspace="workflow",
-            access_token=valid_access_token,
+        _run(
+            collect_logs(
+                project_names=["landingpage"],
+                source_keys=["app_file"],
+                workspace="workflow",
+                access_token=valid_access_token,
+            )
         )
 
         grep_result = grep_log_snapshot(
@@ -251,15 +274,18 @@ def test_grep_log_snapshot_truncates_very_large_match_lines(
 def test_read_log_snapshot_file_supports_line_chunks(
     tmp_path: Path,
     valid_access_token: AccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        collect_logs(
-            project_names=["landingpage"],
-            source_keys=["snapshot_text"],
-            workspace="workflow",
-            access_token=valid_access_token,
+        _run(
+            collect_logs(
+                project_names=["landingpage"],
+                source_keys=["snapshot_text"],
+                workspace="workflow",
+                access_token=valid_access_token,
+            )
         )
 
         read_result = read_log_snapshot_file(
@@ -280,17 +306,20 @@ def test_read_log_snapshot_file_supports_line_chunks(
 def test_grep_log_snapshot_matches_across_multiple_persisted_files(
     tmp_path: Path,
     valid_access_token: AccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        collect_result = collect_logs(
-            project_names=["landingpage"],
-            source_keys=["app_first", "app_second"],
-            workspace="workflow",
-            since=None,
-            until=None,
-            access_token=valid_access_token,
+        collect_result = _run(
+            collect_logs(
+                project_names=["landingpage"],
+                source_keys=["app_first", "app_second"],
+                workspace="workflow",
+                since=None,
+                until=None,
+                access_token=valid_access_token,
+            )
         )
         collect_payload = collect_result.structured_content
         assert collect_payload is not None

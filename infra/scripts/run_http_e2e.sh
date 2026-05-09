@@ -116,6 +116,14 @@ export CODEX_AGENT_JWT
 
 (
   cd "$REPO_ROOT/src"
+  MANIFEST_PATH="$MANIFESTS_DIR" \
+  uv run python -m scripts.main upload-project-manifest-internal --all >/dev/null
+  MANIFEST_PATH="$MANIFESTS_DIR" \
+  uv run python -m scripts.main update-project-manifest-internal --project landingpage >/dev/null
+)
+
+(
+  cd "$REPO_ROOT/src"
   PORT="$PORT" \
   HOST="$HOST" \
   MANIFEST_PATH="$MANIFESTS_DIR" \

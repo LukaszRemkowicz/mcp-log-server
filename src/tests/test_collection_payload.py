@@ -13,6 +13,7 @@ from pytest_mock import MockerFixture
 from requests import exceptions as requests_exceptions
 
 from conf import settings
+from manifests.loader import load_project_manifest
 from manifests.models import SourceDefinition
 from services.log_collection import BuildLogsError, CollectSourceError, LogCollectionService
 from services.project_authorization import ProjectAuthorizationError, ProjectAuthorizationService
@@ -33,7 +34,6 @@ def build_collect_logs(
 ):
     """Assemble a collection payload directly through the real services for tests."""
 
-    manifest_service = ProjectManifestService()
     project_authorization_service = ProjectAuthorizationService()
     collection_service = LogCollectionService()
     project_name = project_authorization_service.authorize_caller_for_project(
@@ -42,19 +42,20 @@ def build_collect_logs(
     )
     if isinstance(project_name, ProjectAuthorizationError):
         raise ValueError(project_name.message)
-    manifest_result = manifest_service.get(project_name)
-    if manifest_result is None:
+    try:
+        manifest = load_project_manifest(settings.manifests_dir, project_name)
+    except FileNotFoundError:
         raise ValueError(
             f"Unknown project {project_name!r}. No manifest file was found for that project."
-        )
+        ) from None
     normalized_since = since or settings.DEFAULT_LOG_WINDOW
-    manifest_sources = manifest_service.get_manifest_source_keys(
-        manifest_result.manifest,
+    manifest_sources = ProjectManifestService.get_manifest_source_keys(
+        manifest,
         requested_source_keys,
     )
 
     return collection_service.build_logs(
-        manifest=manifest_result.manifest,
+        manifest=manifest,
         sources=manifest_sources.sources,
         missing_source_keys=manifest_sources.missing_source_keys,
         source_keys=manifest_sources.source_keys,

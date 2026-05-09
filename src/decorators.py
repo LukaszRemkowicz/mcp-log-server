@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Callable, Coroutine
 from enum import StrEnum
 from functools import wraps
-from inspect import Parameter, Signature, signature
+from inspect import Parameter, Signature, iscoroutinefunction, signature
 from typing import Any
 
 from fastmcp.server.auth import AccessToken, require_scopes
@@ -17,6 +17,7 @@ from logging_config import get_logger
 from services.project_authorization import ProjectAuthorizationError, ProjectAuthorizationService
 from services.project_manifest import ProjectManifestService
 from utils.mcp_errors import build_agent_tool_error_result
+from utils.types import JSONObject, JSONValue
 
 logger = get_logger("decorators")
 project_authorization_service = ProjectAuthorizationService()
@@ -179,6 +180,25 @@ def _project_authorization_retry_tips(
     ]
 
 
+def _project_authorization_details(
+    project_argument_name: ProjectArgumentName,
+    requested_project: Any,
+) -> JSONObject:
+    """Return JSON-safe error details for one rejected project authorization request."""
+
+    requested_value: JSONValue
+    if isinstance(requested_project, str) or requested_project is None:
+        requested_value = requested_project
+    elif isinstance(requested_project, list):
+        requested_value = [
+            project_name for project_name in requested_project if isinstance(project_name, str)
+        ]
+    else:
+        requested_value = None
+
+    return {project_argument_name.value: requested_value}
+
+
 def project_authorized_tool(
     func: Callable[..., Any],
 ) -> Callable[..., Any]:
@@ -190,8 +210,7 @@ def project_authorized_tool(
 
     func_signature = signature(func)
 
-    @wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
+    async def _authorize_and_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         bargs = func_signature.bind_partial(*args, **kwargs)
         access_token = _get_bound_access_token(bargs.arguments)
         project_argument_name = (
@@ -214,14 +233,17 @@ def project_authorized_tool(
                 error_code="missing_access_token",
                 message="access_token is required for project authorization.",
                 retry_tips=["Retry through the authenticated MCP HTTP path."],
-                details={project_argument_name.value: requested_project},
+                details=_project_authorization_details(
+                    project_argument_name,
+                    requested_project,
+                ),
             )
 
         authorized_project: str | list[str] | ProjectAuthorizationError
         if project_argument_name == ProjectArgumentName.PROJECT_NAMES:
             available_project_names = [
                 project_summary.project_name
-                for project_summary in project_manifest_service.all().root
+                for project_summary in (await project_manifest_service.all()).root
             ]
             authorized_project = project_authorization_service.authorize_caller_for_projects(
                 access_token,
@@ -254,7 +276,10 @@ def project_authorized_tool(
                     project_argument_name,
                     authorized_project.retry_tips,
                 ),
-                details={project_argument_name.value: requested_project},
+                details=_project_authorization_details(
+                    project_argument_name,
+                    requested_project,
+                ),
             )
 
         bargs.arguments[project_argument_name] = authorized_project
@@ -268,6 +293,16 @@ def project_authorized_tool(
                 "authorized_project": authorized_project,
             },
         )
+        if iscoroutinefunction(func):
+            return await func(*bargs.args, **bargs.kwargs)
         return func(*bargs.args, **bargs.kwargs)
 
-    return wrapper
+    @wraps(func)
+    async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+        return await _authorize_and_call(args, kwargs)
+
+    @wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        return asyncio.run(_authorize_and_call(args, kwargs))
+
+    return async_wrapper if iscoroutinefunction(func) else wrapper

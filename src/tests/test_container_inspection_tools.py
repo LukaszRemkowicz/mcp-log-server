@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from pytest_mock import MockerFixture
@@ -9,10 +10,15 @@ from tests.conftest import CustomAccessToken, override_settings
 from tools.container_inspection import list_container_directory, read_container_file
 
 
+def _run(coro):
+    return asyncio.run(coro)
+
+
 def test_read_container_file_reads_whitelisted_project_file(
     container_manifests_dir: Path,
     custom_access_token: CustomAccessToken,
     mocker: MockerFixture,
+    patch_file_project_manifest_service,
 ) -> None:
     access_token = custom_access_token(
         "codex-agent",
@@ -36,11 +42,13 @@ def test_read_container_file_reads_whitelisted_project_file(
     )
 
     with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = read_container_file(
-            project_name="landingpage",
-            source_key="backend",
-            path="/app/VERSION",
-            access_token=access_token,
+        result = _run(
+            read_container_file(
+                project_name="landingpage",
+                source_key="backend",
+                path="/app/VERSION",
+                access_token=access_token,
+            )
         )
 
     payload = result.structured_content
@@ -58,6 +66,7 @@ def test_read_container_file_reads_whitelisted_project_file(
 def test_read_container_file_rejects_non_whitelisted_path(
     container_manifests_dir: Path,
     custom_access_token: CustomAccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     access_token = custom_access_token(
         "codex-agent",
@@ -66,11 +75,13 @@ def test_read_container_file_rejects_non_whitelisted_path(
         {"allowed_projects": ["landingpage"]},
     )
     with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = read_container_file(
-            project_name="landingpage",
-            source_key="backend",
-            path="/etc/passwd",
-            access_token=access_token,
+        result = _run(
+            read_container_file(
+                project_name="landingpage",
+                source_key="backend",
+                path="/etc/passwd",
+                access_token=access_token,
+            )
         )
 
     payload = result.structured_content
@@ -87,6 +98,7 @@ def test_read_container_file_rejects_non_whitelisted_path(
 def test_read_container_file_rejects_parent_directory_traversal(
     container_manifests_dir: Path,
     custom_access_token: CustomAccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     access_token = custom_access_token(
         "codex-agent",
@@ -95,11 +107,13 @@ def test_read_container_file_rejects_parent_directory_traversal(
         {"allowed_projects": ["landingpage"]},
     )
     with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = read_container_file(
-            project_name="landingpage",
-            source_key="backend",
-            path="/app/../etc/passwd",
-            access_token=access_token,
+        result = _run(
+            read_container_file(
+                project_name="landingpage",
+                source_key="backend",
+                path="/app/../etc/passwd",
+                access_token=access_token,
+            )
         )
 
     payload = result.structured_content
@@ -116,6 +130,7 @@ def test_list_container_directory_lists_immediate_entries(
     container_manifests_dir: Path,
     custom_access_token: CustomAccessToken,
     mocker: MockerFixture,
+    patch_file_project_manifest_service,
 ) -> None:
     access_token = custom_access_token(
         "codex-agent",
@@ -147,11 +162,13 @@ def test_list_container_directory_lists_immediate_entries(
     )
 
     with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = list_container_directory(
-            project_name="landingpage",
-            source_key="frontend",
-            path="/app",
-            access_token=access_token,
+        result = _run(
+            list_container_directory(
+                project_name="landingpage",
+                source_key="frontend",
+                path="/app",
+                access_token=access_token,
+            )
         )
 
     payload = result.structured_content
@@ -167,6 +184,7 @@ def test_list_container_directory_defaults_to_manifest_inspection_root(
     container_manifests_dir: Path,
     custom_access_token: CustomAccessToken,
     mocker: MockerFixture,
+    patch_file_project_manifest_service,
 ) -> None:
     access_token = custom_access_token(
         "codex-agent",
@@ -180,10 +198,12 @@ def test_list_container_directory_defaults_to_manifest_inspection_root(
     )
 
     with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = list_container_directory(
-            project_name="landingpage",
-            source_key="frontend",
-            access_token=access_token,
+        result = _run(
+            list_container_directory(
+                project_name="landingpage",
+                source_key="frontend",
+                access_token=access_token,
+            )
         )
 
     payload = result.structured_content
@@ -198,6 +218,7 @@ def test_list_container_directory_returns_single_file_entry(
     container_manifests_dir: Path,
     custom_access_token: CustomAccessToken,
     mocker: MockerFixture,
+    patch_file_project_manifest_service,
 ) -> None:
     access_token = custom_access_token(
         "codex-agent",
@@ -222,11 +243,13 @@ def test_list_container_directory_returns_single_file_entry(
     )
 
     with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = list_container_directory(
-            project_name="landingpage",
-            source_key="nginx",
-            path="/etc/nginx/nginx.conf",
-            access_token=access_token,
+        result = _run(
+            list_container_directory(
+                project_name="landingpage",
+                source_key="nginx",
+                path="/etc/nginx/nginx.conf",
+                access_token=access_token,
+            )
         )
 
     payload = result.structured_content
@@ -243,6 +266,7 @@ def test_list_container_directory_maps_docker_service_error_to_tool_error(
     container_manifests_dir: Path,
     custom_access_token: CustomAccessToken,
     mocker: MockerFixture,
+    patch_file_project_manifest_service,
 ) -> None:
     access_token = custom_access_token(
         "codex-agent",
@@ -258,11 +282,13 @@ def test_list_container_directory_maps_docker_service_error_to_tool_error(
     )
 
     with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = list_container_directory(
-            project_name="landingpage",
-            source_key="nginx",
-            path="/etc/nginx/missing.conf",
-            access_token=access_token,
+        result = _run(
+            list_container_directory(
+                project_name="landingpage",
+                source_key="nginx",
+                path="/etc/nginx/missing.conf",
+                access_token=access_token,
+            )
         )
 
     payload = result.structured_content
@@ -277,6 +303,7 @@ def test_list_container_directory_maps_docker_service_error_to_tool_error(
 def test_list_container_directory_maps_invalid_path_to_tool_error(
     container_manifests_dir: Path,
     custom_access_token: CustomAccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     access_token = custom_access_token(
         "codex-agent",
@@ -285,11 +312,13 @@ def test_list_container_directory_maps_invalid_path_to_tool_error(
         {"allowed_projects": ["landingpage"]},
     )
     with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = list_container_directory(
-            project_name="landingpage",
-            source_key="nginx",
-            path="etc/nginx/nginx.conf",
-            access_token=access_token,
+        result = _run(
+            list_container_directory(
+                project_name="landingpage",
+                source_key="nginx",
+                path="etc/nginx/nginx.conf",
+                access_token=access_token,
+            )
         )
 
     payload = result.structured_content

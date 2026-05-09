@@ -14,6 +14,7 @@ import pytest
 from fastmcp.server.auth import AccessToken
 from joserfc import jwt
 from joserfc.jwk import OctKey
+from pytest_mock import MockerFixture
 from starlette.testclient import TestClient
 from tortoise import Tortoise, connections
 
@@ -21,7 +22,12 @@ from app import create_application
 from auth.auth_provider import build_auth_provider
 from auth.scopes import LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE
 from conf import set_settings, settings
+from database.services.models import ProjectManifestCreate, ProjectManifestUpdate
+from database.services.project_manifests import ProjectManifestService as ProjectManifestDBService
+from manifests.loader import list_project_manifests
+from services.project_manifest import ProjectManifestContext
 from settings import Settings
+from tools.models import ProjectManifestList, ProjectManifestSummary
 
 JwtOverrides = dict[str, Any] | None
 AccessTokenClaims = dict[str, Any] | None
@@ -200,6 +206,8 @@ class JsonRpcClient:
         token: str | None,
         data: dict[str, Any],
     ) -> httpx.Response:
+        assert self.api_client.portal is not None
+        self.api_client.portal.call(_seed_project_manifests)
         headers = {
             "Accept": "application/json",
         }
@@ -242,6 +250,102 @@ def build_collect_logs_request(
     if until is not None:
         arguments["until"] = until
     return payload
+
+
+async def _seed_project_manifests() -> None:
+    """Persist current test manifests for MCP tools that now read manifests from DB."""
+
+    service = ProjectManifestDBService()
+    for manifest in list_project_manifests(settings.manifests_dir):
+        sources = [source.model_dump(mode="json") for source in manifest.sources]
+        if await service.exists(manifest.project_key):
+            existing = await service.get(manifest.project_key)
+            await service.update(
+                ProjectManifestUpdate(
+                    pk=existing.id,
+                    project_summary=manifest.project_summary,
+                    static_asset_paths=manifest.static_asset_paths,
+                    static_asset_extensions=manifest.static_asset_extensions,
+                    sources=sources,
+                )
+            )
+            continue
+        await service.create(
+            ProjectManifestCreate(
+                project_key=manifest.project_key,
+                project_summary=manifest.project_summary,
+                static_asset_paths=manifest.static_asset_paths,
+                static_asset_extensions=manifest.static_asset_extensions,
+                sources=sources,
+            )
+        )
+
+
+class FileBackedProjectManifestService:
+    """Test double that keeps direct tool tests independent from DB manifest rows."""
+
+    @staticmethod
+    async def get(project_name: str) -> ProjectManifestContext | None:
+        for manifest in list_project_manifests(settings.manifests_dir):
+            if manifest.project_key == project_name:
+                return ProjectManifestContext(manifest=manifest, project_name=project_name)
+        return None
+
+    @staticmethod
+    async def get_or_error(project_name: str):
+        from services.project_manifest import ProjectManifestError
+
+        manifest_context = await FileBackedProjectManifestService.get(project_name)
+        if manifest_context is not None:
+            return manifest_context
+        return ProjectManifestError(
+            message=(
+                f"Unknown project {project_name!r}. No manifest file was found for that project."
+            )
+        )
+
+    @staticmethod
+    async def all() -> ProjectManifestList:
+        return ProjectManifestList.model_validate(
+            [
+                ProjectManifestSummary(
+                    project_name=manifest.project_key,
+                    project_summary=manifest.project_summary,
+                    source_keys=[source.source_key for source in manifest.sources],
+                )
+                for manifest in list_project_manifests(settings.manifests_dir)
+            ]
+        )
+
+    @staticmethod
+    def get_manifest_source_keys(manifest, source_keys):
+        from services.project_manifest import ProjectManifestService
+
+        return ProjectManifestService.get_manifest_source_keys(manifest, source_keys)
+
+    @staticmethod
+    def get_container_source(manifest, source_key):
+        from services.project_manifest import ProjectManifestService
+
+        return ProjectManifestService.get_container_source(manifest, source_key)
+
+    @staticmethod
+    def get_container_source_or_error(manifest, source_key):
+        from services.project_manifest import ProjectManifestService
+
+        return ProjectManifestService().get_container_source_or_error(manifest, source_key)
+
+
+@pytest.fixture
+def patch_file_project_manifest_service(mocker: MockerFixture) -> FileBackedProjectManifestService:
+    """Patch direct tool tests to read manifest fixtures without touching the DB."""
+
+    service = FileBackedProjectManifestService()
+    mocker.patch("decorators.project_manifest_service", service)
+    mocker.patch("tools.collection.manifest_service", service)
+    mocker.patch("tools.analysis.manifest_service", service)
+    mocker.patch("tools.container_inspection.manifest_service", service)
+    return service
 
 
 @dataclass(slots=True)

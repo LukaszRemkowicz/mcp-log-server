@@ -506,7 +506,7 @@ def build_incident_bundle(
     description=CREATE_FILTERED_VIEW_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
-def create_filtered_view(
+async def create_filtered_view(
     project_name: str,
     session_id: str | None = None,
     archive_name: str | None = None,
@@ -553,7 +553,7 @@ def create_filtered_view(
     if isinstance(context, ToolResult):
         return context
 
-    manifest_result = manifest_service.get_or_error(project_name)
+    manifest_result = await manifest_service.get_or_error(project_name)
     if isinstance(manifest_result, ProjectManifestError):
         return _build_filtered_view_source_key_error_result(
             error=CreateFilteredViewError(

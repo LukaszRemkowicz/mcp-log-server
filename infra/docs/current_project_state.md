@@ -177,7 +177,9 @@ Important collection response note:
   output may be slow or large
 - `DOCKER_LOGS_DIR` is treated as a logs root, not a flat one-run output path
 - manifests and file-backed source logs are separate:
-  - `MANIFEST_PATH` points to project manifest JSON files
+  - `MANIFEST_PATH` points to project manifest JSON files used by manifest
+    upload/update commands
+  - runtime MCP tools read manifests from persisted database rows
   - relative manifest `file` source targets resolve under `FILE_SOURCE_ROOT`
   - if `FILE_SOURCE_ROOT` is omitted, it defaults to the sibling `logs/`
     directory next to `MANIFEST_PATH`

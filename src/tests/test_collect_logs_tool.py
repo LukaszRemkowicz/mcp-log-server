@@ -1,17 +1,74 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from fastmcp.server.auth import AccessToken
 
+import decorators
+import tools.collection as collection_tools
+from conf import settings
+from manifests.loader import list_project_manifests, load_project_manifest
+from services.project_manifest import ProjectManifestContext
 from tests.conftest import CustomAccessToken, override_settings
 from tools.collection import collect_logs, list_projects
+from tools.models import ProjectManifestList, ProjectManifestSummary
+
+
+class FileBackedProjectManifestService:
+    """Test double that keeps direct tool tests focused on tool behavior."""
+
+    async def get(self, project_name: str):
+        try:
+            manifest = load_project_manifest(settings.manifests_dir, project_name)
+        except FileNotFoundError:
+            return None
+        return ProjectManifestContext(manifest=manifest, project_name=project_name)
+
+    async def get_or_error(self, project_name: str):
+        result = await self.get(project_name)
+        if result is not None:
+            return result
+        return collection_tools.ProjectManifestError(
+            message=(
+                f"Unknown project {project_name!r}. "
+                "No persisted manifest was found for that project."
+            )
+        )
+
+    async def all(self) -> ProjectManifestList:
+        manifests = list_project_manifests(settings.manifests_dir)
+        summaries = [
+            ProjectManifestSummary(
+                project_name=manifest.project_key,
+                project_summary=manifest.project_summary,
+                source_keys=[source.source_key for source in manifest.sources],
+            )
+            for manifest in manifests
+        ]
+        return ProjectManifestList.model_validate(summaries)
+
+    get_manifest_source_keys = staticmethod(
+        collection_tools.ProjectManifestService.get_manifest_source_keys
+    )
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+def _patch_manifest_services(monkeypatch) -> None:
+    service = FileBackedProjectManifestService()
+    monkeypatch.setattr(decorators, "project_manifest_service", service)
+    monkeypatch.setattr(collection_tools, "manifest_service", service)
 
 
 def test_collect_logs_returns_agent_error_for_invalid_docker_time_filter(
     container_manifests_dir: Path,
     custom_access_token: CustomAccessToken,
+    monkeypatch,
 ) -> None:
+    _patch_manifest_services(monkeypatch)
     token = custom_access_token(
         "workflow-agent",
         ["logs.collect"],
@@ -20,12 +77,14 @@ def test_collect_logs_returns_agent_error_for_invalid_docker_time_filter(
     )
 
     with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = collect_logs(
-            project_names=["landingpage"],
-            source_keys=["backend"],
-            since="thirty-minutes",
-            until=None,
-            access_token=token,
+        result = _run(
+            collect_logs(
+                project_names=["landingpage"],
+                source_keys=["backend"],
+                since="thirty-minutes",
+                until=None,
+                access_token=token,
+            )
         )
     mcp_result = result.to_mcp_result()
 
@@ -39,7 +98,9 @@ def test_collect_logs_returns_agent_error_for_invalid_docker_time_filter(
 
 def test_collect_logs_returns_agent_error_for_unknown_project_without_middleware(
     custom_access_token: CustomAccessToken,
+    monkeypatch,
 ) -> None:
+    _patch_manifest_services(monkeypatch)
     token = custom_access_token(
         "workflow-agent",
         ["logs.collect"],
@@ -48,12 +109,14 @@ def test_collect_logs_returns_agent_error_for_unknown_project_without_middleware
     )
 
     with override_settings():
-        result = collect_logs(
-            project_names=["other-project"],
-            source_keys=None,
-            since=None,
-            until=None,
-            access_token=token,
+        result = _run(
+            collect_logs(
+                project_names=["other-project"],
+                source_keys=None,
+                since=None,
+                until=None,
+                access_token=token,
+            )
         )
     mcp_result = result.to_mcp_result()
 
@@ -67,16 +130,20 @@ def test_collect_logs_returns_agent_error_for_unknown_project_without_middleware
 
 def test_collect_logs_returns_agent_error_for_missing_session_id(
     valid_access_token: AccessToken,
+    monkeypatch,
 ) -> None:
+    _patch_manifest_services(monkeypatch)
     with override_settings():
-        result = collect_logs(
-            project_names=["landingpage"],
-            source_keys=["app_file"],
-            workspace="session",
-            session_id=None,
-            since=None,
-            until=None,
-            access_token=valid_access_token,
+        result = _run(
+            collect_logs(
+                project_names=["landingpage"],
+                source_keys=["app_file"],
+                workspace="session",
+                session_id=None,
+                since=None,
+                until=None,
+                access_token=valid_access_token,
+            )
         )
     mcp_result = result.to_mcp_result()
 
@@ -87,14 +154,18 @@ def test_collect_logs_returns_agent_error_for_missing_session_id(
 def test_collect_logs_uses_accessible_projects_for_empty_project_names(
     tmp_path: Path,
     valid_access_token: AccessToken,
+    monkeypatch,
 ) -> None:
+    _patch_manifest_services(monkeypatch)
     with override_settings(LOGS_DIR=tmp_path / "collected-logs"):
-        result = collect_logs(
-            project_names=[],
-            source_keys=["app_file"],
-            since=None,
-            until=None,
-            access_token=valid_access_token,
+        result = _run(
+            collect_logs(
+                project_names=[],
+                source_keys=["app_file"],
+                since=None,
+                until=None,
+                access_token=valid_access_token,
+            )
         )
     payload = result.structured_content
 
@@ -104,7 +175,9 @@ def test_collect_logs_uses_accessible_projects_for_empty_project_names(
 
 def test_list_projects_returns_manifest_backed_project_inventory(
     custom_access_token: CustomAccessToken,
+    monkeypatch,
 ) -> None:
+    _patch_manifest_services(monkeypatch)
     token = custom_access_token(
         "workflow-agent",
         ["projects.read"],
@@ -112,7 +185,7 @@ def test_list_projects_returns_manifest_backed_project_inventory(
         {"allowed_projects": ["landingpage"]},
     )
     with override_settings():
-        result = list_projects(access_token=token)
+        result = _run(list_projects(access_token=token))
 
     assert any(item["project_name"] == "landingpage" for item in result)
     landingpage = next(item for item in result if item["project_name"] == "landingpage")
@@ -122,7 +195,9 @@ def test_list_projects_returns_manifest_backed_project_inventory(
 
 def test_list_projects_returns_multiple_manifest_backed_projects(
     custom_access_token: CustomAccessToken,
+    monkeypatch,
 ) -> None:
+    _patch_manifest_services(monkeypatch)
     token = custom_access_token(
         "workflow-agent",
         ["projects.read"],
@@ -130,7 +205,7 @@ def test_list_projects_returns_multiple_manifest_backed_projects(
         {"projects_access": "all"},
     )
     with override_settings():
-        result = list_projects(access_token=token)
+        result = _run(list_projects(access_token=token))
 
     assert [item["project_name"] for item in result] == [
         "alpha",
@@ -144,7 +219,9 @@ def test_list_projects_returns_multiple_manifest_backed_projects(
 def test_collect_logs_can_collect_multiple_projects_into_one_session(
     tmp_path: Path,
     custom_access_token: CustomAccessToken,
+    monkeypatch,
 ) -> None:
+    _patch_manifest_services(monkeypatch)
     token = custom_access_token(
         "codex-agent",
         ["logs.collect"],
@@ -154,12 +231,14 @@ def test_collect_logs_can_collect_multiple_projects_into_one_session(
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        result = collect_logs(
-            project_names=["alpha", "beta"],
-            source_keys=["app_file"],
-            workspace="session",
-            session_id="incident-123",
-            access_token=token,
+        result = _run(
+            collect_logs(
+                project_names=["alpha", "beta"],
+                source_keys=["app_file"],
+                workspace="session",
+                session_id="incident-123",
+                access_token=token,
+            )
         )
     payload = result.structured_content
     assert payload is not None

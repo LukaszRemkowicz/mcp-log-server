@@ -33,10 +33,10 @@ project_authorization_service = ProjectAuthorizationService()
 
 
 @workflow_discoverable_tool(PROJECTS_READ_SCOPE)
-def list_projects(
+async def list_projects(
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> list[ProjectManifestSummary]:
-    """List projects currently available through bundled manifest files.
+    """List projects currently available through persisted manifest rows.
 
     This is the lightweight discovery entrypoint for project-scoped log tools.
     Callers use it to learn:
@@ -78,7 +78,7 @@ def list_projects(
         )
 
     if project_access_scope.all_projects:
-        all_project_summaries: list[ProjectManifestSummary] = manifest_service.all().root
+        all_project_summaries: list[ProjectManifestSummary] = (await manifest_service.all()).root
         logger.info(
             "tool result",
             extra={
@@ -91,7 +91,7 @@ def list_projects(
 
     project_summaries: list[ProjectManifestSummary] = []
     for project_name in sorted(project_access_scope.allowed_projects):
-        manifest_context = manifest_service.get(project_name)
+        manifest_context = await manifest_service.get(project_name)
         if manifest_context is not None:
             project_summaries.append(
                 ProjectManifestSummary(
@@ -118,7 +118,7 @@ def list_projects(
     mcp_description=COLLECT_LOGS_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
-def collect_logs(
+async def collect_logs(
     project_names: list[str] | None = None,
     source_keys: list[str] | None = None,
     workspace: SnapshotWorkspace = "workflow",
@@ -178,7 +178,7 @@ def collect_logs(
 
     project_payloads = []
     for project_name in project_names:
-        manifest_result = manifest_service.get_or_error(project_name)
+        manifest_result = await manifest_service.get_or_error(project_name)
         if isinstance(manifest_result, ProjectManifestError):
             logger.info(
                 "tool error",

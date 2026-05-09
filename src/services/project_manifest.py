@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
+from tortoise.exceptions import DoesNotExist
 
-from conf import settings
-from manifests.loader import load_project_manifest
+from database.models import ProjectManifest
+from database.services.project_manifests import ProjectManifestService as ProjectManifestDBService
 from manifests.models import Manifest, SourceDefinition
 from tools.models import ProjectManifestList, ProjectManifestSummary
 
@@ -44,67 +44,74 @@ class ProjectManifestError(BaseModel):
 class ProjectManifestService:
     """Load manifest-backed project context for deterministic MCP callers.
 
-    This service owns manifest loading and manifest-derived source resolution.
+    This service owns DB-backed manifest loading and manifest-derived source resolution.
     Project authorization belongs to the tool or middleware layer.
     """
 
-    def _get_manifests_dir(self) -> Path:
-        """Return the configured manifests directory for this service."""
+    def __init__(self, db_service: ProjectManifestDBService | None = None) -> None:
+        self.db_service = db_service or ProjectManifestDBService()
 
-        return settings.manifests_dir
+    @staticmethod
+    def _to_manifest_context(row: ProjectManifest) -> ProjectManifestContext:
+        """Convert one persisted DB manifest row into the public Pydantic model."""
 
-    def get(
+        manifest = Manifest.model_validate(
+            {
+                "project_key": row.project_key,
+                "project_summary": row.project_summary,
+                "static_asset_paths": row.static_asset_paths,
+                "static_asset_extensions": row.static_asset_extensions,
+                "sources": row.sources,
+            }
+        )
+        return ProjectManifestContext(
+            manifest=manifest,
+            project_name=manifest.project_key,
+        )
+
+    async def get(
         self,
         project_name: str,
     ) -> ProjectManifestContext | None:
-        """Load one project manifest when it exists and matches its file name.
+        """Load one project manifest from the database when it exists.
 
-        Returns `None` for missing manifests and for manifests whose
-        `project_key` does not match the requested project name. The caller is
-        responsible for turning `None` into a tool-specific error response.
+        Returns `None` for missing manifests. The caller is responsible for
+        turning `None` into a tool-specific error response.
         """
 
         try:
-            manifest = load_project_manifest(self._get_manifests_dir(), project_name)
-        except FileNotFoundError:
+            row = await self.db_service.get(project_name)
+        except DoesNotExist:
             return None
 
-        if manifest.project_key != project_name:
+        try:
+            return self._to_manifest_context(row)
+        except ValidationError:
             return None
 
-        return ProjectManifestContext(
-            manifest=manifest,
-            project_name=project_name,
-        )
-
-    def get_or_error(
+    async def get_or_error(
         self,
         project_name: str,
     ) -> ProjectManifestContext | ProjectManifestError:
         """Load one manifest or return a structured missing-project error."""
 
-        manifest_context = self.get(project_name)
+        manifest_context = await self.get(project_name)
         if manifest_context is not None:
             return manifest_context
         return ProjectManifestError(
             message=(
-                f"Unknown project {project_name!r}. No manifest file was found for that project."
+                f"Unknown project {project_name!r}. "
+                "No persisted manifest was found for that project."
             )
         )
 
-    def _all_contexts(
+    async def _all_contexts(
         self,
     ) -> list[ProjectManifestContext]:
-        """Return all loaded manifest contexts from the configured manifests directory."""
+        """Return all loaded manifest contexts from persisted manifest rows."""
 
-        manifests_dir = self._get_manifests_dir()
-        resolved_project_names = sorted(path.stem for path in manifests_dir.glob("*.json"))
-        manifest_contexts: list[ProjectManifestContext] = []
-        for project_name in resolved_project_names:
-            manifest_context = self.get(project_name)
-            if manifest_context is not None:
-                manifest_contexts.append(manifest_context)
-        return manifest_contexts
+        rows = await self.db_service.all()
+        return [self._to_manifest_context(row) for row in rows]
 
     @staticmethod
     def _build_summary(manifest_context: ProjectManifestContext) -> ProjectManifestSummary:
@@ -116,12 +123,12 @@ class ProjectManifestService:
             source_keys=[source.source_key for source in manifest_context.manifest.sources],
         )
 
-    def all(
+    async def all(
         self,
     ) -> ProjectManifestList:
         """Return lightweight summaries for every valid configured manifest."""
 
-        manifest_contexts = self._all_contexts()
+        manifest_contexts = await self._all_contexts()
         data: list[ProjectManifestSummary] = [
             self._build_summary(manifest_context) for manifest_context in manifest_contexts
         ]

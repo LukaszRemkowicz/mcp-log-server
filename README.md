@@ -285,6 +285,10 @@ container, so database access uses Docker service DNS (`db:5432`) instead of
 host `127.0.0.1:5432`. The internal command reads manifests from
 `settings.MANIFEST_PATH` inside the app container.
 
+Runtime MCP tools read project manifests from the database. The JSON files under
+`MANIFEST_PATH` are source input for the upload/update commands, not the runtime
+lookup path for `collect_logs`, `list_projects`, or manifest-backed analysis.
+
 ### Database Backup, Restore, Build, And Deploy
 
 Operational scripts live in [infra/scripts/](/Users/lukaszremkowicz/Projects/mcp-log-server/infra/scripts/README.md:1).
@@ -467,7 +471,7 @@ LOG_LEVEL=DEBUG LOG_FORMAT=text doppler run -- docker compose up --build
 These variables control how the local FastMCP HTTP server starts.
 
 - `MANIFEST_PATH`
-  Path to the directory containing project source manifests.
+  Path to the directory containing project source manifest JSON files.
   Default: `src/manifests/projects`
 
   This is resolved relative to the repository root, so:
@@ -476,8 +480,9 @@ These variables control how the local FastMCP HTTP server starts.
     resolves to `/app/src/manifests/projects` in Docker
   - an absolute path is also allowed
 
-  The manifest is the project inventory/config that later collector-style
-  tools will use to know what sources exist for the selected project.
+  The manifest JSON is the project inventory/config source. Upload it into the
+  database before using runtime MCP tools; the tools resolve project manifests
+  from persisted database rows.
 
 - `FILE_SOURCE_ROOT`
   Root path used only for relative `file` source targets inside manifests.

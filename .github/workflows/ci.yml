@@ -58,7 +58,7 @@ jobs:
     needs: [quality]
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_DB: mcp_log_server
           POSTGRES_USER: mcp_log_server

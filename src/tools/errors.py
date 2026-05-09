@@ -51,6 +51,7 @@ COLLECT_LOGS_ERROR_RULES: tuple[CollectLogsErrorRule, ...] = (
         "project_access_mismatch",
     ),
     CollectLogsErrorRule("No manifest file was found", "unknown_project"),
+    CollectLogsErrorRule("No persisted manifest was found", "unknown_project"),
     CollectLogsErrorRule("loaded manifest project_key", "manifest_project_mismatch"),
     CollectLogsErrorRule("Invalid docker time filter", "invalid_docker_time_filter"),
     CollectLogsErrorRule("session_id is required", "missing_session_id"),

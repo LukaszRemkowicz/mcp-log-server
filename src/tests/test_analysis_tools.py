@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 from fastmcp.server.auth import AccessToken
@@ -14,6 +15,10 @@ from tools.analysis import (
     suggest_followup_window,
 )
 from tools.models import LogSnapshotFilePayload, LogSnapshotMetadata
+
+
+def _run(coro):
+    return asyncio.run(coro)
 
 
 def test_log_filtering_service_returns_error_for_unknown_source_key() -> None:
@@ -58,16 +63,19 @@ def test_log_filtering_service_returns_error_for_unknown_source_key() -> None:
 def test_group_errors_groups_repeated_failures(
     tmp_path: Path,
     valid_access_token: AccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     """Verify grouped errors summarize repeated backend and nginx failures."""
 
     logs_dir = tmp_path / "collected-logs"
     with override_settings(LOGS_DIR=logs_dir):
-        collection_tools.collect_logs(
-            project_names=["landingpage"],
-            source_keys=["backend", "nginx"],
-            workspace="workflow",
-            access_token=valid_access_token,
+        _run(
+            collection_tools.collect_logs(
+                project_names=["landingpage"],
+                source_keys=["backend", "nginx"],
+                workspace="workflow",
+                access_token=valid_access_token,
+            )
         )
         result = group_errors(
             project_name="landingpage",
@@ -114,16 +122,19 @@ def test_group_errors_groups_repeated_failures(
 def test_group_errors_summarizes_docker_prefixed_json(
     tmp_path: Path,
     valid_access_token: AccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     """Verify docker-prefixed JSON lines are parsed and grouped by message."""
 
     logs_dir = tmp_path / "collected-logs"
     with override_settings(LOGS_DIR=logs_dir):
-        collection_tools.collect_logs(
-            project_names=["landingpage"],
-            source_keys=["traefik"],
-            workspace="workflow",
-            access_token=valid_access_token,
+        _run(
+            collection_tools.collect_logs(
+                project_names=["landingpage"],
+                source_keys=["traefik"],
+                workspace="workflow",
+                access_token=valid_access_token,
+            )
         )
         result = group_errors(
             project_name="landingpage",
@@ -194,16 +205,19 @@ def test_group_errors_missing_snapshot_tells_agent_to_collect_first(
 def test_build_incident_bundle_returns_grouped_summary(
     tmp_path: Path,
     valid_access_token: AccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     """Verify incident bundles include grouped counts, severities, and next steps."""
 
     logs_dir = tmp_path / "collected-logs"
     with override_settings(LOGS_DIR=logs_dir):
-        collection_tools.collect_logs(
-            project_names=["landingpage"],
-            source_keys=["app_file"],
-            workspace="workflow",
-            access_token=valid_access_token,
+        _run(
+            collection_tools.collect_logs(
+                project_names=["landingpage"],
+                source_keys=["app_file"],
+                workspace="workflow",
+                access_token=valid_access_token,
+            )
         )
         result = build_incident_bundle(
             project_name="landingpage",
@@ -264,20 +278,25 @@ def test_build_incident_bundle_rejects_invalid_max_groups(
 def test_create_filtered_view_removes_manifest_profile_noise(
     tmp_path: Path,
     valid_access_token: AccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     """Verify filtered views remove manifest-described noise but keep errors."""
 
     logs_dir = tmp_path / "collected-logs"
     with override_settings(LOGS_DIR=logs_dir):
-        collection_tools.collect_logs(
-            project_names=["landingpage"],
-            source_keys=["backend", "nginx"],
-            workspace="workflow",
-            access_token=valid_access_token,
+        _run(
+            collection_tools.collect_logs(
+                project_names=["landingpage"],
+                source_keys=["backend", "nginx"],
+                workspace="workflow",
+                access_token=valid_access_token,
+            )
         )
-        result = create_filtered_view(
-            project_name="landingpage",
-            access_token=valid_access_token,
+        result = _run(
+            create_filtered_view(
+                project_name="landingpage",
+                access_token=valid_access_token,
+            )
         )
     payload = result.structured_content
     assert payload is not None
@@ -313,21 +332,26 @@ def test_create_filtered_view_removes_manifest_profile_noise(
 def test_create_filtered_view_reports_unknown_source_key(
     tmp_path: Path,
     valid_access_token: AccessToken,
+    patch_file_project_manifest_service,
 ) -> None:
     """Verify filtered views report unknown requested sources as tool errors."""
 
     logs_dir = tmp_path / "collected-logs"
     with override_settings(LOGS_DIR=logs_dir):
-        collection_tools.collect_logs(
-            project_names=["landingpage"],
-            source_keys=["app_file"],
-            workspace="workflow",
-            access_token=valid_access_token,
+        _run(
+            collection_tools.collect_logs(
+                project_names=["landingpage"],
+                source_keys=["app_file"],
+                workspace="workflow",
+                access_token=valid_access_token,
+            )
         )
-        result = create_filtered_view(
-            project_name="landingpage",
-            source_keys=["missing_source"],
-            access_token=valid_access_token,
+        result = _run(
+            create_filtered_view(
+                project_name="landingpage",
+                source_keys=["missing_source"],
+                access_token=valid_access_token,
+            )
         )
     payload = result.structured_content
     assert payload is not None
