@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 from tortoise import fields
-from tortoise.models import Model
+
+from database.managers import DatabaseModel, ObjectsManager
 
 
-class AgentCall(Model):
+class AgentCall(DatabaseModel):
     """One persisted MCP agent call or move within a session."""
+
+    objects: ClassVar[ObjectsManager[AgentCall]]
 
     id = fields.UUIDField(
         primary_key=True,
@@ -98,8 +101,10 @@ class AgentCall(Model):
         table = "agent_calls"
 
 
-class ProjectManifest(Model):
+class ProjectManifest(DatabaseModel):
     """Persist one project manifest with the same shape as manifest JSON."""
+
+    objects: ClassVar[ObjectsManager[ProjectManifest]]
 
     id = fields.UUIDField(
         primary_key=True,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shutil
 import time
-from collections.abc import Generator
+from collections.abc import AsyncIterator, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +14,7 @@ from fastmcp.server.auth import AccessToken
 from joserfc import jwt
 from joserfc.jwk import OctKey
 from starlette.testclient import TestClient
+from tortoise import Tortoise, connections
 
 from app import create_application
 from auth.auth_provider import build_auth_provider
@@ -131,6 +132,46 @@ def override_settings(
         yield effective_settings
     finally:
         set_settings(previous_settings)
+
+
+async def _flush_database_tables() -> None:
+    """Delete all rows from registered Tortoise app model tables."""
+
+    for model in Tortoise.apps["models"].values():
+        await model.all().delete()
+
+
+@pytest.fixture
+async def database_test_case(request: pytest.FixtureRequest) -> AsyncIterator[None]:
+    """Provide Django-style database setup and flush for tests marked db."""
+
+    await Tortoise.init(
+        db_url=settings.db,
+        modules={"models": ["database.models"]},
+    )
+    await _flush_database_tables()
+    try:
+        yield
+    finally:
+        await _flush_database_tables()
+        await connections.close_all(discard=True)
+        connections._clear_storage()
+        await Tortoise._reset_apps()
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Pytest hook: attach database setup to db tests and run them last."""
+
+    db_items: list[pytest.Item] = []
+    non_db_items: list[pytest.Item] = []
+    for item in items:
+        if item.get_closest_marker("db") is not None:
+            item.add_marker(pytest.mark.usefixtures("database_test_case"))
+            db_items.append(item)
+        else:
+            non_db_items.append(item)
+
+    items[:] = [*non_db_items, *db_items]
 
 
 @dataclass(slots=True)

@@ -38,6 +38,8 @@ Current persistence note:
   current non-database session implementation
 - database model definitions and an initial migration now exist for future audit
   and snapshot metadata rows, but services do not write those rows yet
+- database service modules now wrap ORM access for agent call and project
+  manifest metadata, but MCP tools do not call them yet
 - when database-backed services are implemented, filesystem metadata must remain
   in place until a later explicit migration removes it as a source of truth
 
@@ -56,6 +58,7 @@ The repository currently includes:
   alias
 - backup and restore scripts for the local/prod metadata database
 - prod build/deploy scripts following the landingpage release-script shape
+- database service modules for agent call and project manifest metadata
 - HTTP integration tests and in-memory FastMCP client tests
 
 Current next-step note:
@@ -204,14 +207,19 @@ This repository provides the thin wrapper in:
 
 - `.github/workflows/ci.yml`
 
-The shared test job currently runs:
+The shared test job enables the reusable workflow's Postgres service and runs:
 
-- `uv run pytest`
+- `uv run migrate && uv run pytest`
 
 That covers both:
 
 - in-memory FastMCP client tests
 - JWT-protected HTTP integration tests
+- DB-marked service integration tests against the shared workflow Postgres
+  service
+
+Local pre-commit uses `uv run test`, which delegates to the Docker Compose test
+service and applies committed migrations before the full pytest suite.
 
 ## Document Boundary
 

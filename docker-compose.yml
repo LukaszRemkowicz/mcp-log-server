@@ -49,10 +49,14 @@ services:
       - "127.0.0.1:${MCP_PORT_HOST:-8001}:8001"
     command: ["uv", "run", "watchfiles", "--filter", "all", "python -m main", "/app/src"]
 
-  tests:
+  test:
     build:
       context: .
       dockerfile: docker/app/Dockerfile
+    profiles: ["test"]
+    depends_on:
+      db:
+        condition: service_healthy
     volumes:
       - ./src:/app/src
       - ./logs:/app/logs
@@ -60,12 +64,12 @@ services:
       DOCKER_LOGS_DIR: /app/logs
       DATABASE_HOST: db
       DATABASE_PORT: 5432
-      DATABASE_NAME: ${DATABASE_NAME:-mcp_log_server}
-      DATABASE_USER: ${DATABASE_USER:-mcp_log_server}
-      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-mcp-log-server-local-password}
+      DATABASE_NAME: mcp_log_server
+      DATABASE_USER: mcp_log_server
+      DATABASE_PASSWORD: mcp-log-server-local-password
       HOST: 0.0.0.0
       PYTHONPATH: /app/src
-    command: ["uv", "run", "pytest"]
+    command: ["sh", "-lc", "uv run migrate && uv run pytest"]
 
 volumes:
   postgres-data:

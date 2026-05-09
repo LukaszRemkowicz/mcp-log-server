@@ -40,6 +40,18 @@ jobs:
     uses: LukaszRemkowicz/ci-cd/.github/workflows/python-tests-uv.yml@main
     with:
       working_directory: .
+      postgres_enabled: true
+      postgres_db: mcp_log_server
+      postgres_user: mcp_log_server
+      postgres_password: mcp-log-server-local-password
+      postgres_port: "5432"
+      test_environment: |
+        DATABASE_HOST=localhost
+        DATABASE_PORT=5432
+        DATABASE_NAME=mcp_log_server
+        DATABASE_USER=mcp_log_server
+        DATABASE_PASSWORD=mcp-log-server-local-password
+      test_command: uv run migrate && uv run pytest
 
   http-e2e:
     name: HTTP E2E
@@ -79,7 +91,7 @@ jobs:
         run: docker compose config
 
       - name: Build Docker images
-        run: docker compose build app tests
+        run: docker compose build app test
 
   codeql:
     permissions:

@@ -53,6 +53,7 @@ def test_makemigrations_runs_aerich_migrate(
         return subprocess.CompletedProcess(args, 0, stdout="generated\n", stderr="")
 
     mocker.patch("database.cli.subprocess.run", fake_run)
+    mocker.patch.dict("database.cli.os.environ", {}, clear=True)
 
     result = database_cli._run_makemigrations(["--name", "add_agent_calls"])
 
@@ -89,6 +90,7 @@ def test_makemigrations_initializes_aerich_when_required(
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
     mocker.patch("database.cli.subprocess.run", fake_run)
+    mocker.patch.dict("database.cli.os.environ", {}, clear=True)
 
     result = database_cli._run_makemigrations([])
 
@@ -161,6 +163,29 @@ def test_migration_commands_preserve_explicit_database_env(
     assert captured_envs[0]["DATABASE_PORT"] == "5432"
 
 
+def test_test_command_runs_compose_test_container(mocker: MockerFixture) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str]) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 0)
+
+    mocker.patch("database.cli.subprocess.run", fake_run)
+
+    result = database_cli._run_test()
+
+    assert result == 0
+    assert calls == [
+        [
+            "docker",
+            "compose",
+            "run",
+            "--rm",
+            "test",
+        ]
+    ]
+
+
 def test_database_models_are_importable_from_dedicated_module() -> None:
     assert AgentCall.Meta.table == "agent_calls"
     assert set(AgentCall._meta.fields_map) == {
@@ -195,6 +220,8 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
         AgentCall._meta.fields_map["uri"].description
         == "MCP resource URI when event records a resource read, such as a workflow skill URI."
     )
+    assert AgentCall.objects is not None
+    assert AgentCall.objects._model is AgentCall
 
     assert ProjectManifest.Meta.table == "project_manifests"
     assert set(ProjectManifest._meta.fields_map) == {
@@ -215,6 +242,9 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
         ProjectManifest._meta.fields_map["sources"].description
         == "List of source definitions with the same shape as Manifest.sources."
     )
+    assert ProjectManifest.objects is not None
+    assert ProjectManifest.objects._model is ProjectManifest
+    assert AgentCall.objects is not ProjectManifest.objects
 
 
 @pytest.mark.anyio
@@ -286,6 +316,19 @@ async def test_database_lifespan_wraps_initialization_and_shutdown(
     mocker.patch("database.lifecycle.close_database", fake_close_database)
 
     from database.lifecycle import database_lifespan
+
+    mocker.patch(
+        "database.lifecycle.TORTOISE_ORM",
+        {
+            "connections": {
+                "default": (
+                    "postgres://mcp_log_server:mcp-log-server-local-password"
+                    "@127.0.0.1:5432/mcp_log_server"
+                ),
+            },
+            "apps": {},
+        },
+    )
 
     async with database_lifespan(object()):
         calls.append("inside")

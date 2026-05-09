@@ -21,6 +21,7 @@ dependencies = [
 [project.scripts]
 makemigrations = "database.cli:makemigrations"
 migrate = "database.cli:migrate"
+test = "database.cli:test"
 
 [dependency-groups]
 dev = [
@@ -74,6 +75,9 @@ select = ["E", "F", "I", "UP"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["src/tests"]
+markers = [
+  "db: tests that require a real database connection",
+]
 
 [tool.aerich]
 tortoise_orm = "database.config.TORTOISE_ORM"

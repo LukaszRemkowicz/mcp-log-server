@@ -58,6 +58,8 @@ Important current Python files:
   Creates the FastMCP app, attaches JWT auth, and imports MCP modules.
 - `src/middleware/audit.py`
   MCP audit middleware for authenticated request logging.
+- `src/database/services/`
+  Database service wrappers for agent call and project manifest metadata.
 - `src/settings.py`
   Environment-backed runtime settings.
 - `src/auth/`
@@ -357,8 +359,13 @@ the shared skill set in place unless the user explicitly asks for a local copy.
 Current local validation command:
 
 ```bash
-uv run pytest
+uv run test
 ```
+
+`uv run test` delegates to the Docker Compose `test` service. The test service
+runs `uv run migrate` before the full `uv run pytest` suite. DB-dependent
+service tests are marked with `@pytest.mark.db` and run against the Compose
+Postgres container using `Settings.db` from the normal `DATABASE_*` settings.
 
 Current collector test caveat:
 

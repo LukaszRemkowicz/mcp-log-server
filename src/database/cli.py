@@ -73,6 +73,12 @@ def _run_makemigrations(args: Sequence[str]) -> int:
         return error.returncode
 
 
+def _run_test() -> int:
+    """Run the full Docker Compose test container suite."""
+
+    return subprocess.run(["docker", "compose", "run", "--rm", "test"]).returncode
+
+
 def makemigrations() -> None:
     """Generate migration files for current Tortoise models."""
 
@@ -83,3 +89,9 @@ def migrate() -> None:
     """Apply committed migration files."""
 
     raise SystemExit(_run_aerich(["upgrade", *sys.argv[1:]]).returncode)
+
+
+def test() -> None:
+    """Run tests through the Docker Compose test container."""
+
+    raise SystemExit(_run_test())

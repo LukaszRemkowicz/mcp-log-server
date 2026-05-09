@@ -196,6 +196,7 @@ doppler run -- docker compose up -d db
 
 Tortoise ORM configuration lives in [src/database/config.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/database/config.py:1).
 Database models live in [src/database/models.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/database/models.py:1).
+Database service wrappers live under [src/database/services/](/Users/lukaszremkowicz/Projects/mcp-log-server/src/database/services).
 Database startup/shutdown helpers live in [src/database/lifecycle.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/database/lifecycle.py:1).
 
 The migration tool is Aerich, configured in [pyproject.toml](/Users/lukaszremkowicz/Projects/mcp-log-server/pyproject.toml:62)
@@ -1255,8 +1256,15 @@ Current intended agent sequence:
 To run the test suite in Docker:
 
 ```bash
-doppler run -- docker compose run --rm tests
+uv run test
 ```
+
+`uv run test` delegates to `docker compose run --rm test`, which starts the
+Compose database dependency, runs `uv run migrate`, then runs the full
+`uv run pytest` suite inside the app test container. Tests that require the
+real database are marked with
+`@pytest.mark.db`; the test container provides normal `DATABASE_*` settings,
+and the test uses `Settings.db` to resolve the DSN.
 
 If you prefer host execution while iterating, use `uv`:
 
@@ -1277,9 +1285,9 @@ Run all configured checks manually:
 
 ```bash
 uv run pre-commit run --all-files
-uv run pytest
+uv run test
 docker compose config
-docker compose build app tests
+docker compose build app test
 ```
 
 GitHub Actions is wired through the shared
@@ -1290,9 +1298,11 @@ lives there.
 Current checks and release flows:
 
 - pre-commit
-- shared `python-tests-uv` workflow running `uv run pytest`
+- shared Python test workflow running `uv run migrate && uv run pytest`
   - covers unit-style FastMCP client tests
   - covers JWT-protected HTTP integration tests
+  - covers DB-marked service integration tests against the shared workflow
+    Postgres service
   - covers docker-backed collection logic with mocks inside pytest
 - curl-driven MCP HTTP end-to-end checks via `infra/scripts/run_http_e2e.sh`
 - Docker Compose validation
