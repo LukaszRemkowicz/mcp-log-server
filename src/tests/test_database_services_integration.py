@@ -9,19 +9,11 @@ from uuid import uuid4
 import pytest
 
 from database.fields import FileReference
-from database.models import (
-    AgentCall,
-    CollectLogs,
-    CollectLogsSource,
-    CollectLogsSourceStatus,
-    LogSourceType,
-    LogStream,
-    LogWorkspace,
-    ProjectManifest,
-)
+from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest
 from database.services.agent_calls import AgentCallService
 from database.services.models import AgentCallCreate, AgentCallFilter, AgentCallUpdate
 from database.services.project_manifests import ProjectManifestService
+from database.types import CollectLogsSourceStatus, LogSourceType, LogStream, LogWorkspace
 from manifests.models import Manifest, SourceDefinition
 
 
@@ -64,15 +56,13 @@ async def test_database_services_round_trip_against_real_postgres(
             session_id=session_id,
             workspace="workflow",
             event="mcp_call_tool",
-            subject="integration-subject",
             client_id="integration-client",
             client_type="agent",
             tool_name="collect_logs",
-            duration_ms=25.5,
+            duration_seconds=25.5,
             project_name=project_key,
             source_keys=["backend"],
             arguments={"tail_lines": 50},
-            result_summary={"files": [{"source_key": "backend"}]},
         )
     )
 
@@ -90,7 +80,6 @@ async def test_database_services_round_trip_against_real_postgres(
     assert fetched_call.project_name == project_key
     assert fetched_call.source_keys == ["backend"]
     assert fetched_call.arguments == {"tail_lines": 50}
-    assert fetched_call.result_summary == {"files": [{"source_key": "backend"}]}
     assert [row.id for row in calls_for_session] == [created_call.id]
     assert ended_call.session_ended is True
 

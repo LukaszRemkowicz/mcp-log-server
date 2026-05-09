@@ -21,6 +21,7 @@ dependencies = [
 [project.scripts]
 makemigrations = "database.cli:makemigrations"
 migrate = "database.cli:migrate"
+shell = "scripts.shell:main"
 test = "database.cli:test"
 
 [dependency-groups]
@@ -28,6 +29,7 @@ dev = [
   "aerich>=0.9.2",
   "black>=24.10.0",
   "isort>=5.13.0",
+  "ipython>=9.0.0",
   "mypy>=1.13.0",
   "pip-audit>=2.9.0",
   "pre-commit>=4.5.0",
@@ -61,7 +63,7 @@ ignore_missing_imports = true
 package = true
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/database"]
+packages = ["src/database", "src/scripts"]
 
 [tool.ruff]
 exclude = ["migrations"]

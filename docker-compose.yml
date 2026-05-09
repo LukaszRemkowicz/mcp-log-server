@@ -34,6 +34,7 @@ services:
         condition: service_healthy
     volumes:
       - ./src:/app/src
+      - ./migrations:/app/migrations
       - ${LOGS_DIR_HOST:-./logs}:${DOCKER_LOGS_DIR:-/app/logs}
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
@@ -59,17 +60,23 @@ services:
         condition: service_healthy
     volumes:
       - ./src:/app/src
+      - ./migrations:/app/migrations
       - ./logs:/app/logs
     environment:
       DOCKER_LOGS_DIR: /app/logs
       DATABASE_HOST: db
       DATABASE_PORT: 5432
-      DATABASE_NAME: mcp_log_server
+      DATABASE_NAME: mcp_log_server_test
       DATABASE_USER: mcp_log_server
       DATABASE_PASSWORD: mcp-log-server-local-password
       HOST: 0.0.0.0
       PYTHONPATH: /app/src
-    command: ["sh", "-lc", "uv run migrate && uv run pytest"]
+    command:
+      [
+        "sh",
+        "-lc",
+        "uv run python -m database.ensure_test_database && uv run migrate && uv run pytest",
+      ]
 
 volumes:
   postgres-data:

@@ -1,4 +1,4 @@
-"""Pydantic models used by database service methods."""
+"""Pydantic models used only by database service methods."""
 
 from __future__ import annotations
 
@@ -16,18 +16,16 @@ class AgentCallCreate(BaseModel):
     workspace: str
     event: str
     session_ended: bool = False
-    subject: str | None = None
     client_id: str | None = None
     client_type: str | None = None
     tool_name: str | None = None
     uri: str | None = None
-    duration_ms: float | None = None
+    duration_seconds: float | None = None
     success: bool = True
     error_code: str | None = None
     project_name: str | None = None
     source_keys: list[str] | None = None
     arguments: dict[str, Any] | None = None
-    result_summary: dict[str, Any] | None = None
 
 
 class AgentCallFilter(BaseModel):
@@ -47,10 +45,9 @@ class AgentCallUpdate(BaseModel):
 
     pk: UUID
     session_ended: bool | None = None
-    duration_ms: float | None = None
+    duration_seconds: float | None = None
     success: bool | None = None
     error_code: str | None = None
-    result_summary: dict[str, Any] | None = None
 
 
 class ProjectManifestUpdate(BaseModel):

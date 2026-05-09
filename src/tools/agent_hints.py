@@ -10,10 +10,11 @@ COLLECT_LOGS_TOOL_DESCRIPTION = (
     "Collect deterministic logs for one or more projects into persisted artifacts "
     "for later analysis. "
     'Use workspace="workflow" only for the fixed shared monitoring flow. '
-    'Use workspace="session" when an agent wants its own investigation workspace. '
-    "session_id is optional in the schema but required for session collections, "
-    "and the same session_id can be reused to collect additional projects into "
-    "the same investigation. "
+    'Use workspace="session" only with a non-workflow agent token when an agent '
+    "wants its own investigation workspace. "
+    "For a new session collection, omit session_id and MCP will create one. "
+    "For follow-up collection in the same investigation, reuse the returned "
+    "session_id to collect additional projects or narrower windows. "
     "Use source_keys to limit collection to selected sources. "
     "Use since/until to collect a narrower incident window. "
     "After session collection, use session_id plus project_name with follow-up tools. "
@@ -141,8 +142,8 @@ INCIDENT_BUNDLE_NEXT_STEP_TIPS = [
 FOLLOWUP_WINDOW_NEXT_STEP_TIPS = [
     "Use the returned since and until values in a new collect_logs call.",
     (
-        "Reuse the same session_id if you want to replace the current session "
-        "snapshot with this narrower window."
+        "Reuse the returned session_id if you want to replace the current session "
+        "snapshot with this narrower window, or omit it to start a new session."
     ),
 ]
 

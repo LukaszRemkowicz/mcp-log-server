@@ -105,8 +105,11 @@ def build_collect_logs_error_retry_tips(error_code: str) -> list[str]:
         ]
     if error_code == "missing_session_id":
         return [
-            "Retry with session_id set when workspace='session'.",
-            "Reuse the same session_id for later collect_logs calls in the same agent session.",
+            "Retry through the MCP tools/call path so middleware can create the session_id.",
+            (
+                "If continuing an existing investigation, pass the session_id "
+                "returned by collect_logs."
+            ),
         ]
     if error_code == "invalid_snapshot_metadata":
         return [

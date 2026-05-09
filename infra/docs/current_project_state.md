@@ -99,13 +99,6 @@ Current Phase 4 boundary:
   metadata as their runtime source of truth
 - no MCP tool currently writes `CollectLogs` or `CollectLogsSource` rows
 
-Next approved phase when started:
-
-- Phase 4e. Service Integration
-  Wire `LogCollectionService` and `LogSnapshotService` to the database service
-  layer while keeping existing filesystem metadata readable during the
-  transition.
-
 ## Current MCP Surface
 
 ### Tools
@@ -159,10 +152,15 @@ Current deterministic collection shape:
 
 1. call `tools/call` for `collect_logs`
 2. include an optional requested project name and optional requested source keys
-3. MCP validates the requested project against the JWT `project_key`
-4. MCP resolves the requested sources from the configured manifest
-5. MCP writes the collection into a project-scoped logs root
-6. MCP returns deterministic per-source collection results
+3. choose `workspace="workflow"` for the shared workflow snapshot or
+   `workspace="session"` for an investigation workspace
+4. the fixed `workflow-agent` token may only use `workspace="workflow"`
+5. when `workspace="session"` omits `session_id`, MCP creates one before the
+   tool runs and returns it to the agent
+6. MCP validates the requested project against the JWT `project_key`
+7. MCP resolves the requested sources from the configured manifest
+8. MCP writes the collection into a project-scoped logs root
+9. MCP returns deterministic per-source collection results
 
 Important collection response note:
 
@@ -171,6 +169,10 @@ Important collection response note:
 - the payload keeps both:
   - what the caller requested
   - what the server actually resolved from the manifest
+- session collection payloads include the effective `session_id`; agents reuse
+  that value for follow-up collection, read, grep, and analysis calls in the
+  same investigation
+- explicit agent-side session closing is not implemented yet
 - `tail_lines` is optional; if omitted, agents get a warning that full source
   output may be slow or large
 - `DOCKER_LOGS_DIR` is treated as a logs root, not a flat one-run output path
@@ -221,6 +223,8 @@ Characteristics:
 - binds published service ports to `127.0.0.1` to avoid VPS-wide port exposure
 - uses host port `5437` for local MCP Postgres by default, leaving
   `landingpage`'s local `5436` binding separate
+- runs the `test` service against the separate `mcp_log_server_test` database,
+  not the local app database
 
 ### Production Compose
 

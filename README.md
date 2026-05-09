@@ -145,6 +145,10 @@ are reviewed and approved.
   PostgreSQL database name.
   Default: `mcp_log_server`
 
+  The Docker Compose `test` service overrides this to
+  `mcp_log_server_test`, so DB tests do not flush or mutate the local app
+  database.
+
 - `DATABASE_USER`
   PostgreSQL application user.
   Default: `mcp_log_server`
@@ -206,6 +210,7 @@ with:
 [project.scripts]
 makemigrations = "database.cli:makemigrations"
 migrate = "database.cli:migrate"
+shell = "scripts.shell:main"
 
 [tool.aerich]
 tortoise_orm = "database.config.TORTOISE_ORM"
@@ -243,6 +248,21 @@ uv run migrate
 Review generated files under `migrations/` before committing them. Production
 deployments should apply already-committed migrations with `aerich upgrade`;
 they should not generate new migration files on the server.
+
+Open a Django `shell_plus`-style developer shell:
+
+```bash
+uv run shell
+```
+
+The shell initializes Tortoise ORM and preloads the database models, database
+services, application services, `settings`, and `TORTOISE_ORM`. Use top-level
+`await` for ORM calls, for example:
+
+```python
+await AgentCall.objects.all().limit(5)
+await CollectLogs.objects.filter(project_name="landingpage")
+```
 
 ### Database Backup, Restore, Build, And Deploy
 
@@ -743,9 +763,11 @@ Important:
 - if `source_keys` is omitted, the server behaves as if `source_keys=["all"]`
 - `collect_logs` now always persists per-project artifacts for the requested workspace
 - `workspace="workflow"` does not require `session_id`
-- `workspace="session"` requires an agent-chosen `session_id`
-- the agent must choose `session_id` itself when starting a new investigation
-- reuse the same `session_id` when the investigation later needs logs from another project
+- `workspace="session"` creates a server-generated `session_id` when the request omits it
+- the fixed `workflow-agent` token may only use `workspace="workflow"`; use a
+  non-workflow agent token for interactive `workspace="session"` investigations
+- use the returned `session_id` for later calls in the same investigation
+- reuse the returned `session_id` when the investigation later needs logs from another project
 - session follow-up tools use `session_id` plus `project_name`
 - `collect_logs` does not search log content; persisted snapshot search happens through `grep_log_snapshot`
 
@@ -787,7 +809,7 @@ curl -sS \
   http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
 ```
 
-Example session collection call with an agent-owned session id:
+Example session collection call that starts a new MCP-owned session:
 
 ```bash
 curl -sS \
@@ -803,16 +825,15 @@ curl -sS \
       "arguments":{
         "project_names":["landingpage"],
         "source_keys":["backend"],
-        "workspace":"session",
-        "session_id":"redis-timeout-debug-2026-04-27"
+        "workspace":"session"
       }
     }
   }' \
   http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
 ```
 
-Example session collection call that adds another project into the same
-investigation session:
+The response includes `session_id`. Reuse that returned value to add another
+project into the same investigation session:
 
 ```bash
 curl -sS \
@@ -829,7 +850,7 @@ curl -sS \
         "project_names":["landingpage","traefik"],
         "source_keys":["backend"],
         "workspace":"session",
-        "session_id":"redis-timeout-debug-2026-04-27"
+        "session_id":"<returned_session_id>"
       }
     }
   }' \
@@ -1260,11 +1281,11 @@ uv run test
 ```
 
 `uv run test` delegates to `docker compose run --rm test`, which starts the
-Compose database dependency, runs `uv run migrate`, then runs the full
-`uv run pytest` suite inside the app test container. Tests that require the
-real database are marked with
-`@pytest.mark.db`; the test container provides normal `DATABASE_*` settings,
-and the test uses `Settings.db` to resolve the DSN.
+Compose database dependency, creates `mcp_log_server_test` when needed, runs
+`uv run migrate` against that test database, then runs the full `uv run pytest`
+suite inside the app test container. Tests that require the real database are
+marked with `@pytest.mark.db`; the test container provides normal
+`DATABASE_*` settings, and the tests use `Settings.db` to resolve the DSN.
 
 If you prefer host execution while iterating, use `uv`:
 

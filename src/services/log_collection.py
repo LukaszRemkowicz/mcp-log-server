@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
+from uuid import UUID, uuid4
 
 from docker.errors import APIError, DockerException
 from pydantic import BaseModel
@@ -99,7 +100,6 @@ class LogCollectionService:
 
     @staticmethod
     def normalize_params(
-        *,
         source_keys: list[str] | None,
         since: str | None,
     ) -> CollectionDefaults:
@@ -110,9 +110,18 @@ class LogCollectionService:
             since=settings.DEFAULT_LOG_WINDOW if since is None else since,
         )
 
+    @staticmethod
+    def resolve_session_id(session_id: object) -> UUID:
+        """Return the effective collect_logs session id for the request."""
+
+        if isinstance(session_id, UUID):
+            return session_id
+        if isinstance(session_id, str) and session_id.strip():
+            return UUID(session_id.strip())
+        return uuid4()
+
     def build_logs(
         self,
-        *,
         manifest: Manifest,
         sources: list[SourceDefinition],
         missing_source_keys: list[str],
@@ -211,7 +220,6 @@ class LogCollectionService:
 
     @staticmethod
     def _build_feedback(
-        *,
         missing_source_keys: list[str],
     ) -> tuple[list[str], list[str]]:
         """Build deterministic warnings and retry tips for one collection request."""
@@ -234,7 +242,6 @@ class LogCollectionService:
     def collect_source(
         self,
         definition: SourceDefinition,
-        *,
         output_file: Path,
         since: str | None,
         until: str | None,
@@ -330,7 +337,6 @@ class LogCollectionService:
     def _collect_file_source(
         self,
         definition: SourceDefinition,
-        *,
         output_file: Path,
     ) -> LogSnapshotFilePayload | CollectSourceError:
         """Collect one file-backed source declared by the manifest.
@@ -401,7 +407,6 @@ class LogCollectionService:
     def _collect_docker_source(
         self,
         definition: SourceDefinition,
-        *,
         output_file: Path,
         since: str | None,
         until: str | None,
@@ -510,7 +515,6 @@ class LogCollectionService:
 
     @staticmethod
     def _build_response(
-        *,
         project_name: str,
         workspace: SnapshotWorkspace,
         session_id: str | None,

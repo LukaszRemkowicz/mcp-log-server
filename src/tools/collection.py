@@ -138,14 +138,17 @@ def collect_logs(
     - use `project_names`, even for one project
     - `workspace="workflow"` writes shared workflow artifacts
     - `workspace="session"` writes investigation artifacts under one shared
-      `session_id`
-    - reuse the same `session_id` when the same investigation later needs logs
-      from another project
+      `session_id`; MCP creates one when the request omits it
+    - the fixed workflow agent is not allowed to use `workspace="session"`
+    - reuse the returned `session_id` when the same investigation later needs
+      logs from another project or a narrower time window
 
     Important runtime note:
 
     - for real MCP/API calls, middleware authorizes and normalizes
       `project_names` before this tool runs
+    - for real MCP/API `collect_logs` calls, middleware also injects a generated
+      `session_id` when `workspace="session"` and the request omitted it
     - when `project_names` is omitted or empty in the HTTP path, middleware may
       inject all projects accessible to the current JWT
     - direct Python calls to `collect_logs(...)` do not go through middleware,

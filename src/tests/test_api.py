@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from uuid import UUID, uuid4
 
 import pytest
 from pytest_mock import MockerFixture
@@ -823,6 +824,93 @@ def test_collect_logs_api_uses_all_accessible_projects_when_project_names_not_pr
     assert not (
         multi_project_collect_context.logs_dir / "workflow" / "other" / "latest" / "app_file.log"
     ).exists()
+
+
+def test_collect_logs_api_generates_session_id_before_tool_call(
+    file_backed_project_context: FileBackedProjectContext,
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify MCP middleware injects session_id before collect_logs runs."""
+
+    token = custom_jwt_token(
+        "codex-agent",
+        [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
+        "codex-agent",
+        {"client_type": "codex"},
+    )
+    mocker.patch(
+        "middleware.audit.agent_call_audit_service.create_tool_call",
+        new=mocker.AsyncMock(return_value=uuid4()),
+    )
+    mocker.patch(
+        "middleware.audit.agent_call_audit_service.complete_tool_call",
+        new=mocker.AsyncMock(),
+    )
+    with override_settings(
+        MANIFEST_PATH=file_backed_project_context.manifests_dir,
+        FILE_SOURCE_ROOT=file_backed_project_context.file_source_root,
+        LOGS_DIR=file_backed_project_context.logs_dir,
+    ):
+        response = jsonrpc.post(
+            token=token,
+            data=build_collect_logs_request(
+                source_keys=["app_file"],
+                workspace="session",
+                session_id=None,
+            ),
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+    session_id = payload["session_id"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert str(UUID(session_id)) == session_id
+    assert payload["workspace"] == "session"
+    assert (
+        file_backed_project_context.logs_dir
+        / "sessions"
+        / session_id
+        / "landingpage"
+        / "app_file.log"
+    ).exists()
+
+
+def test_collect_logs_api_blocks_workflow_agent_session_workspace(
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify workflow agent tokens cannot run interactive session collection."""
+
+    create_spy = mocker.patch(
+        "middleware.audit.agent_call_audit_service.create_tool_call",
+        new=mocker.AsyncMock(),
+    )
+
+    response = jsonrpc.post(
+        token=valid_jwt_token,
+        data=build_collect_logs_request(
+            source_keys=["app_file"],
+            workspace="session",
+            session_id=None,
+        ),
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "workspace_not_allowed"
+    assert payload["details"] == {
+        "client_id": "workflow-agent",
+        "client_type": None,
+        "workspace": "session",
+    }
+    create_spy.assert_not_called()
 
 
 def test_workflow_skill_resource_read_api_returns_skill_contents(

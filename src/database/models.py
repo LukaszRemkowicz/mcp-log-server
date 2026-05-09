@@ -2,50 +2,19 @@
 
 from __future__ import annotations
 
-from enum import StrEnum
 from typing import Any, ClassVar
 
 from tortoise import fields
 
 from database.fields import FileField
 from database.managers import DatabaseModel, ObjectsManager
-
-
-class LogWorkspace(StrEnum):
-    """Known collection/audit workspaces."""
-
-    WORKFLOW = "workflow"
-    SESSION = "session"
-
-
-class AgentCallEvent(StrEnum):
-    """Known MCP audit event names."""
-
-    MCP_CALL_TOOL = "mcp_call_tool"
-    MCP_CALL_TOOL_EXCEPTION = "mcp_call_tool_exception"
-    MCP_LIST_TOOLS = "mcp_list_tools"
-    MCP_READ_RESOURCE = "mcp_read_resource"
-
-
-class LogSourceType(StrEnum):
-    """Known manifest source types that can produce persisted log files."""
-
-    DOCKER = "docker"
-    FILE = "file"
-
-
-class LogStream(StrEnum):
-    """Known stream labels for collected sources."""
-
-    STDOUT = "stdout"
-    STDERR = "stderr"
-
-
-class CollectLogsSourceStatus(StrEnum):
-    """Known per-source collection statuses."""
-
-    COLLECTED = "collected"
-    UNAVAILABLE = "unavailable"
+from database.types import (
+    AgentCallEvent,
+    CollectLogsSourceStatus,
+    LogSourceType,
+    LogStream,
+    LogWorkspace,
+)
 
 
 class AgentCall(DatabaseModel):
@@ -66,11 +35,17 @@ class AgentCall(DatabaseModel):
     )
     session_ended = fields.BooleanField(
         default=False,
-        description="Whether this row marks the end of the agent session.",
+        description=(
+            "Whether this row marks the end of the agent session. Planned "
+            "close_agent_session support will write this explicitly."
+        ),
     )
     workspace = fields.CharEnumField(
         LogWorkspace,
-        description="Agent workspace for the call, currently either 'session' or 'workflow'.",
+        description=(
+            "Requested log workspace for the call: 'workflow' for shared scheduled "
+            "workflow context or 'session' for an interactive investigation."
+        ),
     )
     event = fields.CharEnumField(
         AgentCallEvent,
@@ -78,11 +53,6 @@ class AgentCall(DatabaseModel):
             "MCP action type, such as mcp_call_tool, mcp_read_resource, "
             "mcp_list_tools, or mcp_call_tool_exception."
         ),
-    )
-    subject = fields.CharField(
-        max_length=255,
-        null=True,
-        description="Authenticated JWT subject claim for the caller, when available.",
     )
     client_id = fields.CharField(
         max_length=255,
@@ -102,12 +72,13 @@ class AgentCall(DatabaseModel):
     uri = fields.TextField(
         null=True,
         description=(
-            "MCP resource URI when event records a resource read, such as a workflow skill URI."
+            "MCP resource URI when event records a resource read, such as a workflow "
+            "skill URI. Tool-call rows leave this empty."
         ),
     )
-    duration_ms = fields.FloatField(
+    duration_seconds = fields.FloatField(
         null=True,
-        description="Measured call duration in milliseconds, when timing is available.",
+        description="Measured call duration in seconds, when timing is available.",
     )
     success = fields.BooleanField(
         default=True,
@@ -130,10 +101,6 @@ class AgentCall(DatabaseModel):
     arguments: fields.Field[dict[str, Any] | None] = fields.JSONField(
         null=True,
         description="Sanitized MCP call arguments captured for replay or debugging.",
-    )
-    result_summary: fields.Field[dict[str, Any] | None] = fields.JSONField(
-        null=True,
-        description="Sanitized compact summary of the MCP call result.",
     )
 
     class Meta:

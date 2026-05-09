@@ -83,10 +83,3 @@ repos:
         pass_filenames: false
         files: ^(src/|pyproject\.toml|uv\.lock)$
         stages: [pre-commit]
-
-      - id: pytest-pre-push
-        name: pytest (pre-push)
-        entry: env UV_CACHE_DIR=/tmp/mcp-log-server-uv-cache uv run test
-        language: system
-        pass_filenames: false
-        stages: [pre-push]

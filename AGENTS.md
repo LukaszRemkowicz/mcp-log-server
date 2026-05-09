@@ -153,7 +153,11 @@ Purpose:
   returns deterministic collection results for one or more authorized
   projects and requested source keys from the manifest. Current agent-facing
   arguments are: `project_names`, `source_keys`, `workspace`, optional
-  `session_id`, `since`, and `until`.
+  `session_id`, `since`, and `until`. For real MCP calls with
+  `workspace="session"`, middleware creates a `session_id` when the request
+  omits it; agents should reuse the returned `session_id` for later calls in
+  the same investigation. The fixed `workflow-agent` token is not allowed to
+  use `workspace="session"`; it must use `workspace="workflow"`.
 - `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`
   operate on one persisted artifact identified by:
   - `session_id` + `project_name` for session investigations
@@ -363,9 +367,11 @@ uv run test
 ```
 
 `uv run test` delegates to the Docker Compose `test` service. The test service
+uses the separate `mcp_log_server_test` database, creates it when needed, and
 runs `uv run migrate` before the full `uv run pytest` suite. DB-dependent
 service tests are marked with `@pytest.mark.db` and run against the Compose
-Postgres container using `Settings.db` from the normal `DATABASE_*` settings.
+Postgres container using `Settings.db` from the test service `DATABASE_*`
+settings. Do not point tests at the local app database.
 
 Current collector test caveat:
 

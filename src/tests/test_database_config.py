@@ -11,16 +11,13 @@ from pytest_mock import MockerFixture
 import database.cli as database_cli
 import database.config as database_config
 from database.fields import FileField
-from database.models import (
-    AgentCall,
+from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest
+from database.types import (
     AgentCallEvent,
-    CollectLogs,
-    CollectLogsSource,
     CollectLogsSourceStatus,
     LogSourceType,
     LogStream,
     LogWorkspace,
-    ProjectManifest,
 )
 from tests.conftest import override_settings
 
@@ -206,32 +203,34 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
         "session_ended",
         "workspace",
         "event",
-        "subject",
         "client_id",
         "client_type",
         "tool_name",
         "uri",
-        "duration_ms",
+        "duration_seconds",
         "success",
         "error_code",
         "project_name",
         "source_keys",
         "arguments",
-        "result_summary",
     }
     assert (
         AgentCall._meta.fields_map["session_id"].description
         == "MCP-generated UUID shared by all rows that belong to one agent session."
     )
-    assert (
-        AgentCall._meta.fields_map["workspace"].description
-        == "Agent workspace for the call, currently either 'session' or 'workflow'."
+    assert AgentCall._meta.fields_map["workspace"].description == (
+        "Requested log workspace for the call: 'workflow' for shared scheduled "
+        "workflow context or 'session' for an interactive investigation."
     )
     assert cast(Any, AgentCall._meta.fields_map["workspace"]).enum_type is LogWorkspace
     assert cast(Any, AgentCall._meta.fields_map["event"]).enum_type is AgentCallEvent
+    assert AgentCall._meta.fields_map["uri"].description == (
+        "MCP resource URI when event records a resource read, such as a workflow "
+        "skill URI. Tool-call rows leave this empty."
+    )
     assert (
-        AgentCall._meta.fields_map["uri"].description
-        == "MCP resource URI when event records a resource read, such as a workflow skill URI."
+        AgentCall._meta.fields_map["duration_seconds"].description
+        == "Measured call duration in seconds, when timing is available."
     )
     assert AgentCall.objects is not None
     assert AgentCall.objects._model is AgentCall

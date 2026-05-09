@@ -4,6 +4,7 @@ import json
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from docker.errors import DockerException
@@ -630,6 +631,27 @@ def test_build_collect_logs_requires_agent_chosen_session_id(
     assert isinstance(payload, BuildLogsError)
     assert payload.error_code == "missing_session_id"
     assert "session_id is required" in payload.message
+
+
+def test_collect_logs_service_generates_session_id_for_session_workspace() -> None:
+    session_id = LogCollectionService.resolve_session_id(None)
+
+    assert session_id is not None
+    assert isinstance(session_id, UUID)
+
+
+def test_collect_logs_service_reuses_session_id_for_session_workspace() -> None:
+    existing_session_id = UUID("8f197fe7-11d8-4b03-9edb-130ece9dc241")
+
+    assert (
+        LogCollectionService.resolve_session_id(f" {existing_session_id} ") == existing_session_id
+    )
+
+
+def test_collect_logs_service_generates_session_id_without_existing_value() -> None:
+    session_id = LogCollectionService.resolve_session_id(None)
+
+    assert isinstance(session_id, UUID)
 
 
 def test_build_collect_logs_reuses_agent_chosen_session_id(

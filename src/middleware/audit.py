@@ -21,7 +21,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from time import perf_counter
-from typing import Any
+from typing import Any, cast
+from uuid import UUID
 
 import mcp.types as mt
 from fastmcp.resources.base import ResourceResult
@@ -31,8 +32,15 @@ from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import Tool, ToolResult
 
 from logging_config import get_logger
+from services.agent_calls import AgentCallAuditService, AgentCallCreateError
+from services.log_collection import LogCollectionService
+from utils.mcp_errors import AgentToolErrorResult, build_agent_tool_error_result
+from utils.types import JSONObject
 
 logger: logging.Logger = get_logger("middleware.audit")
+agent_call_audit_service = AgentCallAuditService()
+WORKFLOW_AGENT_CLIENT_ID = "workflow-agent"
+WORKFLOW_AGENT_CLIENT_TYPE = "workflow_agent"
 
 
 def _build_auth_fields(token: AccessToken | None) -> dict[str, Any]:
@@ -68,6 +76,75 @@ def _tool_result_is_error(result: ToolResult) -> bool:
         return bool(getattr(result.to_mcp_result(), "isError", False))
     except Exception:
         return False
+
+
+def _is_workflow_agent(token: AccessToken | None) -> bool:
+    """Return whether the authenticated caller is the fixed workflow agent."""
+
+    if token is None:
+        return False
+    return (
+        token.client_id == WORKFLOW_AGENT_CLIENT_ID
+        or token.claims.get("client_type") == WORKFLOW_AGENT_CLIENT_TYPE
+    )
+
+
+def _workflow_agent_session_error(token: AccessToken | None) -> AgentToolErrorResult:
+    """Return an agent-facing error for workflow agents requesting session workspace."""
+
+    return build_agent_tool_error_result(
+        error_code="workspace_not_allowed",
+        message="workflow-agent cannot use workspace='session'.",
+        retry_tips=[
+            "Retry with workspace='workflow' for scheduled workflow collection.",
+            "Use a non-workflow agent token for interactive session investigations.",
+        ],
+        details={
+            "client_id": token.client_id if token is not None else None,
+            "client_type": (token.claims.get("client_type") if token is not None else None),
+            "workspace": "session",
+        },
+    )
+
+
+def _prepare_collect_logs_session_id(
+    context: MiddlewareContext[mt.CallToolRequestParams],
+) -> UUID:
+    """Inject the effective collect_logs session id into tool arguments."""
+
+    arguments: dict[str, Any] = dict(context.message.arguments or {})
+    session_id = LogCollectionService.resolve_session_id(arguments.get("session_id"))
+
+    arguments["session_id"] = str(session_id)
+    context.message.arguments = arguments
+    return session_id
+
+
+async def _create_agent_call(
+    *,
+    token: AccessToken | None,
+    tool_name: str,
+    session_id: UUID,
+    arguments: dict[str, Any] | None,
+) -> UUID | AgentToolErrorResult:
+    """Create one AgentCall row when a request has an effective session id."""
+
+    result = await agent_call_audit_service.create_tool_call(
+        session_id=session_id,
+        workspace=str((arguments or {}).get("workspace", "workflow")),
+        event="mcp_call_tool",
+        token=token,
+        tool_name=tool_name,
+        arguments=arguments,
+    )
+    if isinstance(result, AgentCallCreateError):
+        return build_agent_tool_error_result(
+            error_code=result.error_code,
+            message=result.message,
+            retry_tips=result.retry_tips,
+            details=cast(JSONObject, result.details),
+        )
+    return result
 
 
 class AccessAuditMiddleware(Middleware):
@@ -113,7 +190,7 @@ class AccessAuditMiddleware(Middleware):
             extra={
                 "event": "mcp_read_resource",
                 "uri": str(context.message.uri),
-                "duration_ms": round((perf_counter() - started_at) * 1000, 3),
+                "duration_seconds": round(perf_counter() - started_at, 3),
                 **_build_auth_fields(token),
             },
         )
@@ -133,29 +210,61 @@ class AccessAuditMiddleware(Middleware):
         token = get_access_token()
         started_at = perf_counter()
         tool_name = context.message.name
+        arguments: dict[str, Any] = dict(context.message.arguments or {})
+        if (
+            tool_name == "collect_logs"
+            and arguments.get("workspace") == "session"
+            and _is_workflow_agent(token)
+        ):
+            return _workflow_agent_session_error(token)
+
+        session_id = (
+            _prepare_collect_logs_session_id(context) if tool_name == "collect_logs" else None
+        )
+        agent_call_pk: UUID | None = None
+        if session_id is not None:
+            agent_call_result = await _create_agent_call(
+                token=token,
+                tool_name=tool_name,
+                session_id=session_id,
+                arguments=context.message.arguments,
+            )
+            if isinstance(agent_call_result, AgentToolErrorResult):
+                return agent_call_result
+            agent_call_pk = agent_call_result
 
         try:
             result = await call_next(context)
         except Exception:
+            duration_seconds = round(perf_counter() - started_at, 3)
+            await agent_call_audit_service.complete_tool_call(
+                agent_call_pk=agent_call_pk,
+                session_id=session_id,
+                tool_name=tool_name,
+                duration_seconds=duration_seconds,
+                success=False,
+                error_code="mcp_call_tool_exception",
+            )
             logger.exception(
                 "mcp tool call crashed",
                 extra={
                     "event": "mcp_call_tool_exception",
                     "tool_name": tool_name,
-                    "duration_ms": round((perf_counter() - started_at) * 1000, 3),
+                    "session_id": str(session_id) if session_id is not None else None,
+                    "duration_seconds": duration_seconds,
                     **_build_auth_fields(token),
                 },
             )
             raise
 
-        logger.info(
-            "mcp tool called",
-            extra={
-                "event": "mcp_call_tool",
-                "tool_name": tool_name,
-                "tool_error": _tool_result_is_error(result),
-                "duration_ms": round((perf_counter() - started_at) * 1000, 3),
-                **_build_auth_fields(token),
-            },
+        tool_error = _tool_result_is_error(result)
+        duration_seconds = round(perf_counter() - started_at, 3)
+        await agent_call_audit_service.complete_tool_call(
+            agent_call_pk=agent_call_pk,
+            session_id=session_id,
+            tool_name=tool_name,
+            duration_seconds=duration_seconds,
+            success=not tool_error,
+            error_code="mcp_tool_error" if tool_error else None,
         )
         return result
