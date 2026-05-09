@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 from scripts.commands import upload_project_manifest as upload_command
@@ -187,15 +189,20 @@ def test_update_project_manifest_internal_reports_missing_project(
 def test_upload_project_manifest_command_requires_selection() -> None:
     result = runner.invoke(app, ["upload-project-manifest"])
 
-    assert result.exit_code != 0
-    assert "Provide PROJECT_NAME or use --all." in result.output
+    assert result.exit_code == 2
+    with pytest.raises(typer.BadParameter, match="Provide PROJECT_NAME or use --all."):
+        upload_command.upload_project_manifest()
 
 
 def test_upload_project_manifest_command_rejects_project_and_all() -> None:
     result = runner.invoke(app, ["upload-project-manifest", "landingpage", "--all"])
 
-    assert result.exit_code != 0
-    assert "Use either PROJECT_NAME or --all, not both." in result.output
+    assert result.exit_code == 2
+    with pytest.raises(
+        typer.BadParameter,
+        match="Use either PROJECT_NAME or --all, not both.",
+    ):
+        upload_command.upload_project_manifest(project_name="landingpage", all_projects=True)
 
 
 def test_upload_project_manifest_command_runs_inside_app_container(monkeypatch) -> None:

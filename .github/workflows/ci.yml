@@ -56,6 +56,20 @@ jobs:
     name: HTTP E2E
     runs-on: ubuntu-latest
     needs: [quality]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: mcp_log_server
+          POSTGRES_USER: mcp_log_server
+          POSTGRES_PASSWORD: mcp-log-server-local-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mcp_log_server -d mcp_log_server"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
 
     steps:
       - name: Checkout code
@@ -75,7 +89,13 @@ jobs:
         run: uv sync --group dev
 
       - name: Run HTTP MCP end-to-end checks
-        run: bash infra/scripts/run_http_e2e.sh
+        env:
+          DATABASE_HOST: localhost
+          DATABASE_PORT: 5432
+          DATABASE_NAME: mcp_log_server
+          DATABASE_USER: mcp_log_server
+          DATABASE_PASSWORD: mcp-log-server-local-password
+        run: uv run migrate && bash infra/scripts/run_http_e2e.sh
 
   docker-build:
     name: Docker Build Check
