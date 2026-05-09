@@ -8,11 +8,9 @@ call Tortoise class methods such as ``ProjectManifest.get(...)`` directly.
 from __future__ import annotations
 
 from typing import ClassVar
-from uuid import UUID, uuid4
 
 from database.models import ProjectManifest
-from database.services.models import ProjectManifestUpdate
-from manifests.models import Manifest
+from database.services.models import ProjectManifestCreate, ProjectManifestUpdate
 
 
 class ProjectManifestService:
@@ -20,32 +18,16 @@ class ProjectManifestService:
 
     model: ClassVar[type[ProjectManifest]] = ProjectManifest
 
-    async def create_or_update(
-        self,
-        manifest: Manifest,
-        *,
-        pk: UUID | None = None,
-    ) -> ProjectManifest:
-        """Create or update one project manifest row from a validated manifest."""
+    async def exists(self, project_key: str) -> bool:
+        """Return whether one project manifest already exists."""
 
-        payload = manifest.model_dump(mode="json")
-        payload["id"] = pk or uuid4()
-        payload["sources"] = [source.model_dump(mode="json") for source in manifest.sources]
-        existing = await self.model.objects.filter(
-            project_key=manifest.project_key,
-        ).first()
-        if existing is None:
-            return await self.model.objects.create(**payload)
+        return (await self.model.objects.filter(project_key=project_key).limit(1).count()) > 0
 
-        return await self.update(
-            ProjectManifestUpdate(
-                pk=existing.id,
-                project_summary=manifest.project_summary,
-                static_asset_paths=manifest.static_asset_paths,
-                static_asset_extensions=manifest.static_asset_extensions,
-                sources=payload["sources"],
-            )
-        )
+    async def create(self, payload: ProjectManifestCreate) -> ProjectManifest:
+        """Create one project manifest row."""
+
+        context = payload.model_dump(exclude={"pk"}, exclude_none=True)
+        return await self.model.objects.create(id=payload.pk, **context)
 
     async def get(self, project_key: str) -> ProjectManifest:
         """Return one persisted project manifest by project key."""

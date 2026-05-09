@@ -11,7 +11,12 @@ import pytest
 from database.fields import FileReference
 from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest
 from database.services.agent_calls import AgentCallService
-from database.services.models import AgentCallCreate, AgentCallFilter, AgentCallUpdate
+from database.services.models import (
+    AgentCallCreate,
+    AgentCallFilter,
+    AgentCallUpdate,
+    ProjectManifestCreate,
+)
 from database.services.project_manifests import ProjectManifestService
 from database.types import CollectLogsSourceStatus, LogSourceType, LogStream, LogWorkspace
 from manifests.models import Manifest, SourceDefinition
@@ -50,7 +55,15 @@ async def test_database_services_round_trip_against_real_postgres(
         ],
     )
 
-    stored_manifest = await project_manifests.create_or_update(manifest)
+    stored_manifest = await project_manifests.create(
+        ProjectManifestCreate(
+            project_key=manifest.project_key,
+            project_summary=manifest.project_summary,
+            static_asset_paths=manifest.static_asset_paths,
+            static_asset_extensions=manifest.static_asset_extensions,
+            sources=[source.model_dump(mode="json") for source in manifest.sources],
+        )
+    )
     created_call = await agent_calls.create(
         AgentCallCreate(
             session_id=session_id,

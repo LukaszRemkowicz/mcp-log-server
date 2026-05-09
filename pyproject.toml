@@ -16,9 +16,11 @@ dependencies = [
   "pydantic>=2.9.0",
   "pydantic-settings>=2.5.0",
   "tortoise-orm[asyncpg]>=0.25.1",
+  "typer>=0.24.0",
 ]
 
 [project.scripts]
+commands = "scripts.main:main"
 makemigrations = "database.cli:makemigrations"
 migrate = "database.cli:migrate"
 shell = "scripts.shell:main"

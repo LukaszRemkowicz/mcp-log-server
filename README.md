@@ -208,6 +208,7 @@ with:
 
 ```toml
 [project.scripts]
+commands = "scripts.main:main"
 makemigrations = "database.cli:makemigrations"
 migrate = "database.cli:migrate"
 shell = "scripts.shell:main"
@@ -263,6 +264,26 @@ services, application services, `settings`, and `TORTOISE_ORM`. Use top-level
 await AgentCall.objects.all().limit(5)
 await CollectLogs.objects.filter(project_name="landingpage")
 ```
+
+Upload configured project manifests into the database:
+
+```bash
+uv run commands upload-project-manifest landingpage
+uv run commands upload-project-manifest --all
+```
+
+Upload is create-only. Existing project manifests are reported and left
+untouched. To update an existing manifest, run:
+
+```bash
+uv run commands update-project-manifest --project landingpage
+```
+
+Run this command on the host where the Docker Compose app service is running.
+It uses Docker SDK to execute a hidden internal command inside the app
+container, so database access uses Docker service DNS (`db:5432`) instead of
+host `127.0.0.1:5432`. The internal command reads manifests from
+`settings.MANIFEST_PATH` inside the app container.
 
 ### Database Backup, Restore, Build, And Deploy
 
@@ -1319,11 +1340,13 @@ lives there.
 Current checks and release flows:
 
 - pre-commit
-- shared Python test workflow running `uv run migrate && uv run pytest`
+- shared Python test workflow running `uv run pytest`
   - covers unit-style FastMCP client tests
   - covers JWT-protected HTTP integration tests
   - covers DB-marked service integration tests against the shared workflow
     Postgres service
+  - applies committed migrations from the pytest DB setup before DB-marked
+    tests run
   - covers docker-backed collection logic with mocks inside pytest
 - curl-driven MCP HTTP end-to-end checks via `infra/scripts/run_http_e2e.sh`
 - Docker Compose validation

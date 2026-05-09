@@ -50,6 +50,17 @@ class AgentCallUpdate(BaseModel):
     error_code: str | None = None
 
 
+class ProjectManifestCreate(BaseModel):
+    """Validated payload for creating one project manifest metadata row."""
+
+    pk: UUID = Field(default_factory=uuid4)
+    project_key: str
+    project_summary: str
+    static_asset_paths: list[str]
+    static_asset_extensions: list[str]
+    sources: list[dict[str, Any]]
+
+
 class ProjectManifestUpdate(BaseModel):
     """Validated payload for updating one project manifest metadata row."""
 

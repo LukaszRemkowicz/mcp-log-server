@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import asyncio
+from collections.abc import Callable, Coroutine
 from enum import StrEnum
 from functools import wraps
 from inspect import Parameter, Signature, signature
@@ -142,6 +143,16 @@ def list_workflow_discoverable_tool_registrations() -> list[dict[str, Any]]:
     """Return the stored workflow bootstrap tool catalog in registration order."""
 
     return list(_workflow_discoverable_tools_by_name.values())
+
+
+def async_[**P, T](func: Callable[P, Coroutine[Any, Any, T]]) -> Callable[P, T]:
+    """Wrap an async Typer command so Click can execute it synchronously."""
+
+    @wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        return asyncio.run(func(*args, **kwargs))
+
+    return wrapper
 
 
 def _get_bound_access_token(bound_arguments: dict[str, Any]) -> AccessToken | None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 import time
 from collections.abc import AsyncIterator, Generator
 from contextlib import contextmanager
@@ -141,6 +142,12 @@ async def _flush_database_tables() -> None:
         await model.all().delete()
 
 
+def _run_database_migrations() -> None:
+    """Apply committed migrations before database tests run."""
+
+    subprocess.run(["aerich", "upgrade"], check=True)
+
+
 @pytest.fixture
 async def database_test_case(request: pytest.FixtureRequest) -> AsyncIterator[None]:
     """Provide Django-style database setup and flush for tests marked db."""
@@ -173,6 +180,9 @@ def pytest_collection_modifyitems(
             db_items.append(item)
         else:
             non_db_items.append(item)
+
+    if db_items:
+        _run_database_migrations()
 
     items[:] = [*non_db_items, *db_items]
 

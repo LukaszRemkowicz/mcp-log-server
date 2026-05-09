@@ -252,7 +252,10 @@ This repository provides the thin wrapper in:
 
 The shared test job enables the reusable workflow's Postgres service and runs:
 
-- `uv run migrate && uv run pytest`
+- `uv run pytest`
+
+The pytest DB setup applies committed migrations before DB-marked tests run, so
+the repository does not need a custom shared workflow test command.
 
 That covers both:
 

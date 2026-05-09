@@ -51,7 +51,6 @@ jobs:
         DATABASE_NAME=mcp_log_server
         DATABASE_USER=mcp_log_server
         DATABASE_PASSWORD=mcp-log-server-local-password
-      test_command: uv run migrate && uv run pytest
 
   http-e2e:
     name: HTTP E2E
