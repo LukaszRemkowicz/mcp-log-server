@@ -25,6 +25,7 @@ from conf import set_settings, settings
 from database.services.models import ProjectManifestCreate, ProjectManifestUpdate
 from database.services.project_manifests import ProjectManifestService as ProjectManifestDBService
 from manifests.loader import list_project_manifests
+from services.log_collection import LogCollectionService
 from services.project_manifest import ProjectManifestContext
 from settings import Settings
 from tools.models import ProjectManifestList, ProjectManifestSummary
@@ -182,6 +183,9 @@ def pytest_collection_modifyitems(
     non_db_items: list[pytest.Item] = []
     for item in items:
         if item.get_closest_marker("db") is not None:
+            item_with_fixtures: Any = item
+            if "database_test_case" not in item_with_fixtures.fixturenames:
+                item_with_fixtures.fixturenames.append("database_test_case")
             item.add_marker(pytest.mark.usefixtures("database_test_case"))
             db_items.append(item)
         else:
@@ -345,6 +349,7 @@ def patch_file_project_manifest_service(mocker: MockerFixture) -> FileBackedProj
     mocker.patch("tools.collection.manifest_service", service)
     mocker.patch("tools.analysis.manifest_service", service)
     mocker.patch("tools.container_inspection.manifest_service", service)
+    mocker.patch("tools.collection.collection_service", LogCollectionService())
     return service
 
 

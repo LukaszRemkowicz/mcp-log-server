@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from fastmcp.server.auth import AccessToken
 
 import decorators
 import tools.collection as collection_tools
 from conf import settings
 from manifests.loader import list_project_manifests, load_project_manifest
+from services.log_collection import LogCollectionService
 from services.project_manifest import ProjectManifestContext
 from tests.conftest import CustomAccessToken, override_settings
 from tools.collection import collect_logs, list_projects
@@ -61,6 +63,11 @@ def _patch_manifest_services(monkeypatch) -> None:
     service = FileBackedProjectManifestService()
     monkeypatch.setattr(decorators, "project_manifest_service", service)
     monkeypatch.setattr(collection_tools, "manifest_service", service)
+    monkeypatch.setattr(
+        collection_tools,
+        "collection_service",
+        LogCollectionService(),
+    )
 
 
 def test_collect_logs_returns_agent_error_for_invalid_docker_time_filter(
@@ -151,21 +158,21 @@ def test_collect_logs_returns_agent_error_for_missing_session_id(
     assert mcp_result.structuredContent["error_code"] == "missing_session_id"
 
 
-def test_collect_logs_uses_accessible_projects_for_empty_project_names(
+@pytest.mark.db
+@pytest.mark.anyio
+async def test_collect_logs_uses_accessible_projects_for_empty_project_names(
     tmp_path: Path,
     valid_access_token: AccessToken,
     monkeypatch,
 ) -> None:
     _patch_manifest_services(monkeypatch)
     with override_settings(LOGS_DIR=tmp_path / "collected-logs"):
-        result = _run(
-            collect_logs(
-                project_names=[],
-                source_keys=["app_file"],
-                since=None,
-                until=None,
-                access_token=valid_access_token,
-            )
+        result = await collect_logs(
+            project_names=[],
+            source_keys=["app_file"],
+            since=None,
+            until=None,
+            access_token=valid_access_token,
         )
     payload = result.structured_content
 
@@ -216,7 +223,9 @@ def test_list_projects_returns_multiple_manifest_backed_projects(
     ]
 
 
-def test_collect_logs_can_collect_multiple_projects_into_one_session(
+@pytest.mark.db
+@pytest.mark.anyio
+async def test_collect_logs_can_collect_multiple_projects_into_one_session(
     tmp_path: Path,
     custom_access_token: CustomAccessToken,
     monkeypatch,
@@ -231,25 +240,23 @@ def test_collect_logs_can_collect_multiple_projects_into_one_session(
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        result = _run(
-            collect_logs(
-                project_names=["alpha", "beta"],
-                source_keys=["app_file"],
-                workspace="session",
-                session_id="incident-123",
-                access_token=token,
-            )
+        result = await collect_logs(
+            project_names=["alpha", "beta"],
+            source_keys=["app_file"],
+            workspace="session",
+            session_id="c2ccab1b-b6cc-422c-95e2-f64b507eeb4f",
+            access_token=token,
         )
     payload = result.structured_content
     assert payload is not None
 
     assert payload["workspace"] == "session"
-    assert payload["session_id"] == "incident-123"
+    assert payload["session_id"] == "c2ccab1b-b6cc-422c-95e2-f64b507eeb4f"
     assert payload["requested_project_names"] == ["alpha", "beta"]
     assert [item["project_name"] for item in payload["projects"]] == ["alpha", "beta"]
     assert payload["projects"][0]["snapshot_dir"] == str(
-        logs_dir / "sessions" / "incident-123" / "alpha"
+        logs_dir / "sessions" / "c2ccab1b-b6cc-422c-95e2-f64b507eeb4f" / "alpha"
     )
     assert payload["projects"][1]["snapshot_dir"] == str(
-        logs_dir / "sessions" / "incident-123" / "beta"
+        logs_dir / "sessions" / "c2ccab1b-b6cc-422c-95e2-f64b507eeb4f" / "beta"
     )

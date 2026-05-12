@@ -11,6 +11,7 @@ from pytest_mock import MockerFixture
 import database.cli as database_cli
 import database.config as database_config
 from database.fields import FileField
+from database.managers import CollectLogsManager
 from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest
 from database.types import (
     AgentCallEvent,
@@ -269,6 +270,7 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
     )
     assert CollectLogs.objects is not None
     assert CollectLogs.objects._model is CollectLogs
+    assert isinstance(CollectLogs.objects, CollectLogsManager)
 
     assert CollectLogsSource.Meta.table == "collect_logs_sources"
     collect_logs_source_fields = set(CollectLogsSource._meta.fields_map)
@@ -300,9 +302,10 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
         CollectLogsSource._meta.fields_map["collect_logs"].description
         == "Parent collect_logs artifact this source file belongs to."
     )
-    assert (
-        CollectLogsSource._meta.fields_map["file"].description
-        == "Persisted source file path under logs root, when collection succeeded."
+    assert CollectLogsSource._meta.fields_map["file"].description == (
+        "Logs-root-relative source file path, for example "
+        "sessions/<session_id>/<project_name>/<source>.log or "
+        "workflow/<project_name>/latest/<source>.log."
     )
     assert isinstance(CollectLogsSource._meta.fields_map["file"], FileField)
     assert CollectLogsSource.objects is not None

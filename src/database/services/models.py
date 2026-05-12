@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -69,3 +70,41 @@ class ProjectManifestUpdate(BaseModel):
     static_asset_paths: list[str] | None = None
     static_asset_extensions: list[str] | None = None
     sources: list[dict[str, Any]] | None = None
+
+
+class CollectLogsCreate(BaseModel):
+    """Validated payload for creating one collected log artifact row."""
+
+    session_id: UUID | None = None
+    workspace: str
+    project_name: str
+    collected_at: datetime
+    snapshot_dir: str
+    metadata_file: str
+    archive_name: str | None = None
+    is_latest: bool = False
+    requested_source_keys: list[str]
+    resolved_source_keys: list[str]
+    unknown_requested_source_keys: list[str]
+    requested_since: str | None = None
+    requested_until: str | None = None
+    warnings: list[str]
+    retry_tips: list[str]
+
+
+class CollectLogsSourceCreate(BaseModel):
+    """Validated payload for creating one collected source metadata row."""
+
+    source_key: str
+    source_type: str
+    target: str
+    description: str
+    stream: str | None = None
+    parser_type: str | None = None
+    normalization_profile: str | None = None
+    default_noise_profile: str | None = None
+    status: str
+    file: str | None = None
+    line_count: int = 0
+    error: str | None = None
+    retry_tips: list[str]

@@ -35,6 +35,19 @@ class ObjectsManager[ModelT: Model](Manager):
         return self._model.all()
 
 
+class CollectLogsManager[ModelT: Model](ObjectsManager[ModelT]):
+    """Django-style manager helpers for collect_logs rows."""
+
+    def get_latest(self, project_name: str) -> Awaitable[ModelT | None]:
+        """Return the current latest workflow row for one project."""
+
+        return self.filter(
+            project_name=project_name,
+            workspace="workflow",
+            is_latest=True,
+        ).first()
+
+
 class DatabaseModel(Model):
     """Abstract model base that gives every database model an objects manager."""
 

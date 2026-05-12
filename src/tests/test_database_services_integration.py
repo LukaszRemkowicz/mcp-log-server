@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 
+from conf import settings
 from database.fields import FileReference
 from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest
 from database.services.agent_calls import AgentCallService
@@ -19,7 +20,11 @@ from database.services.models import (
 )
 from database.services.project_manifests import ProjectManifestService
 from database.types import CollectLogsSourceStatus, LogSourceType, LogStream, LogWorkspace
+from manifests.loader import load_project_manifest
 from manifests.models import Manifest, SourceDefinition
+from services.log_collection import BuildLogsError, LogCollectionService
+from services.project_manifest import ProjectManifestService as RuntimeProjectManifestService
+from tests.conftest import override_settings
 
 
 @pytest.mark.db
@@ -114,7 +119,6 @@ async def test_collect_logs_models_round_trip_against_real_postgres(
     source_file.write_text("line 1\nline 2\n", encoding="utf-8")
 
     collect_logs = await CollectLogs.objects.create(
-        id=uuid4(),
         session_id=session_id,
         workspace=LogWorkspace.SESSION,
         project_name=f"integration-{suffix}",
@@ -130,7 +134,6 @@ async def test_collect_logs_models_round_trip_against_real_postgres(
         retry_tips=["Retry with valid source keys."],
     )
     collected_source = await CollectLogsSource.objects.create(
-        id=uuid4(),
         collect_logs=collect_logs,
         source_key="backend",
         source_type=LogSourceType.DOCKER,
@@ -146,7 +149,6 @@ async def test_collect_logs_models_round_trip_against_real_postgres(
         retry_tips=[],
     )
     unavailable_source = await CollectLogsSource.objects.create(
-        id=uuid4(),
         collect_logs=collect_logs,
         source_key="nginx",
         source_type=LogSourceType.FILE,
@@ -193,10 +195,6 @@ async def test_collect_logs_models_round_trip_against_real_postgres(
     assert fetched_sources[0].source_type == LogSourceType.DOCKER
     assert fetched_sources[0].stream == LogStream.STDOUT
     assert fetched_sources[0].status == CollectLogsSourceStatus.COLLECTED
-    assert fetched_sources[0].file == FileReference(
-        name=source_file.as_posix(),
-        size_bytes=source_file.stat().st_size,
-    )
     assert fetched_sources[0].file.name == source_file.as_posix()
     assert fetched_sources[0].file.path == source_file.as_posix()
     assert fetched_sources[0].file.size == source_file.stat().st_size
@@ -212,3 +210,97 @@ async def test_collect_logs_models_round_trip_against_real_postgres(
     assert fetched_sources[1].line_count == 0
     assert fetched_sources[1].error == "Source file was not available."
     assert fetched_sources[1].retry_tips == ["Check the configured source path."]
+
+
+@pytest.mark.db
+@pytest.mark.anyio
+async def test_log_collection_service_persists_collect_logs_metadata(
+    database_test_case: None,
+    tmp_path: Path,
+) -> None:
+    """Verify collect_logs orchestration writes artifact and source rows."""
+
+    del database_test_case
+    logs_dir = tmp_path / "collected-logs"
+    manifest = load_project_manifest(settings.manifests_dir, "landingpage")
+    manifest_sources = RuntimeProjectManifestService.get_manifest_source_keys(
+        manifest,
+        ["app_file", "missing"],
+    )
+
+    with override_settings(LOGS_DIR=logs_dir):
+        payload = await LogCollectionService().build_logs(
+            manifest=manifest,
+            sources=manifest_sources.sources,
+            missing_source_keys=manifest_sources.missing_source_keys,
+            source_keys=manifest_sources.source_keys,
+            workspace="workflow",
+            session_id=None,
+            since="5m",
+            until=None,
+        )
+        assert not isinstance(payload, BuildLogsError)
+        rows = await CollectLogs.objects.filter(project_name="landingpage")
+        assert len(rows) == 1
+        collect_logs = rows[0]
+        sources = await CollectLogsSource.objects.filter(collect_logs=collect_logs)
+
+        assert collect_logs.workspace == LogWorkspace.WORKFLOW
+        assert collect_logs.session_id is None
+        assert collect_logs.is_latest is True
+        assert collect_logs.requested_source_keys == ["app_file", "missing"]
+        assert collect_logs.resolved_source_keys == ["app_file"]
+        assert collect_logs.unknown_requested_source_keys == ["missing"]
+        assert collect_logs.requested_since == "5m"
+        assert collect_logs.requested_until is None
+        assert collect_logs.snapshot_dir == payload.snapshot_dir
+        assert collect_logs.metadata_file.path == payload.metadata_file
+        assert collect_logs.metadata_file.size > 0
+
+        assert len(sources) == 1
+        assert sources[0].source_key == "app_file"
+        assert sources[0].status == CollectLogsSourceStatus.COLLECTED
+        assert sources[0].file is not None
+        assert sources[0].file.name == "workflow/landingpage/latest/app_file.log"
+        assert sources[0].file.url == "workflow/landingpage/latest/app_file.log"
+        assert sources[0].line_count > 0
+
+
+@pytest.mark.db
+@pytest.mark.anyio
+async def test_log_collection_service_persists_session_source_file_path(
+    database_test_case: None,
+    tmp_path: Path,
+) -> None:
+    """Verify session collect_logs source files keep logs-root-relative DB paths."""
+
+    del database_test_case
+    logs_dir = tmp_path / "collected-logs"
+    session_id = uuid4()
+    manifest = load_project_manifest(settings.manifests_dir, "landingpage")
+    manifest_sources = RuntimeProjectManifestService.get_manifest_source_keys(
+        manifest,
+        ["app_file"],
+    )
+
+    with override_settings(LOGS_DIR=logs_dir):
+        payload = await LogCollectionService().build_logs(
+            manifest=manifest,
+            sources=manifest_sources.sources,
+            missing_source_keys=manifest_sources.missing_source_keys,
+            source_keys=manifest_sources.source_keys,
+            workspace="session",
+            session_id=str(session_id),
+            since="5m",
+            until=None,
+        )
+        assert not isinstance(payload, BuildLogsError)
+        collect_logs = await CollectLogs.objects.get(project_name="landingpage")
+        sources = await CollectLogsSource.objects.filter(collect_logs=collect_logs)
+
+        assert collect_logs.workspace == LogWorkspace.SESSION
+        assert collect_logs.session_id == session_id
+        assert len(sources) == 1
+        assert sources[0].file is not None
+        assert sources[0].file.name == f"sessions/{session_id}/landingpage/app_file.log"
+        assert sources[0].file.url == f"sessions/{session_id}/landingpage/app_file.log"

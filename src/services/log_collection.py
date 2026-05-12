@@ -15,6 +15,10 @@ from requests import exceptions as requests_exceptions
 
 import docker
 from conf import settings
+from database.models import CollectLogs
+from database.services.collect_logs import CollectLogsService as CollectLogsDBService
+from database.services.collect_logs import CollectLogsSourceService as CollectLogsSourceDBService
+from database.services.models import CollectLogsCreate, CollectLogsSourceCreate
 from manifests.models import Manifest, SourceDefinition
 from tools.agent_hints import COLLECT_LOGS_NEXT_STEP_TIPS
 from tools.models import (
@@ -95,8 +99,17 @@ class LogCollectionService:
     snapshot lifecycle belongs to `LogSnapshotService`.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        collect_logs_db_service: CollectLogsDBService | None = None,
+        collect_logs_source_db_service: CollectLogsSourceDBService | None = None,
+    ) -> None:
         self.snapshot_service = LogSnapshotService()
+        self.collect_logs_db_service = collect_logs_db_service or CollectLogsDBService()
+        self.collect_logs_source_db_service = (
+            collect_logs_source_db_service or CollectLogsSourceDBService()
+        )
 
     @staticmethod
     def normalize_params(
@@ -120,7 +133,7 @@ class LogCollectionService:
             return UUID(session_id.strip())
         return uuid4()
 
-    def build_logs(
+    async def build_logs(
         self,
         manifest: Manifest,
         sources: list[SourceDefinition],
@@ -201,6 +214,29 @@ class LogCollectionService:
             session_id=normalized_session_id,
             collected_files=collected_files,
         )
+        requested_source_keys = [*source_keys, *missing_source_keys]
+        await self.save_logs_to_db(
+            collect_logs_payload=CollectLogsCreate(
+                session_id=(
+                    UUID(normalized_session_id) if normalized_session_id is not None else None
+                ),
+                workspace=workspace,
+                project_name=project_name,
+                collected_at=datetime.fromisoformat(snapshot_context.metadata.collected_at),
+                snapshot_dir=str(snapshot_context.snapshot_dir),
+                metadata_file=str(snapshot_context.metadata_file),
+                is_latest=workspace == "workflow",
+                requested_source_keys=requested_source_keys,
+                resolved_source_keys=source_keys,
+                unknown_requested_source_keys=missing_source_keys,
+                requested_since=since,
+                requested_until=until,
+                warnings=warnings,
+                retry_tips=retry_tips,
+            ),
+            metadata=snapshot_context.metadata,
+            collected_results=collected_results,
+        )
         return self._build_response(
             project_name=project_name,
             workspace=workspace,
@@ -238,6 +274,95 @@ class LogCollectionService:
             )
 
         return warnings, retry_tips
+
+    async def save_logs_to_db(
+        self,
+        *,
+        collect_logs_payload: CollectLogsCreate,
+        metadata: LogSnapshotMetadata,
+        collected_results: list[LogSnapshotFilePayload | CollectSourceError],
+    ) -> None:
+        """Save CollectLogs and CollectLogsSource rows for the written snapshot files."""
+
+        if collect_logs_payload.workspace == "workflow":
+            await self.archive_latest_for_project(collect_logs_payload.project_name)
+
+        collect_logs_row = await self.collect_logs_db_service.create(collect_logs_payload)
+        await self.collect_logs_source_db_service.create_many(
+            collect_logs_row,
+            [
+                self._build_source_create_payload(
+                    result=result,
+                    metadata=metadata,
+                )
+                for result in collected_results
+            ],
+        )
+
+    async def archive_latest_for_project(self, project_name: str) -> None:
+        """Archive the current latest workflow snapshot for one project."""
+
+        obj: CollectLogs | None = await self.collect_logs_db_service.get_latest(project_name)
+        if obj is None:
+            return
+
+        archive_name = obj.collected_at.astimezone(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
+        await self.collect_logs_db_service.archive(
+            obj,
+            archive_name=archive_name,
+            snapshot_dir=self._archived_snapshot_dir(obj.snapshot_dir, archive_name),
+        )
+
+    @staticmethod
+    def _archived_snapshot_dir(snapshot_dir: str, archive_name: str) -> str:
+        """Return snapshot dir rewritten from workflow latest to archive path."""
+
+        path = Path(snapshot_dir)
+        if path.name != "latest":
+            return snapshot_dir
+        return (path.parent / "archive" / archive_name).as_posix()
+
+    @staticmethod
+    def _build_source_create_payload(
+        *,
+        result: LogSnapshotFilePayload | CollectSourceError,
+        metadata: LogSnapshotMetadata,
+    ) -> CollectLogsSourceCreate:
+        """Build one DB source payload from a collection result."""
+
+        if isinstance(result, CollectSourceError):
+            return CollectLogsSourceCreate(
+                source_key=result.source_key,
+                source_type=result.source_type,
+                target=result.target,
+                description=result.description,
+                stream=result.stream,
+                parser_type=result.parser_type,
+                normalization_profile=result.normalization_profile,
+                default_noise_profile=result.default_noise_profile,
+                status="unavailable",
+                file=None,
+                line_count=0,
+                error=result.error,
+                retry_tips=result.retry_tips,
+            )
+
+        file_payload = next(item for item in metadata.files if item.source_key == result.source_key)
+        return CollectLogsSourceCreate(
+            source_key=file_payload.source_key,
+            source_type=file_payload.source_type,
+            target=file_payload.target,
+            description=file_payload.description,
+            stream=file_payload.stream,
+            parser_type=file_payload.parser_type,
+            normalization_profile=file_payload.normalization_profile,
+            default_noise_profile=file_payload.default_noise_profile,
+            status="collected",
+            file=file_payload.output_file,
+            line_count=file_payload.line_count,
+            error=None,
+            retry_tips=[],
+        )
 
     def collect_source(
         self,
@@ -583,7 +708,7 @@ class LogCollectionService:
             snapshot_dir=snapshot_dir,
             metadata_file=metadata_file,
             persisted=True,
-            requested_source_keys=[],
+            requested_source_keys=[*source_keys, *missing_source_keys],
             requested_since=requested_since,
             requested_until=requested_until,
             next_step_tips=COLLECT_LOGS_NEXT_STEP_TIPS,

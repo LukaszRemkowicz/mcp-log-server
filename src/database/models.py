@@ -6,8 +6,9 @@ from typing import Any, ClassVar
 
 from tortoise import fields
 
-from database.fields import FileField
-from database.managers import DatabaseModel, ObjectsManager
+from conf import settings
+from database.fields import FileField, FileStorage
+from database.managers import CollectLogsManager, DatabaseModel, ObjectsManager
 from database.types import (
     AgentCallEvent,
     CollectLogsSourceStatus,
@@ -110,11 +111,11 @@ class AgentCall(DatabaseModel):
 class CollectLogs(DatabaseModel):
     """Persist metadata for one collect_logs artifact."""
 
-    objects: ClassVar[ObjectsManager[CollectLogs]]
+    objects: ClassVar[CollectLogsManager[CollectLogs]] = CollectLogsManager()
 
-    id = fields.UUIDField(
+    id = fields.BigIntField(
         primary_key=True,
-        description="Unique UUID for this collected log artifact.",
+        description="Database-generated integer id for this collected log artifact.",
     )
     created_at = fields.DatetimeField(
         auto_now_add=True,
@@ -191,9 +192,9 @@ class CollectLogsSource(DatabaseModel):
 
     objects: ClassVar[ObjectsManager[CollectLogsSource]]
 
-    id = fields.UUIDField(
+    id = fields.BigIntField(
         primary_key=True,
-        description="Unique UUID for this collected source metadata row.",
+        description="Database-generated integer id for this collected source metadata row.",
     )
     created_at = fields.DatetimeField(
         auto_now_add=True,
@@ -243,9 +244,14 @@ class CollectLogsSource(DatabaseModel):
         description="Collection status, currently collected or unavailable.",
     )
     file = FileField(
+        storage=FileStorage(location=settings.LOGS_DIR),
         max_length=1024,
         null=True,
-        description="Persisted source file path under logs root, when collection succeeded.",
+        description=(
+            "Logs-root-relative source file path, for example "
+            "sessions/<session_id>/<project_name>/<source>.log or "
+            "workflow/<project_name>/latest/<source>.log."
+        ),
     )
     line_count = fields.IntField(
         default=0,

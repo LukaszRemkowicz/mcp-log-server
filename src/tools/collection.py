@@ -206,7 +206,7 @@ async def collect_logs(
             manifest_result.manifest,
             defaults.source_keys,
         )
-        project_payload = collection_service.build_logs(
+        project_payload = await collection_service.build_logs(
             manifest=manifest_result.manifest,
             sources=manifest_sources.sources,
             missing_source_keys=manifest_sources.missing_source_keys,
@@ -239,7 +239,6 @@ async def collect_logs(
                 workspace=workspace,
                 session_id=session_id,
             )
-        project_payload.requested_source_keys = defaults.source_keys
         project_payloads.append(project_payload)
 
     payload = CollectLogsPayload(
