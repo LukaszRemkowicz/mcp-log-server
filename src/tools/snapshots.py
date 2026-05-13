@@ -163,16 +163,6 @@ async def list_log_snapshot_files(
     """
 
     assert access_token is not None
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "list_log_snapshot_files",
-            "session_id": session_id,
-            "archive_name": archive_name,
-            "project_name": project_name,
-        },
-    )
     context: SnapshotContext | SnapshotLookupError = await _load_snapshot_context(
         project_name=project_name,
         session_id=session_id,
@@ -265,20 +255,6 @@ async def read_log_snapshot_file(
             retry_tips=["Retry with line_count >= 1."],
         )
 
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "read_log_snapshot_file",
-            "session_id": session_id,
-            "archive_name": archive_name,
-            "source_key": source_key,
-            "project_name": project_name,
-            "start_line": start_line,
-            "line_count": line_count,
-            "max_bytes": max_bytes,
-        },
-    )
     context: SnapshotContext | SnapshotLookupError = await _load_snapshot_context(
         project_name=project_name,
         session_id=session_id,
@@ -440,20 +416,6 @@ async def grep_log_snapshot(
             retry_tips=[f"Retry with match_limit set between 1 and {MAX_GREP_MATCHES}."],
         )
 
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "grep_log_snapshot",
-            "session_id": session_id,
-            "archive_name": archive_name,
-            "project_name": project_name,
-            "source_keys": source_keys,
-            "grep_length": len(grep),
-            "match_offset": match_offset,
-            "match_limit": match_limit,
-        },
-    )
     source_keys_detail: list[JSONValue] = list(source_keys or [])
     context: SnapshotContext | SnapshotLookupError = await _load_snapshot_context(
         project_name=project_name,

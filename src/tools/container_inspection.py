@@ -198,17 +198,6 @@ async def read_container_file(
 
     assert access_token is not None
     assert project_name is not None
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "read_container_file",
-            "source_key": source_key,
-            "path": path,
-            "project_name": project_name,
-            "max_bytes": max_bytes,
-        },
-    )
     shape_defaults: dict[str, object] = {
         "requested_project_name": project_name,
         "source_key": source_key,
@@ -322,16 +311,6 @@ async def list_container_directory(
 
     assert access_token is not None
     assert project_name is not None
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "list_container_directory",
-            "source_key": source_key,
-            "path": path,
-            "project_name": project_name,
-        },
-    )
     shape_defaults: dict[str, object] = {
         "requested_project_name": project_name,
         "source_key": source_key,

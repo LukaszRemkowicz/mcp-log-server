@@ -315,18 +315,6 @@ async def group_errors(
     if invalid_group_window_result is not None:
         return invalid_group_window_result
 
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "group_errors",
-            "session_id": session_id,
-            "archive_name": archive_name,
-            "project_name": project_name,
-            "source_keys": source_keys,
-            "max_groups": max_groups,
-        },
-    )
     source_keys_detail: list[JSONValue] = list(source_keys or [])
     context: SnapshotContext | ToolResult = await _load_snapshot_for_analysis_tool(
         tool_name="group_errors",
@@ -435,18 +423,6 @@ async def build_incident_bundle(
     if invalid_group_window_result is not None:
         return invalid_group_window_result
 
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "build_incident_bundle",
-            "session_id": session_id,
-            "archive_name": archive_name,
-            "project_name": project_name,
-            "source_keys": source_keys,
-            "max_groups": max_groups,
-        },
-    )
     source_keys_detail: list[JSONValue] = list(source_keys or [])
     context: SnapshotContext | ToolResult = await _load_snapshot_for_analysis_tool(
         tool_name="build_incident_bundle",
@@ -529,18 +505,6 @@ async def create_filtered_view(
     if invalid_limit_result is not None:
         return invalid_limit_result
 
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "create_filtered_view",
-            "session_id": session_id,
-            "archive_name": archive_name,
-            "project_name": project_name,
-            "source_keys": source_keys,
-            "max_lines": max_lines,
-        },
-    )
     source_keys_detail: list[JSONValue] = list(source_keys or [])
     context: SnapshotContext | ToolResult = await _load_snapshot_for_filtered_view_tool(
         project_name=project_name,
@@ -652,16 +616,6 @@ def suggest_followup_window(
     `since` / `until` bounds.
     """
 
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "suggest_followup_window",
-            "first_timestamp": first_timestamp,
-            "last_timestamp": last_timestamp,
-            "padding_minutes": padding_minutes,
-        },
-    )
     if padding_minutes < 0 or padding_minutes > 1440:
         logger.info(
             "tool error",

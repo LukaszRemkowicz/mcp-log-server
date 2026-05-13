@@ -48,13 +48,6 @@ async def list_projects(
     manifest contents.
     """
 
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "list_projects",
-        },
-    )
     assert access_token is not None
     project_access_scope: ProjectAccessScope | ProjectAuthorizationError = (
         project_authorization_service.get_required_project_access_scope_or_error(access_token)
@@ -160,19 +153,6 @@ async def collect_logs(
     defaults = collection_service.normalize_params(
         source_keys=source_keys,
         since=since,
-    )
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "collect_logs",
-            "project_names": project_names,
-            "source_keys": defaults.source_keys,
-            "workspace": workspace,
-            "session_id": session_id,
-            "since": defaults.since,
-            "until": until,
-        },
     )
     assert project_names, "collect_logs expects middleware-normalized non-empty project_names"
 

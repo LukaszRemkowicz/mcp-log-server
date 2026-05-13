@@ -192,13 +192,6 @@ def analyze_daily_log_bundle(
     still remains available through normal discovery calls like `tools/list`.
     """
 
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "analyze_daily_log_bundle",
-        },
-    )
     payload = build_workflow_bootstrap_payload(asset_loader, access_token)
     logger.info(
         "tool result",
