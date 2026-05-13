@@ -11,7 +11,7 @@ from typing import ClassVar
 from uuid import UUID
 
 from database.models import AgentCall
-from database.services.models import AgentCallCreate, AgentCallFilter, AgentCallUpdate
+from database.schemas import AgentCallCreate, AgentCallFilter, AgentCallUpdate
 
 
 class AgentCallService:

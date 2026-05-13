@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -46,11 +45,11 @@ SNAPSHOT_TOOL_CALLS: tuple[ToolCall, ...] = (
 CONTAINER_TOOL_CALLS: tuple[ToolCall, ...] = (
     (
         "read_container_file",
-        {"project_name": "landingpage", "source_key": "backend", "path": "/app/VERSION"},
+        {"project_name": "dockerpage", "source_key": "backend", "path": "/app/VERSION"},
     ),
     (
         "list_container_directory",
-        {"project_name": "landingpage", "source_key": "backend", "path": "/app"},
+        {"project_name": "dockerpage", "source_key": "backend", "path": "/app"},
     ),
 )
 ANALYSIS_TOOL_CALLS: tuple[ToolCall, ...] = (
@@ -256,7 +255,6 @@ def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     """Verify collect_logs persists requested file sources and reports unknown keys."""
 
     with override_settings(
-        MANIFEST_PATH=file_backed_project_context.manifests_dir,
         FILE_SOURCE_ROOT=file_backed_project_context.file_source_root,
         LOGS_DIR=file_backed_project_context.logs_dir,
     ):
@@ -315,7 +313,6 @@ def test_analysis_tools_api_read_collected_snapshot(
     """Verify grouped analysis tools read the latest collected workflow snapshot."""
 
     with override_settings(
-        MANIFEST_PATH=file_backed_project_context.manifests_dir,
         FILE_SOURCE_ROOT=file_backed_project_context.file_source_root,
         LOGS_DIR=file_backed_project_context.logs_dir,
     ):
@@ -371,7 +368,6 @@ def test_create_filtered_view_api_reads_collected_snapshot(
     """Verify create_filtered_view reads a collected snapshot through JSON-RPC."""
 
     with override_settings(
-        MANIFEST_PATH=file_backed_project_context.manifests_dir,
         FILE_SOURCE_ROOT=file_backed_project_context.file_source_root,
         LOGS_DIR=file_backed_project_context.logs_dir,
     ):
@@ -533,7 +529,6 @@ def test_snapshot_tools_api_accept_valid_bearer_token(
     """Verify snapshot tools accept valid tokens after a workflow snapshot exists."""
 
     with override_settings(
-        MANIFEST_PATH=file_backed_project_context.manifests_dir,
         FILE_SOURCE_ROOT=file_backed_project_context.file_source_root,
         LOGS_DIR=file_backed_project_context.logs_dir,
     ):
@@ -594,7 +589,6 @@ def test_list_projects_api_returns_manifest_backed_projects(
 
 
 def test_read_container_file_api_returns_file_contents(
-    container_manifests_dir: Path,
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
@@ -605,6 +599,7 @@ def test_read_container_file_api_returns_file_contents(
         "codex-agent",
         [CONTAINER_FILES_READ_SCOPE],
         "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
     )
 
     mocker.patch(
@@ -622,23 +617,22 @@ def test_read_container_file_api_returns_file_contents(
         return_value=("release-123\n", False),
     )
 
-    with override_settings(MANIFEST_PATH=container_manifests_dir):
-        response = jsonrpc.post(
-            token=token,
-            data={
-                "jsonrpc": "2.0",
-                "id": "read-container-file",
-                "method": "tools/call",
-                "params": {
-                    "name": "read_container_file",
-                    "arguments": {
-                        "project_name": "landingpage",
-                        "source_key": "backend",
-                        "path": "/app/VERSION",
-                    },
+    response = jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "read-container-file",
+            "method": "tools/call",
+            "params": {
+                "name": "read_container_file",
+                "arguments": {
+                    "project_name": "dockerpage",
+                    "source_key": "backend",
+                    "path": "/app/VERSION",
                 },
             },
-        )
+        },
+    )
 
     payload = response.json()["result"]["structuredContent"]
 
@@ -649,7 +643,6 @@ def test_read_container_file_api_returns_file_contents(
 
 
 def test_list_container_directory_api_returns_entries(
-    container_manifests_dir: Path,
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
@@ -660,6 +653,7 @@ def test_list_container_directory_api_returns_entries(
         "codex-agent",
         [CONTAINER_FILES_READ_SCOPE],
         "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
     )
 
     mocker.patch(
@@ -678,30 +672,29 @@ def test_list_container_directory_api_returns_entries(
         ),
     )
 
-    with override_settings(MANIFEST_PATH=container_manifests_dir):
-        response = jsonrpc.post(
-            token=token,
-            data={
-                "jsonrpc": "2.0",
-                "id": "list-container-directory",
-                "method": "tools/call",
-                "params": {
-                    "name": "list_container_directory",
-                    "arguments": {
-                        "project_name": "landingpage",
-                        "source_key": "backend",
-                        "path": "/app",
-                    },
+    response = jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "list-container-directory",
+            "method": "tools/call",
+            "params": {
+                "name": "list_container_directory",
+                "arguments": {
+                    "project_name": "dockerpage",
+                    "source_key": "backend",
+                    "path": "/app",
                 },
             },
-        )
+        },
+    )
 
     payload = response.json()["result"]["structuredContent"]
 
     assert response.status_code == 200
     assert response.json()["result"]["isError"] is False
     assert payload["action"] == "list_container_directory"
-    assert payload["project_name"] == "landingpage"
+    assert payload["project_name"] == "dockerpage"
     assert payload["entries"][0]["name"] == "VERSION"
 
 
@@ -732,6 +725,7 @@ def test_list_projects_api_returns_multiple_manifest_backed_projects(
     assert [item["project_name"] for item in payload] == [
         "alpha",
         "beta",
+        "dockerpage",
         "landingpage",
         "other",
         "shop",
@@ -791,7 +785,6 @@ def test_collect_logs_api_uses_all_accessible_projects_when_project_names_not_pr
     )
 
     with override_settings(
-        MANIFEST_PATH=multi_project_collect_context.manifests_dir,
         FILE_SOURCE_ROOT=multi_project_collect_context.file_source_root,
         LOGS_DIR=multi_project_collect_context.logs_dir,
     ):
@@ -849,7 +842,6 @@ def test_collect_logs_api_generates_session_id_before_tool_call(
         new=mocker.AsyncMock(),
     )
     with override_settings(
-        MANIFEST_PATH=file_backed_project_context.manifests_dir,
         FILE_SOURCE_ROOT=file_backed_project_context.file_source_root,
         LOGS_DIR=file_backed_project_context.logs_dir,
     ):

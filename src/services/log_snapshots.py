@@ -12,6 +12,8 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from conf import settings
+from database.schemas import CollectLogsSourceOut
+from database.services.collect_logs import CollectLogsService as CollectLogsDBService
 from tools.models import (
     GrepLogSnapshotMatchPayload,
     LogSnapshotFilePayload,
@@ -29,7 +31,6 @@ from tools.utils import (
 from utils.log_snapshots import (
     build_snapshot_not_found_retry_tips,
     classify_snapshot_tool_error,
-    read_snapshot_metadata,
     read_workflow_inventory,
 )
 
@@ -98,6 +99,13 @@ class LogSnapshotService:
     collect raw logs itself. Raw file/docker collection and request assembly
     belong to `LogCollectionService`.
     """
+
+    def __init__(
+        self,
+        *,
+        collect_logs_db_service: CollectLogsDBService | None = None,
+    ) -> None:
+        self.collect_logs_db_service = collect_logs_db_service or CollectLogsDBService()
 
     def prepare_workspace(
         self,
@@ -191,7 +199,7 @@ class LogSnapshotService:
             metadata=metadata,
         )
 
-    def load_snapshot(
+    async def load_snapshot(
         self,
         *,
         project_name: str,
@@ -201,86 +209,130 @@ class LogSnapshotService:
     ) -> SnapshotContext | SnapshotLookupError:
         """Load one persisted workflow or session snapshot context.
 
-        Callers pass the logical snapshot identity only. This service owns the
-        on-disk lookup details: workflow snapshots are selected from the
-        project inventory, while session snapshots are loaded from the
-        session/project metadata file.
+        Callers pass the logical snapshot identity only. Session and workflow
+        lookup methods own the DB query and pydantic contract creation.
         """
 
         if workspace == "session":
-            return self.load_session_snapshot(
+            return await self.load_session_snapshot(
                 project_name=project_name,
                 session_id=session_id,
             )
-        return self.load_workflow_snapshot(
+        return await self.load_workflow_snapshot(
             project_name=project_name,
             archive_name=archive_name,
         )
 
-    def load_session_snapshot(
+    async def load_session_snapshot(
         self,
         *,
         project_name: str,
         session_id: str | None,
     ) -> SnapshotContext | SnapshotLookupError:
-        """Load one session snapshot from `sessions/<session_id>/<project_name>`.
-
-        Missing or invalid metadata is returned as `SnapshotLookupError` so MCP
-        tools can emit a structured retryable response instead of raising.
-        """
+        """Load one session snapshot from persisted collect_logs DB objects."""
 
         if not session_id or not session_id.strip():
             return self._build_snapshot_lookup_error(
                 "session_id is required for session log snapshots.",
                 workspace="session",
             )
-        snapshot_dir = settings.session_path / session_id.strip() / project_name
-        if not snapshot_dir.exists():
+        collect_logs = await self.collect_logs_db_service.get_session_collect_logs_with_sources(
+            project_name=project_name,
+            session_id=session_id.strip(),
+        )
+        if collect_logs is None:
             return self._build_snapshot_lookup_error(
                 "Requested session log snapshot was not found.",
                 workspace="session",
             )
-        try:
-            metadata = read_snapshot_metadata(snapshot_dir)
-        except ValueError as error:
-            return self._build_snapshot_lookup_error(str(error), workspace="session")
+
+        metadata = LogSnapshotMetadata(
+            project_name=collect_logs.project_name,
+            workspace=collect_logs.workspace,
+            session_id=(
+                str(collect_logs.session_id) if collect_logs.session_id is not None else None
+            ),
+            collected_at=collect_logs.collected_at.isoformat(),
+            files=[
+                self._source_to_file_payload(source)
+                for source in collect_logs.sources
+                if source.status == "collected" and source.file is not None
+            ],
+        )
+        snapshot_dir = Path(collect_logs.snapshot_dir)
+        if not snapshot_dir.is_absolute():
+            snapshot_dir = settings.LOGS_DIR / snapshot_dir
         return SnapshotContext(
-            project_name=project_name,
+            project_name=collect_logs.project_name,
             snapshot_dir=snapshot_dir,
-            metadata_file=snapshot_dir / SNAPSHOT_METADATA_FILE_NAME,
+            metadata_file=Path(str(collect_logs.metadata_file.path)),
             metadata=metadata,
         )
 
-    def load_workflow_snapshot(
+    async def load_workflow_snapshot(
         self,
         *,
         project_name: str,
         archive_name: str | None,
     ) -> SnapshotContext | SnapshotLookupError:
-        """Load workflow latest or archived metadata from project inventory.
+        """Load workflow latest or archived snapshot from persisted DB objects."""
 
-        `archive_name=None` selects the current latest artifact. Any archive
-        name selects the matching archive entry. Workflow metadata is assembled
-        from `workflow_inventory.json`; there is no separate per-snapshot
-        metadata file for workflow artifacts.
-        """
+        if archive_name is None:
+            collect_logs = await self.collect_logs_db_service.get_latest_with_sources(project_name)
+        else:
+            collect_logs = await self.collect_logs_db_service.get_archive_with_sources(
+                project_name=project_name,
+                archive_name=archive_name,
+            )
 
-        try:
-            workflow_entry = self._get_workflow_inventory_entry(project_name, archive_name)
-            snapshot_dir = self._logs_absolute_path(workflow_entry.snapshot_dir)
-        except ValueError as error:
-            return self._build_snapshot_lookup_error(str(error), workspace="workflow")
+        if collect_logs is None:
+            return self._build_snapshot_lookup_error(
+                "Requested workflow log snapshot was not found.",
+                workspace="workflow",
+            )
+
         metadata = LogSnapshotMetadata(
-            project_name=project_name,
-            workspace="workflow",
-            collected_at=workflow_entry.collected_at,
-            files=workflow_entry.files,
+            project_name=collect_logs.project_name,
+            workspace=collect_logs.workspace,
+            session_id=(
+                str(collect_logs.session_id) if collect_logs.session_id is not None else None
+            ),
+            collected_at=collect_logs.collected_at.isoformat(),
+            files=[
+                self._source_to_file_payload(source)
+                for source in collect_logs.sources
+                if source.status == "collected" and source.file is not None
+            ],
         )
+        snapshot_dir = Path(collect_logs.snapshot_dir)
+        if not snapshot_dir.is_absolute():
+            snapshot_dir = settings.LOGS_DIR / snapshot_dir
         return SnapshotContext(
-            project_name=project_name,
+            project_name=collect_logs.project_name,
             snapshot_dir=snapshot_dir,
-            metadata_file=self._workflow_inventory_file(project_name),
+            metadata_file=Path(str(collect_logs.metadata_file.path)),
             metadata=metadata,
+        )
+
+    @staticmethod
+    def _source_to_file_payload(source: CollectLogsSourceOut) -> LogSnapshotFilePayload:
+        """Return the snapshot file contract for one collected source DB contract."""
+
+        assert source.file is not None
+        file_path = settings.LOGS_DIR / source.file.name
+        return LogSnapshotFilePayload(
+            source_key=source.source_key,
+            source_type=source.source_type,
+            description=source.description,
+            target=source.target,
+            stream=source.stream,
+            parser_type=source.parser_type,
+            normalization_profile=source.normalization_profile,
+            default_noise_profile=source.default_noise_profile,
+            file_name=Path(source.file.name).name,
+            output_file=source.file.name,
+            byte_count=file_path.stat().st_size if file_path.exists() else 0,
+            line_count=source.line_count,
         )
 
     @staticmethod
@@ -820,15 +872,6 @@ class LogSnapshotService:
         except ValueError as error:
             raise ValueError("Snapshot paths must live under LOGS_DIR.") from error
 
-    @staticmethod
-    def _logs_absolute_path(relative_path: str) -> Path:
-        """Resolve one metadata path under the configured logs root."""
-
-        normalized_path = Path(relative_path)
-        if normalized_path.is_absolute() or ".." in normalized_path.parts:
-            raise ValueError("Snapshot paths must be relative to LOGS_DIR.")
-        return settings.LOGS_DIR / normalized_path
-
     def _files_with_relative_output_paths(
         self,
         files: list[LogSnapshotFilePayload],
@@ -841,22 +884,3 @@ class LogSnapshotService:
             )
             for item in files
         ]
-
-    def _get_workflow_inventory_entry(
-        self,
-        project_name: str,
-        archive_name: str | None,
-    ) -> WorkflowArtifactMetadata:
-        """Return one workflow inventory entry for latest or one archive."""
-
-        inventory = self._read_workflow_inventory(project_name)
-        if inventory is None:
-            raise ValueError("Requested workflow log snapshot was not found.")
-        if archive_name is None:
-            if inventory.latest is None:
-                raise ValueError("Requested workflow log snapshot was not found.")
-            return inventory.latest
-        for artifact in inventory.archives:
-            if artifact.archive_name == archive_name:
-                return artifact
-        raise ValueError("Requested workflow log snapshot was not found.")

@@ -88,7 +88,7 @@ def _build_invalid_group_window_result(max_groups: int) -> ToolResult | None:
     return None
 
 
-def _load_snapshot_for_analysis_tool(
+async def _load_snapshot_for_analysis_tool(
     *,
     tool_name: str,
     project_name: str,
@@ -100,7 +100,7 @@ def _load_snapshot_for_analysis_tool(
 ) -> SnapshotContext | ToolResult:
     """Load the snapshot context or build the same MCP error shape used by analysis tools."""
 
-    context: SnapshotContext | SnapshotLookupError = snapshot_service.load_snapshot(
+    context: SnapshotContext | SnapshotLookupError = await snapshot_service.load_snapshot(
         project_name=project_name,
         workspace="session" if session_id is not None else "workflow",
         session_id=session_id,
@@ -197,7 +197,7 @@ def _build_invalid_filtered_view_limit_result(
     return None
 
 
-def _load_snapshot_for_filtered_view_tool(
+async def _load_snapshot_for_filtered_view_tool(
     *,
     project_name: str,
     session_id: str | None,
@@ -208,7 +208,7 @@ def _load_snapshot_for_filtered_view_tool(
 ) -> SnapshotContext | ToolResult:
     """Load a snapshot or build the filtered-view snapshot lookup error response."""
 
-    context: SnapshotContext | SnapshotLookupError = snapshot_service.load_snapshot(
+    context: SnapshotContext | SnapshotLookupError = await snapshot_service.load_snapshot(
         project_name=project_name,
         workspace="session" if session_id is not None else "workflow",
         session_id=session_id,
@@ -287,7 +287,7 @@ def _build_filtered_view_source_key_error_result(
     description=GROUP_ERRORS_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
-def group_errors(
+async def group_errors(
     project_name: str,
     session_id: str | None = None,
     archive_name: str | None = None,
@@ -328,7 +328,7 @@ def group_errors(
         },
     )
     source_keys_detail: list[JSONValue] = list(source_keys or [])
-    context: SnapshotContext | ToolResult = _load_snapshot_for_analysis_tool(
+    context: SnapshotContext | ToolResult = await _load_snapshot_for_analysis_tool(
         tool_name="group_errors",
         project_name=project_name,
         session_id=session_id,
@@ -405,7 +405,7 @@ def group_errors(
     description=BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
-def build_incident_bundle(
+async def build_incident_bundle(
     project_name: str,
     session_id: str | None = None,
     archive_name: str | None = None,
@@ -448,7 +448,7 @@ def build_incident_bundle(
         },
     )
     source_keys_detail: list[JSONValue] = list(source_keys or [])
-    context: SnapshotContext | ToolResult = _load_snapshot_for_analysis_tool(
+    context: SnapshotContext | ToolResult = await _load_snapshot_for_analysis_tool(
         tool_name="build_incident_bundle",
         project_name=project_name,
         session_id=session_id,
@@ -542,7 +542,7 @@ async def create_filtered_view(
         },
     )
     source_keys_detail: list[JSONValue] = list(source_keys or [])
-    context: SnapshotContext | ToolResult = _load_snapshot_for_filtered_view_tool(
+    context: SnapshotContext | ToolResult = await _load_snapshot_for_filtered_view_tool(
         project_name=project_name,
         session_id=session_id,
         archive_name=archive_name,

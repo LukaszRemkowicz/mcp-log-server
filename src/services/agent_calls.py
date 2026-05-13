@@ -9,8 +9,8 @@ from fastmcp.server.auth import AccessToken
 from pydantic import BaseModel, Field
 from tortoise.exceptions import BaseORMException
 
+from database.schemas import AgentCallCreate, AgentCallUpdate
 from database.services.agent_calls import AgentCallService as AgentCallDBService
-from database.services.models import AgentCallCreate, AgentCallUpdate
 from logging_config import get_logger
 
 logger = get_logger("services.agent_calls")

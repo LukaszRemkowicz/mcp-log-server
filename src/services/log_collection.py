@@ -15,10 +15,9 @@ from requests import exceptions as requests_exceptions
 
 import docker
 from conf import settings
-from database.models import CollectLogs
+from database.schemas import CollectLogsCreate, CollectLogsOut, CollectLogsSourceCreate
 from database.services.collect_logs import CollectLogsService as CollectLogsDBService
 from database.services.collect_logs import CollectLogsSourceService as CollectLogsSourceDBService
-from database.services.models import CollectLogsCreate, CollectLogsSourceCreate
 from manifests.models import Manifest, SourceDefinition
 from tools.agent_hints import COLLECT_LOGS_NEXT_STEP_TIPS
 from tools.models import (
@@ -302,13 +301,13 @@ class LogCollectionService:
     async def archive_latest_for_project(self, project_name: str) -> None:
         """Archive the current latest workflow snapshot for one project."""
 
-        obj: CollectLogs | None = await self.collect_logs_db_service.get_latest(project_name)
+        obj: CollectLogsOut | None = await self.collect_logs_db_service.get_latest(project_name)
         if obj is None:
             return
 
         archive_name = obj.collected_at.astimezone(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
         await self.collect_logs_db_service.archive(
-            obj,
+            obj.id,
             archive_name=archive_name,
             snapshot_dir=self._archived_snapshot_dir(obj.snapshot_dir, archive_name),
         )

@@ -14,7 +14,7 @@ from conf import settings
 from database.config import TORTOISE_ORM
 from database.lifecycle import close_database, initialize_database
 from database.models import ProjectManifest
-from database.services.models import ProjectManifestCreate, ProjectManifestUpdate
+from database.schemas import ProjectManifestCreate, ProjectManifestUpdate
 from database.services.project_manifests import ProjectManifestService
 from decorators import async_
 from manifests.loader import list_project_manifests, load_project_manifest

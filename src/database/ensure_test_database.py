@@ -1,4 +1,4 @@
-"""Create the Compose test database when it does not exist."""
+"""Recreate the Compose test database before running tests."""
 
 from __future__ import annotations
 
@@ -17,7 +17,14 @@ def _quote_identifier(value: str) -> str:
 
 
 async def ensure_test_database() -> None:
-    """Create the configured test database without touching the app database."""
+    """Recreate the configured test database without touching the app database."""
+
+    if not settings.DATABASE_NAME.endswith("_test"):
+        msg = (
+            "Refusing to reset a non-test database. "
+            f"DATABASE_NAME must end with '_test', got {settings.DATABASE_NAME!r}."
+        )
+        raise RuntimeError(msg)
 
     connection = await asyncpg.connect(
         host=settings.DATABASE_HOST,
@@ -27,12 +34,19 @@ async def ensure_test_database() -> None:
         database="postgres",
     )
     try:
-        exists = await connection.fetchval(
-            "SELECT 1 FROM pg_database WHERE datname = $1",
+        await connection.execute(
+            """
+            SELECT pg_terminate_backend(pid)
+            FROM pg_stat_activity
+            WHERE datname = $1
+              AND pid <> pg_backend_pid()
+            """,
             settings.DATABASE_NAME,
         )
-        if exists is None:
-            await connection.execute(f"CREATE DATABASE {_quote_identifier(settings.DATABASE_NAME)}")
+        await connection.execute(
+            f"DROP DATABASE IF EXISTS {_quote_identifier(settings.DATABASE_NAME)}"
+        )
+        await connection.execute(f"CREATE DATABASE {_quote_identifier(settings.DATABASE_NAME)}")
     finally:
         await connection.close()
 

@@ -44,7 +44,7 @@ MAX_GREP_MATCHES = 500
 snapshot_service = LogSnapshotService()
 
 
-def _load_snapshot_context(
+async def _load_snapshot_context(
     *,
     project_name: str,
     session_id: str | None,
@@ -52,7 +52,7 @@ def _load_snapshot_context(
 ) -> SnapshotContext | SnapshotLookupError:
     """Load one snapshot context or return the domain lookup error model."""
 
-    return snapshot_service.load_snapshot(
+    return await snapshot_service.load_snapshot(
         project_name=project_name,
         workspace="session" if session_id is not None else "workflow",
         session_id=session_id,
@@ -140,7 +140,7 @@ def _build_snapshot_read_error_result(
 
 @workflow_discoverable_tool(LOGS_COLLECT_SCOPE)
 @project_authorized_tool
-def list_log_snapshot_files(
+async def list_log_snapshot_files(
     project_name: str,
     session_id: str | None = None,
     archive_name: str | None = None,
@@ -173,7 +173,7 @@ def list_log_snapshot_files(
             "project_name": project_name,
         },
     )
-    context: SnapshotContext | SnapshotLookupError = _load_snapshot_context(
+    context: SnapshotContext | SnapshotLookupError = await _load_snapshot_context(
         project_name=project_name,
         session_id=session_id,
         archive_name=archive_name,
@@ -215,7 +215,7 @@ def list_log_snapshot_files(
 
 @workflow_discoverable_tool(LOGS_COLLECT_SCOPE)
 @project_authorized_tool
-def read_log_snapshot_file(
+async def read_log_snapshot_file(
     project_name: str,
     source_key: str,
     session_id: str | None = None,
@@ -279,7 +279,7 @@ def read_log_snapshot_file(
             "max_bytes": max_bytes,
         },
     )
-    context: SnapshotContext | SnapshotLookupError = _load_snapshot_context(
+    context: SnapshotContext | SnapshotLookupError = await _load_snapshot_context(
         project_name=project_name,
         session_id=session_id,
         archive_name=archive_name,
@@ -378,7 +378,7 @@ def read_log_snapshot_file(
 
 @workflow_discoverable_tool(LOGS_COLLECT_SCOPE)
 @project_authorized_tool
-def grep_log_snapshot(
+async def grep_log_snapshot(
     project_name: str,
     grep: str,
     session_id: str | None = None,
@@ -455,7 +455,7 @@ def grep_log_snapshot(
         },
     )
     source_keys_detail: list[JSONValue] = list(source_keys or [])
-    context: SnapshotContext | SnapshotLookupError = _load_snapshot_context(
+    context: SnapshotContext | SnapshotLookupError = await _load_snapshot_context(
         project_name=project_name,
         session_id=session_id,
         archive_name=archive_name,

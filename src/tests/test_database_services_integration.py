@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 from uuid import uuid4
 
 import pytest
@@ -11,13 +12,13 @@ import pytest
 from conf import settings
 from database.fields import FileReference
 from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest
-from database.services.agent_calls import AgentCallService
-from database.services.models import (
+from database.schemas import (
     AgentCallCreate,
     AgentCallFilter,
     AgentCallUpdate,
     ProjectManifestCreate,
 )
+from database.services.agent_calls import AgentCallService
 from database.services.project_manifests import ProjectManifestService
 from database.types import CollectLogsSourceStatus, LogSourceType, LogStream, LogWorkspace
 from manifests.loader import load_project_manifest
@@ -27,12 +28,8 @@ from services.project_manifest import ProjectManifestService as RuntimeProjectMa
 from tests.conftest import override_settings
 
 
-@pytest.mark.db
 @pytest.mark.anyio
-async def test_database_services_round_trip_against_real_postgres(
-    database_test_case: None,
-) -> None:
-    del database_test_case
+async def test_database_services_round_trip_against_real_postgres() -> None:
     agent_calls = AgentCallService()
     project_manifests = ProjectManifestService()
     suffix = uuid4().hex
@@ -102,13 +99,10 @@ async def test_database_services_round_trip_against_real_postgres(
     assert ended_call.session_ended is True
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_collect_logs_models_round_trip_against_real_postgres(
-    database_test_case: None,
     tmp_path: Path,
 ) -> None:
-    del database_test_case
     suffix = uuid4().hex
     session_id = uuid4()
     snapshot_dir = tmp_path / "sessions" / str(session_id) / f"integration-{suffix}"
@@ -166,9 +160,7 @@ async def test_collect_logs_models_round_trip_against_real_postgres(
     )
 
     fetched_snapshot = await CollectLogs.objects.get(id=collect_logs.id)
-    fetched_sources = await CollectLogsSource.objects.filter(
-        collect_logs=fetched_snapshot,
-    ).order_by("source_key")
+    fetched_sources = await fetched_snapshot.sources.all()
 
     assert fetched_snapshot.session_id == session_id
     assert fetched_snapshot.workspace == LogWorkspace.SESSION
@@ -199,28 +191,26 @@ async def test_collect_logs_models_round_trip_against_real_postgres(
     assert fetched_sources[0].file.path == source_file.as_posix()
     assert fetched_sources[0].file.size == source_file.stat().st_size
     assert fetched_sources[0].line_count == 2
-    assert fetched_sources[0].error is None
+    assert cast(object, fetched_sources[0].error) is None
     assert fetched_sources[0].retry_tips == []
 
     assert fetched_sources[1].source_key == "nginx"
     assert fetched_sources[1].source_type == LogSourceType.FILE
-    assert fetched_sources[1].stream is None
+    assert cast(object, fetched_sources[1].stream) is None
     assert fetched_sources[1].status == CollectLogsSourceStatus.UNAVAILABLE
-    assert fetched_sources[1].file is None
+    assert cast(object, fetched_sources[1].file) is None
     assert fetched_sources[1].line_count == 0
     assert fetched_sources[1].error == "Source file was not available."
     assert fetched_sources[1].retry_tips == ["Check the configured source path."]
+    assert CollectLogsSource._meta.ordering[0][0] == "id"
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_log_collection_service_persists_collect_logs_metadata(
-    database_test_case: None,
     tmp_path: Path,
 ) -> None:
     """Verify collect_logs orchestration writes artifact and source rows."""
 
-    del database_test_case
     logs_dir = tmp_path / "collected-logs"
     manifest = load_project_manifest(settings.manifests_dir, "landingpage")
     manifest_sources = RuntimeProjectManifestService.get_manifest_source_keys(
@@ -266,15 +256,12 @@ async def test_log_collection_service_persists_collect_logs_metadata(
         assert sources[0].line_count > 0
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_log_collection_service_persists_session_source_file_path(
-    database_test_case: None,
     tmp_path: Path,
 ) -> None:
     """Verify session collect_logs source files keep logs-root-relative DB paths."""
 
-    del database_test_case
     logs_dir = tmp_path / "collected-logs"
     session_id = uuid4()
     manifest = load_project_manifest(settings.manifests_dir, "landingpage")

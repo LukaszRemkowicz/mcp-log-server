@@ -10,6 +10,7 @@ from pytest_mock import MockerFixture
 
 import database.cli as database_cli
 import database.config as database_config
+import database.ensure_test_database as ensure_test_database_module
 from database.fields import FileField
 from database.managers import CollectLogsManager
 from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest
@@ -193,6 +194,65 @@ def test_test_command_runs_compose_test_container(mocker: MockerFixture) -> None
             "test",
         ]
     ]
+
+
+@pytest.mark.anyio
+async def test_ensure_test_database_recreates_only_configured_test_database(
+    mocker: MockerFixture,
+) -> None:
+    calls: list[tuple[str, object]] = []
+
+    class FakeConnection:
+        async def execute(self, query: str, *args: object) -> None:
+            calls.append((query.strip(), args))
+
+        async def close(self) -> None:
+            calls.append(("close", ()))
+
+    async def fake_connect(**kwargs: object) -> FakeConnection:
+        calls.append(("connect", kwargs))
+        return FakeConnection()
+
+    mocker.patch("database.ensure_test_database.asyncpg.connect", fake_connect)
+
+    with override_settings(
+        DATABASE_HOST="db",
+        DATABASE_PORT=5432,
+        DATABASE_NAME="mcp_log_server_test",
+        DATABASE_USER="mcp_log_server",
+        DATABASE_PASSWORD="local-secret",
+    ):
+        await ensure_test_database_module.ensure_test_database()
+
+    assert calls == [
+        (
+            "connect",
+            {
+                "host": "db",
+                "port": 5432,
+                "user": "mcp_log_server",
+                "password": "local-secret",
+                "database": "postgres",
+            },
+        ),
+        (
+            "SELECT pg_terminate_backend(pid)\n"
+            "            FROM pg_stat_activity\n"
+            "            WHERE datname = $1\n"
+            "              AND pid <> pg_backend_pid()",
+            ("mcp_log_server_test",),
+        ),
+        ('DROP DATABASE IF EXISTS "mcp_log_server_test"', ()),
+        ('CREATE DATABASE "mcp_log_server_test"', ()),
+        ("close", ()),
+    ]
+
+
+@pytest.mark.anyio
+async def test_ensure_test_database_rejects_non_test_database() -> None:
+    with override_settings(DATABASE_NAME="mcp_log_server"):
+        with pytest.raises(RuntimeError, match="Refusing to reset a non-test database"):
+            await ensure_test_database_module.ensure_test_database()
 
 
 def test_database_models_are_importable_from_dedicated_module() -> None:

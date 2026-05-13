@@ -3,7 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from anyio import to_thread
 from fastmcp.server.auth import AccessToken
 
 from services.log_filtering import CreateFilteredViewError, LogFilteringService
@@ -16,12 +15,6 @@ from tools.analysis import (
     suggest_followup_window,
 )
 from tools.models import LogSnapshotFilePayload, LogSnapshotMetadata
-
-
-async def _run_sync_tool(func, **kwargs):
-    """Run a sync decorated tool from an async DB-backed test."""
-
-    return await to_thread.run_sync(lambda: func(**kwargs))
 
 
 def test_log_filtering_service_returns_error_for_unknown_source_key() -> None:
@@ -63,12 +56,10 @@ def test_log_filtering_service_returns_error_for_unknown_source_key() -> None:
     assert result.message == "Requested log snapshot source_keys were not found: missing_source"
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_group_errors_groups_repeated_failures(
     tmp_path: Path,
     valid_access_token: AccessToken,
-    patch_file_project_manifest_service,
 ) -> None:
     """Verify grouped errors summarize repeated backend and nginx failures."""
 
@@ -80,8 +71,7 @@ async def test_group_errors_groups_repeated_failures(
             workspace="workflow",
             access_token=valid_access_token,
         )
-        result = await _run_sync_tool(
-            group_errors,
+        result = await group_errors(
             project_name="landingpage",
             source_keys=["backend", "nginx"],
             access_token=valid_access_token,
@@ -123,12 +113,10 @@ async def test_group_errors_groups_repeated_failures(
     assert http_4xx_group["last_timestamp"] == "29/Apr/2026:10:11:00 +0000"
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_group_errors_summarizes_docker_prefixed_json(
     tmp_path: Path,
     valid_access_token: AccessToken,
-    patch_file_project_manifest_service,
 ) -> None:
     """Verify docker-prefixed JSON lines are parsed and grouped by message."""
 
@@ -140,8 +128,7 @@ async def test_group_errors_summarizes_docker_prefixed_json(
             workspace="workflow",
             access_token=valid_access_token,
         )
-        result = await _run_sync_tool(
-            group_errors,
+        result = await group_errors(
             project_name="landingpage",
             source_keys=["traefik"],
             access_token=valid_access_token,
@@ -163,12 +150,13 @@ async def test_group_errors_summarizes_docker_prefixed_json(
     assert payload["groups"][0]["last_timestamp"] == "2026-04-30T19:12:39Z"
 
 
-def test_group_errors_rejects_invalid_max_groups(
+@pytest.mark.anyio
+async def test_group_errors_rejects_invalid_max_groups(
     valid_access_token: AccessToken,
 ) -> None:
     """Verify group_errors rejects invalid pagination limits before loading logs."""
 
-    result = group_errors(
+    result = await group_errors(
         project_name="landingpage",
         max_groups=0,
         access_token=valid_access_token,
@@ -181,7 +169,8 @@ def test_group_errors_rejects_invalid_max_groups(
     assert payload["message"] == "max_groups must be between 1 and 200."
 
 
-def test_group_errors_missing_snapshot_tells_agent_to_collect_first(
+@pytest.mark.anyio
+async def test_group_errors_missing_snapshot_tells_agent_to_collect_first(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
@@ -189,7 +178,7 @@ def test_group_errors_missing_snapshot_tells_agent_to_collect_first(
 
     logs_dir = tmp_path / "collected-logs"
     with override_settings(LOGS_DIR=logs_dir):
-        result = group_errors(
+        result = await group_errors(
             project_name="landingpage",
             access_token=valid_access_token,
         )
@@ -207,12 +196,10 @@ def test_group_errors_missing_snapshot_tells_agent_to_collect_first(
     ]
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_build_incident_bundle_returns_grouped_summary(
     tmp_path: Path,
     valid_access_token: AccessToken,
-    patch_file_project_manifest_service,
 ) -> None:
     """Verify incident bundles include grouped counts, severities, and next steps."""
 
@@ -224,8 +211,7 @@ async def test_build_incident_bundle_returns_grouped_summary(
             workspace="workflow",
             access_token=valid_access_token,
         )
-        result = await _run_sync_tool(
-            build_incident_bundle,
+        result = await build_incident_bundle(
             project_name="landingpage",
             source_keys=["app_file"],
             access_token=valid_access_token,
@@ -263,12 +249,13 @@ async def test_build_incident_bundle_returns_grouped_summary(
     assert payload["suggested_next_steps"]
 
 
-def test_build_incident_bundle_rejects_invalid_max_groups(
+@pytest.mark.anyio
+async def test_build_incident_bundle_rejects_invalid_max_groups(
     valid_access_token: AccessToken,
 ) -> None:
     """Verify incident bundles reject invalid group limits consistently."""
 
-    result = build_incident_bundle(
+    result = await build_incident_bundle(
         project_name="landingpage",
         max_groups=201,
         access_token=valid_access_token,
@@ -281,12 +268,10 @@ def test_build_incident_bundle_rejects_invalid_max_groups(
     assert payload["message"] == "max_groups must be between 1 and 200."
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_create_filtered_view_removes_manifest_profile_noise(
     tmp_path: Path,
     valid_access_token: AccessToken,
-    patch_file_project_manifest_service,
 ) -> None:
     """Verify filtered views remove manifest-described noise but keep errors."""
 
@@ -333,12 +318,10 @@ async def test_create_filtered_view_removes_manifest_profile_noise(
     assert source_summaries["nginx"]["top_exclusion_reasons"] == ["successful_static_asset_request"]
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_create_filtered_view_reports_unknown_source_key(
     tmp_path: Path,
     valid_access_token: AccessToken,
-    patch_file_project_manifest_service,
 ) -> None:
     """Verify filtered views report unknown requested sources as tool errors."""
 

@@ -1,20 +1,22 @@
 from __future__ import annotations
 
+import inspect
+import json
 import shutil
-import subprocess
 import time
 from collections.abc import AsyncIterator, Generator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, overload
+from uuid import uuid4
 
+import asyncpg  # type: ignore[import-untyped]
 import httpx
 import pytest
 from fastmcp.server.auth import AccessToken
 from joserfc import jwt
 from joserfc.jwk import OctKey
-from pytest_mock import MockerFixture
 from starlette.testclient import TestClient
 from tortoise import Tortoise, connections
 
@@ -22,13 +24,10 @@ from app import create_application
 from auth.auth_provider import build_auth_provider
 from auth.scopes import LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE
 from conf import set_settings, settings
-from database.services.models import ProjectManifestCreate, ProjectManifestUpdate
+from database.schemas import ProjectManifestCreate, ProjectManifestUpdate
 from database.services.project_manifests import ProjectManifestService as ProjectManifestDBService
 from manifests.loader import list_project_manifests
-from services.log_collection import LogCollectionService
-from services.project_manifest import ProjectManifestContext
 from settings import Settings
-from tools.models import ProjectManifestList, ProjectManifestSummary
 
 JwtOverrides = dict[str, Any] | None
 AccessTokenClaims = dict[str, Any] | None
@@ -149,52 +148,117 @@ async def _flush_database_tables() -> None:
         await model.all().delete()
 
 
-def _run_database_migrations() -> None:
-    """Apply committed migrations before database tests run."""
+async def _flush_database_tables_sql() -> None:
+    """Delete all test data without requiring Tortoise to be initialized."""
 
-    subprocess.run(["aerich", "upgrade"], check=True)
+    connection = await asyncpg.connect(
+        host=settings.DATABASE_HOST,
+        port=settings.DATABASE_PORT,
+        user=settings.DATABASE_USER,
+        password=settings.DATABASE_PASSWORD,
+        database=settings.DATABASE_NAME,
+    )
+    try:
+        await connection.execute(
+            """
+            TRUNCATE TABLE
+                "agent_calls",
+                "collect_logs_sources",
+                "collect_logs",
+                "project_manifests"
+            RESTART IDENTITY CASCADE
+            """
+        )
+    finally:
+        await connection.close()
+
+
+async def _seed_project_manifests_sql() -> None:
+    """Persist current test manifests without requiring Tortoise to be initialized."""
+
+    connection = await asyncpg.connect(
+        host=settings.DATABASE_HOST,
+        port=settings.DATABASE_PORT,
+        user=settings.DATABASE_USER,
+        password=settings.DATABASE_PASSWORD,
+        database=settings.DATABASE_NAME,
+    )
+    try:
+        for manifest in list_project_manifests(settings.manifests_dir):
+            await connection.execute(
+                """
+                INSERT INTO "project_manifests" (
+                    "id",
+                    "created_at",
+                    "updated_at",
+                    "project_key",
+                    "project_summary",
+                    "static_asset_paths",
+                    "static_asset_extensions",
+                    "sources"
+                )
+                VALUES ($1, NOW(), NOW(), $2, $3, $4::jsonb, $5::jsonb, $6::jsonb)
+                """,
+                uuid4(),
+                manifest.project_key,
+                manifest.project_summary,
+                json.dumps(manifest.static_asset_paths),
+                json.dumps(manifest.static_asset_extensions),
+                json.dumps([source.model_dump(mode="json") for source in manifest.sources]),
+            )
+    finally:
+        await connection.close()
 
 
 @pytest.fixture
-async def database_test_case(request: pytest.FixtureRequest) -> AsyncIterator[None]:
-    """Provide Django-style database setup and flush for tests marked db."""
+async def database_test_case_async() -> AsyncIterator[None]:
+    """Provide Django-style database setup, manifest seed, and flush for each test."""
 
     await Tortoise.init(
         db_url=settings.db,
         modules={"models": ["database.models"]},
     )
     await _flush_database_tables()
+    await _seed_project_manifests()
     try:
         yield
     finally:
         await _flush_database_tables()
         await connections.close_all(discard=True)
-        connections._clear_storage()
-        await Tortoise._reset_apps()
+        connections._clear_storage()  # noqa Access to a protected member of a class
+        await Tortoise._reset_apps()  # noqa Access to a protected member of a class
+
+
+@pytest.fixture
+def database_test_case_sync() -> Generator[None]:
+    """Provide database setup for sync tests without async fixtures."""
+
+    anyio_backend = "asyncio"
+    import anyio
+
+    anyio.run(_flush_database_tables_sql, backend=anyio_backend)
+    anyio.run(_seed_project_manifests_sql, backend=anyio_backend)
+    try:
+        yield
+    finally:
+        anyio.run(_flush_database_tables_sql, backend=anyio_backend)
 
 
 def pytest_collection_modifyitems(
     config: pytest.Config,  # noqa: ARG001 - pytest hook signature requires it.
     items: list[pytest.Item],
 ) -> None:
-    """Pytest hook: attach database setup to db tests and run them last."""
+    """Pytest hook: attach database setup fixtures to every test."""
 
-    db_items: list[pytest.Item] = []
-    non_db_items: list[pytest.Item] = []
     for item in items:
-        if item.get_closest_marker("db") is not None:
-            item_with_fixtures: Any = item
-            if "database_test_case" not in item_with_fixtures.fixturenames:
-                item_with_fixtures.fixturenames.append("database_test_case")
-            item.add_marker(pytest.mark.usefixtures("database_test_case"))
-            db_items.append(item)
+        item_with_fixtures: Any = item
+        test_function = getattr(item, "obj", None)
+        if inspect.iscoroutinefunction(test_function) or item.get_closest_marker("anyio"):
+            if "database_test_case_async" not in item_with_fixtures.fixturenames:
+                item_with_fixtures.fixturenames.append("database_test_case_async")
         else:
-            non_db_items.append(item)
-
-    if db_items:
-        _run_database_migrations()
-
-    items[:] = [*non_db_items, *db_items]
+            if "database_test_case_sync" not in item_with_fixtures.fixturenames:
+                item_with_fixtures.fixturenames.append("database_test_case_sync")
 
 
 @dataclass(slots=True)
@@ -211,7 +275,6 @@ class JsonRpcClient:
         data: dict[str, Any],
     ) -> httpx.Response:
         assert self.api_client.portal is not None
-        self.api_client.portal.call(_seed_project_manifests)
         headers = {
             "Accept": "application/json",
         }
@@ -285,80 +348,11 @@ async def _seed_project_manifests() -> None:
         )
 
 
-class FileBackedProjectManifestService:
-    """Test double that keeps direct tool tests independent from DB manifest rows."""
-
-    @staticmethod
-    async def get(project_name: str) -> ProjectManifestContext | None:
-        for manifest in list_project_manifests(settings.manifests_dir):
-            if manifest.project_key == project_name:
-                return ProjectManifestContext(manifest=manifest, project_name=project_name)
-        return None
-
-    @staticmethod
-    async def get_or_error(project_name: str):
-        from services.project_manifest import ProjectManifestError
-
-        manifest_context = await FileBackedProjectManifestService.get(project_name)
-        if manifest_context is not None:
-            return manifest_context
-        return ProjectManifestError(
-            message=(
-                f"Unknown project {project_name!r}. No manifest file was found for that project."
-            )
-        )
-
-    @staticmethod
-    async def all() -> ProjectManifestList:
-        return ProjectManifestList.model_validate(
-            [
-                ProjectManifestSummary(
-                    project_name=manifest.project_key,
-                    project_summary=manifest.project_summary,
-                    source_keys=[source.source_key for source in manifest.sources],
-                )
-                for manifest in list_project_manifests(settings.manifests_dir)
-            ]
-        )
-
-    @staticmethod
-    def get_manifest_source_keys(manifest, source_keys):
-        from services.project_manifest import ProjectManifestService
-
-        return ProjectManifestService.get_manifest_source_keys(manifest, source_keys)
-
-    @staticmethod
-    def get_container_source(manifest, source_key):
-        from services.project_manifest import ProjectManifestService
-
-        return ProjectManifestService.get_container_source(manifest, source_key)
-
-    @staticmethod
-    def get_container_source_or_error(manifest, source_key):
-        from services.project_manifest import ProjectManifestService
-
-        return ProjectManifestService().get_container_source_or_error(manifest, source_key)
-
-
-@pytest.fixture
-def patch_file_project_manifest_service(mocker: MockerFixture) -> FileBackedProjectManifestService:
-    """Patch direct tool tests to read manifest fixtures without touching the DB."""
-
-    service = FileBackedProjectManifestService()
-    mocker.patch("decorators.project_manifest_service", service)
-    mocker.patch("tools.collection.manifest_service", service)
-    mocker.patch("tools.analysis.manifest_service", service)
-    mocker.patch("tools.container_inspection.manifest_service", service)
-    mocker.patch("tools.collection.collection_service", LogCollectionService())
-    return service
-
-
 @dataclass(slots=True)
 class FileBackedProjectContext:
     """API test paths for the single file-backed landingpage manifest scenario."""
 
     logs_dir: Path
-    manifests_dir: Path
     file_source_root: Path
 
 
@@ -367,7 +361,6 @@ class MultiProjectCollectContext:
     """API test paths for the multi-project manifest scenario."""
 
     logs_dir: Path
-    manifests_dir: Path
     file_source_root: Path
 
 
@@ -419,13 +412,6 @@ def copy_mutable_log_fixture_root(tmp_path: Path) -> Path:
     shutil.copytree(settings.MANIFEST_PATH, fixture_root / "manifests")
     shutil.copytree(settings.file_source_root, fixture_root / "logs")
     return fixture_root
-
-
-@pytest.fixture
-def container_manifests_dir() -> Path:
-    """Return the reusable container-inspection manifest scenario."""
-
-    return settings.MANIFEST_PATH / "container"
 
 
 @pytest.fixture
@@ -501,7 +487,6 @@ def file_backed_project_context(
 
     return FileBackedProjectContext(
         logs_dir=logs_dir,
-        manifests_dir=settings.MANIFEST_PATH,
         file_source_root=settings.file_source_root,
     )
 
@@ -515,6 +500,5 @@ def multi_project_collect_context(
     logs_dir: Path = tmp_path / "collected-logs"
     return MultiProjectCollectContext(
         logs_dir=logs_dir,
-        manifests_dir=settings.MANIFEST_PATH,
         file_source_root=settings.file_source_root,
     )

@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import ClassVar
 
 from database.models import ProjectManifest
-from database.services.models import ProjectManifestCreate, ProjectManifestUpdate
+from database.schemas import ProjectManifestCreate, ProjectManifestUpdate
 
 
 class ProjectManifestService:

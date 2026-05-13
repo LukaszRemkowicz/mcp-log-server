@@ -86,7 +86,6 @@ def collect_source(
     )
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_build_collect_logs_collects_requested_file_source(
     tmp_path: Path,
@@ -135,7 +134,6 @@ async def test_build_collect_logs_collects_requested_file_source(
     assert archive_dir.exists()
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_build_collect_logs_uses_runtime_default_log_window(
     tmp_path: Path,
@@ -156,7 +154,6 @@ async def test_build_collect_logs_uses_runtime_default_log_window(
     assert payload["requested_since"] == "12h"
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_build_collect_logs_archives_previous_latest_snapshot(
     tmp_path: Path,
@@ -203,7 +200,6 @@ async def test_build_collect_logs_archives_previous_latest_snapshot(
     )
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_workflow_inventory_points_to_latest_and_archived_files(
     tmp_path: Path,
@@ -253,7 +249,6 @@ async def test_workflow_inventory_points_to_latest_and_archived_files(
     )
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_build_collect_logs_replaces_incomplete_workflow_latest_snapshot(
     tmp_path: Path,
@@ -282,7 +277,6 @@ async def test_build_collect_logs_replaces_incomplete_workflow_latest_snapshot(
     assert (latest_dir / "app_file.log").read_text(encoding="utf-8") == expected_content
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_session_snapshot_cleanup_uses_configured_retention_window(
     tmp_path: Path,
@@ -326,7 +320,6 @@ async def test_session_snapshot_cleanup_uses_configured_retention_window(
     assert (sessions_root / SESSION_ID / "landingpage").exists()
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_build_collect_logs_rejects_project_mismatch(
     tmp_path: Path,
@@ -349,7 +342,6 @@ async def test_build_collect_logs_rejects_project_mismatch(
             )
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_build_collect_logs_collects_full_window_without_tail_controls(
     tmp_path: Path,
@@ -371,7 +363,6 @@ async def test_build_collect_logs_collects_full_window_without_tail_controls(
     assert payload["retry_tips"] == []
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_build_collect_logs_persists_large_file_without_inline_logs(
     tmp_path: Path,
@@ -633,7 +624,6 @@ def test_collect_source_reports_docker_api_unavailable(
     ]
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_build_collect_logs_requires_agent_chosen_session_id(
     tmp_path: Path,
@@ -678,7 +668,6 @@ def test_collect_logs_service_generates_session_id_without_existing_value() -> N
     assert isinstance(session_id, UUID)
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_build_collect_logs_reuses_agent_chosen_session_id(
     tmp_path: Path,

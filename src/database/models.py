@@ -112,6 +112,7 @@ class CollectLogs(DatabaseModel):
     """Persist metadata for one collect_logs artifact."""
 
     objects: ClassVar[CollectLogsManager[CollectLogs]] = CollectLogsManager()
+    sources: fields.ReverseRelation[CollectLogsSource]
 
     id = fields.BigIntField(
         primary_key=True,
@@ -268,6 +269,7 @@ class CollectLogsSource(DatabaseModel):
 
     class Meta:
         table = "collect_logs_sources"
+        ordering = ["id"]
 
 
 class ProjectManifest(DatabaseModel):

@@ -9,7 +9,7 @@ from fastmcp.server.auth import AccessToken
 from pytest_mock import MockerFixture
 from tortoise.exceptions import OperationalError
 
-from database.services.models import AgentCallCreate, AgentCallUpdate
+from database.schemas import AgentCallCreate, AgentCallUpdate
 from services.agent_calls import (
     AGENT_CALL_UNAVAILABLE_RETRY_TIP,
     AgentCallAuditService,

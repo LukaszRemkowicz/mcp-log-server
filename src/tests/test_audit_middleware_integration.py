@@ -17,15 +17,12 @@ from middleware.audit import AccessAuditMiddleware, _prepare_collect_logs_sessio
 from services.agent_calls import AGENT_CALL_UNAVAILABLE_RETRY_TIP, AgentCallCreateError
 
 
-@pytest.mark.db
 @pytest.mark.anyio
 async def test_audit_middleware_persists_agent_call_for_collect_logs(
     mocker: MockerFixture,
-    database_test_case: None,
 ) -> None:
     """Verify middleware creates and completes one AgentCall row."""
 
-    assert database_test_case is None
     token = AccessToken(
         token="test-token",
         client_id="codex-client",

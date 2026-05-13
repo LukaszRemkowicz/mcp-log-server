@@ -1,12 +1,14 @@
-"""Pydantic models used only by database service methods."""
+"""Pydantic IN/OUT contracts for database service boundaries."""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from database.fields import FileReference
 
 
 class AgentCallCreate(BaseModel):
@@ -76,7 +78,7 @@ class CollectLogsCreate(BaseModel):
     """Validated payload for creating one collected log artifact row."""
 
     session_id: UUID | None = None
-    workspace: str
+    workspace: Literal["workflow", "session"]
     project_name: str
     collected_at: datetime
     snapshot_dir: str
@@ -96,15 +98,65 @@ class CollectLogsSourceCreate(BaseModel):
     """Validated payload for creating one collected source metadata row."""
 
     source_key: str
-    source_type: str
+    source_type: Literal["docker", "file"]
     target: str
     description: str
-    stream: str | None = None
+    stream: Literal["stdout", "stderr"] | None = None
     parser_type: str | None = None
     normalization_profile: str | None = None
     default_noise_profile: str | None = None
-    status: str
+    status: Literal["collected", "unavailable"]
     file: str | None = None
     line_count: int = 0
     error: str | None = None
     retry_tips: list[str]
+
+
+class CollectLogsSourceOut(BaseModel):
+    """Pydantic representation of one collect_logs_sources database row."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    id: int
+    source_key: str
+    source_type: Literal["docker", "file"]
+    target: str
+    description: str
+    stream: Literal["stdout", "stderr"] | None = None
+    parser_type: str | None = None
+    normalization_profile: str | None = None
+    default_noise_profile: str | None = None
+    status: Literal["collected", "unavailable"]
+    file: FileReference | None = None
+    line_count: int
+    error: str | None = None
+    retry_tips: list[str]
+
+
+class CollectLogsOut(BaseModel):
+    """Pydantic representation of one collect_logs database row."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    id: int
+    session_id: UUID | None = None
+    workspace: Literal["workflow", "session"]
+    project_name: str
+    collected_at: datetime
+    snapshot_dir: str
+    metadata_file: FileReference
+    archive_name: str | None = None
+    is_latest: bool
+    requested_source_keys: list[str]
+    resolved_source_keys: list[str]
+    unknown_requested_source_keys: list[str]
+    requested_since: str | None = None
+    requested_until: str | None = None
+    warnings: list[str]
+    retry_tips: list[str]
+
+
+class CollectLogsWithSourcesOut(CollectLogsOut):
+    """Pydantic representation of one collect_logs database row with source rows."""
+
+    sources: list[CollectLogsSourceOut]
