@@ -20,7 +20,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, RootModel
 
-SnapshotWorkspace = Literal["workflow", "session"]
+from core.types import LogWorkspace
+
+SnapshotWorkspace = LogWorkspace
 
 
 class CollectedSourcePayload(BaseModel):
@@ -108,31 +110,6 @@ class LogSnapshotMetadata(BaseModel):
     files: list[LogSnapshotFilePayload]
 
 
-class WorkflowArtifactMetadata(BaseModel):
-    """Describe one workflow artifact tracked in the per-project inventory.
-
-    `snapshot_dir` and file `output_file` values are relative to the configured
-    logs root. Runtime code resolves them through `settings.LOGS_DIR`.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    archive_name: str | None
-    snapshot_dir: str
-    collected_at: str
-    files: list[LogSnapshotFilePayload]
-
-
-class WorkflowProjectInventory(BaseModel):
-    """Describe the per-project workflow inventory stored on disk."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    project_name: str
-    latest: WorkflowArtifactMetadata | None = None
-    archives: list[WorkflowArtifactMetadata] = []
-
-
 class ProjectCollectLogsPayload(BaseModel):
     """Describe one per-project collection result inside `collect_logs`.
 
@@ -145,14 +122,10 @@ class ProjectCollectLogsPayload(BaseModel):
     requested_project_name: str
     project_name: str
     workspace: SnapshotWorkspace
-    session_id: str | None
     snapshot_dir: str
-    metadata_file: str
-    persisted: bool
     requested_source_keys: list[str]
     requested_since: str | None
     requested_until: str | None
-    next_step_tips: list[str]
     warnings: list[str]
     retry_tips: list[str]
     unknown_requested_source_keys: list[str]
@@ -231,7 +204,6 @@ class ListLogSnapshotFilesPayload(BaseModel):
     workspace: SnapshotWorkspace
     session_id: str | None
     snapshot_dir: str
-    metadata_file: str
     collected_at: str
     next_step_tips: list[str]
     files: list[LogSnapshotFilePayload]

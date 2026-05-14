@@ -10,6 +10,7 @@ SERVER_LOG="$TMP_ROOT/server.log"
 PORT="${PORT:-18081}"
 HOST="${HOST:-127.0.0.1}"
 BASE_URL="http://${HOST}:${PORT}/mcp"
+SESSION_ID="11111111-1111-4111-8111-111111111111"
 
 cleanup() {
   if [[ -n "${SERVER_PID:-}" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -69,8 +70,14 @@ EOF
 
 json_post() {
   local payload="$1"
+  json_post_with_token "$WORKFLOW_AGENT_JWT" "$payload"
+}
+
+json_post_with_token() {
+  local token="$1"
+  local payload="$2"
   curl -fsS "$BASE_URL" \
-    -H "Authorization: Bearer $WORKFLOW_AGENT_JWT" \
+    -H "Authorization: Bearer $token" \
     -H "Content-Type: application/json" \
     -H "Accept: application/json" \
     -d "$payload"
@@ -100,14 +107,24 @@ WORKFLOW_AGENT_JWT="$(
   cd "$REPO_ROOT" &&
     uv run python infra/scripts/generate_dev_jwt.py | jq -r '.workflow_agent'
 )"
+CODEX_AGENT_JWT="$(
+  cd "$REPO_ROOT" &&
+    uv run python infra/scripts/generate_dev_jwt.py | jq -r '.codex_agent'
+)"
 export WORKFLOW_AGENT_JWT
+export CODEX_AGENT_JWT
+
+(
+  cd "$REPO_ROOT/src"
+  uv run python -m scripts.main upload-project-manifest-internal --path "$MANIFESTS_DIR" --all >/dev/null
+  uv run python -m scripts.main update-project-manifest-internal --path "$MANIFESTS_DIR" --project landingpage >/dev/null
+)
 
 (
   cd "$REPO_ROOT/src"
   PORT="$PORT" \
   HOST="$HOST" \
-  MANIFEST_PATH="$MANIFESTS_DIR" \
-  DOCKER_LOGS_DIR="$LOGS_DIR" \
+  LOGS_DIR="$LOGS_DIR" \
   uv run python -m main >"$SERVER_LOG" 2>&1
 ) &
 SERVER_PID=$!
@@ -142,7 +159,7 @@ FILTERED_VIEW_RESPONSE="$(
   json_post '{"jsonrpc":"2.0","id":"create-filtered-view","method":"tools/call","params":{"name":"create_filtered_view","arguments":{"project_name":"landingpage","source_keys":["app_first","app_second"],"max_lines":10}}}'
 )"
 SESSION_RESPONSE="$(
-  json_post '{"jsonrpc":"2.0","id":"collect-session","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_names":["landingpage"],"workspace":"session","session_id":"ci-session","source_keys":["app_first"]}}}'
+  json_post_with_token "$CODEX_AGENT_JWT" '{"jsonrpc":"2.0","id":"collect-session","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_names":["landingpage"],"workspace":"session","session_id":"'"$SESSION_ID"'","source_keys":["app_first"]}}}'
 )"
 
 assert_eq \
@@ -172,11 +189,10 @@ assert_eq \
 
 assert_file_exists "$LOGS_DIR/workflow/landingpage/latest/app_first.log"
 assert_file_exists "$LOGS_DIR/workflow/landingpage/latest/app_second.log"
-assert_file_exists "$LOGS_DIR/workflow/landingpage/workflow_inventory.json"
-assert_eq \
-  "$(jq -r '.latest.files | length' "$LOGS_DIR/workflow/landingpage/workflow_inventory.json")" \
-  "2" \
-  "workflow inventory should describe both latest files"
+if [[ -e "$LOGS_DIR/workflow/landingpage/workflow_inventory.json" ]]; then
+  echo "workflow_inventory.json should not be written; DB rows are the workflow index" >&2
+  exit 1
+fi
 
 assert_eq \
   "$(printf '%s' "$LIST_RESPONSE" | jq -r '.result.structuredContent.files | length')" \
@@ -213,8 +229,8 @@ assert_eq \
 
 assert_eq \
   "$(printf '%s' "$SESSION_RESPONSE" | jq -r '.result.structuredContent.session_id')" \
-  "ci-session" \
+  "$SESSION_ID" \
   "collect_logs should return the caller-provided session_id"
-assert_file_exists "$LOGS_DIR/sessions/ci-session/landingpage/app_first.log"
+assert_file_exists "$LOGS_DIR/sessions/$SESSION_ID/landingpage/app_first.log"
 
 echo "HTTP MCP end-to-end checks passed."

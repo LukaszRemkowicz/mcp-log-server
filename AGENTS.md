@@ -17,7 +17,8 @@ truth. For broader direction, also read:
 - `README.md`
 - `infra/docs/current_project_state.md`
 - `infra/docs/repository_foundation.md`
-- `infra/docs/NEW/mcp_log_server_architecture.md`
+- `infra/docs/analysis/mcp_log_server_architecture.md`
+- `infra/scripts/README.md`
 
 
 ## Short Project Summary
@@ -45,6 +46,9 @@ Top-level directories:
   Docker image definition for the MCP app.
 - `infra/`
   Repository-level infra and foundation notes.
+- `infra/scripts/`
+  Operational scripts and runbook notes for database backup/restore,
+  production image builds, and production deploys.
 
 Important current Python files:
 
@@ -54,6 +58,8 @@ Important current Python files:
   Creates the FastMCP app, attaches JWT auth, and imports MCP modules.
 - `src/middleware/audit.py`
   MCP audit middleware for authenticated request logging.
+- `src/database/services/`
+  Database service wrappers for agent call and project manifest metadata.
 - `src/settings.py`
   Environment-backed runtime settings.
 - `src/auth/`
@@ -147,7 +153,11 @@ Purpose:
   returns deterministic collection results for one or more authorized
   projects and requested source keys from the manifest. Current agent-facing
   arguments are: `project_names`, `source_keys`, `workspace`, optional
-  `session_id`, `since`, and `until`.
+  `session_id`, `since`, and `until`. For real MCP calls with
+  `workspace="session"`, middleware creates a `session_id` when the request
+  omits it; agents should reuse the returned `session_id` for later calls in
+  the same investigation. The fixed `workflow-agent` token is not allowed to
+  use `workspace="session"`; it must use `workspace="workflow"`.
 - `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`
   operate on one persisted artifact identified by:
   - `session_id` + `project_name` for session investigations
@@ -307,9 +317,9 @@ Current auth state:
 Use these docs when a task touches near-term design work that is not yet fully
 implemented:
 
-- `infra/docs/NEW/mcp_log_server_architecture.md`
+- `infra/docs/analysis/mcp_log_server_architecture.md`
   broader MCP server implementation direction
-- `infra/docs/NEW/log_search_and_large_log_handling.md`
+- `infra/docs/analysis/log_search_and_large_log_handling.md`
   planned direction for adding log-search arguments to `collect_logs` and for
   handling large log payloads without relying on unbounded in-memory responses
 
@@ -353,8 +363,15 @@ the shared skill set in place unless the user explicitly asks for a local copy.
 Current local validation command:
 
 ```bash
-uv run pytest
+uv run test
 ```
+
+`uv run test` delegates to the Docker Compose `test` service. The test service
+uses the separate `mcp_log_server_test` database, creates it when needed, and
+runs `uv run migrate` before the full `uv run pytest` suite. DB-dependent
+service tests are marked with `@pytest.mark.db` and run against the Compose
+Postgres container using `Settings.db` from the test service `DATABASE_*`
+settings. Do not point tests at the local app database.
 
 Current collector test caveat:
 

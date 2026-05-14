@@ -15,12 +15,23 @@ dependencies = [
   "joserfc>=1.4.0",
   "pydantic>=2.9.0",
   "pydantic-settings>=2.5.0",
+  "tortoise-orm[asyncpg]>=0.25.1",
+  "typer>=0.24.0",
 ]
+
+[project.scripts]
+commands = "scripts.main:main"
+makemigrations = "database.cli:makemigrations"
+migrate = "database.cli:migrate"
+shell = "scripts.shell:main"
+test = "database.cli:test"
 
 [dependency-groups]
 dev = [
+  "aerich>=0.9.2",
   "black>=24.10.0",
   "isort>=5.13.0",
+  "ipython>=9.0.0",
   "mypy>=1.13.0",
   "pip-audit>=2.9.0",
   "pre-commit>=4.5.0",
@@ -51,9 +62,17 @@ module = ["docker", "docker.errors", "requests"]
 ignore_missing_imports = true
 
 [tool.uv]
-package = false
+package = true
+constraint-dependencies = [
+  "urllib3>=2.7.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/database", "src/scripts"]
 
 [tool.ruff]
+exclude = ["migrations"]
+force-exclude = true
 line-length = 100
 target-version = "py313"
 
@@ -63,3 +82,8 @@ select = ["E", "F", "I", "UP"]
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["src/tests"]
+
+[tool.aerich]
+tortoise_orm = "database.config.TORTOISE_ORM"
+location = "./migrations"
+src_folder = "./src"

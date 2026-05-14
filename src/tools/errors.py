@@ -21,6 +21,7 @@ from fastmcp.tools.base import ToolResult
 from mcp.types import TextContent
 
 from settings import Settings
+from storage import storage
 from tools.models import SnapshotWorkspace
 from utils.mcp_errors import (
     AgentToolErrorResult,
@@ -51,9 +52,11 @@ COLLECT_LOGS_ERROR_RULES: tuple[CollectLogsErrorRule, ...] = (
         "project_access_mismatch",
     ),
     CollectLogsErrorRule("No manifest file was found", "unknown_project"),
+    CollectLogsErrorRule("No persisted manifest was found", "unknown_project"),
     CollectLogsErrorRule("loaded manifest project_key", "manifest_project_mismatch"),
     CollectLogsErrorRule("Invalid docker time filter", "invalid_docker_time_filter"),
     CollectLogsErrorRule("session_id is required", "missing_session_id"),
+    CollectLogsErrorRule("MCP-generated session_id", "missing_session_id"),
     CollectLogsErrorRule(
         "validation error for LogSnapshotMetadata",
         "invalid_snapshot_metadata",
@@ -105,8 +108,8 @@ def build_collect_logs_error_retry_tips(error_code: str) -> list[str]:
         ]
     if error_code == "missing_session_id":
         return [
-            "Retry with session_id set when workspace='session'.",
-            "Reuse the same session_id for later collect_logs calls in the same agent session.",
+            "This is a system error, not something the agent can fix with tool arguments.",
+            ("Ask administrator to check MCP middleware, session propagation, and system logs."),
         ]
     if error_code == "invalid_snapshot_metadata":
         return [
@@ -140,7 +143,6 @@ def build_collect_logs_error_details(
     if error_code in {"unknown_project", "manifest_project_mismatch"}:
         return {
             "requested_project_names": list(project_names) if project_names is not None else None,
-            "manifests_dir": str(settings.manifests_dir),
         }
     if error_code == "missing_session_id":
         return {
@@ -151,7 +153,7 @@ def build_collect_logs_error_details(
         return {
             "workspace": workspace,
             "project_names": list(project_names) if project_names is not None else None,
-            "logs_dir": str(settings.LOGS_DIR),
+            "logs_dir": str(storage.location),
         }
     return None
 
@@ -340,7 +342,7 @@ def build_container_inspection_error_details(
     if error_code == "unknown_project":
         return {"requested_project_name": requested_project_name}
     if error_code == "manifest_project_mismatch":
-        return {"manifests_dir": str(settings.manifests_dir)}
+        return {"requested_project_name": requested_project_name}
     if error_code in {
         "unknown_container_source_key",
         "container_source_type_mismatch",

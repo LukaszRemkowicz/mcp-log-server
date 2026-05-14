@@ -66,7 +66,7 @@ class ContainerInspectionContext:
     normalized_path: str
 
 
-def _prepare_container_inspection_context(
+async def _prepare_container_inspection_context(
     *,
     action: str,
     project_name: str,
@@ -77,7 +77,7 @@ def _prepare_container_inspection_context(
 ) -> ContainerInspectionContext | ToolResult:
     """Resolve manifest, container source, and allowed path for one inspection tool."""
 
-    manifest_result = manifest_service.get_or_error(project_name)
+    manifest_result = await manifest_service.get_or_error(project_name)
     if isinstance(manifest_result, ProjectManifestError):
         logger.info(
             "tool error",
@@ -173,7 +173,7 @@ def create_container_payload(
     description=READ_CONTAINER_FILE_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
-def read_container_file(
+async def read_container_file(
     source_key: str,
     path: str,
     project_name: str | None = None,
@@ -198,17 +198,6 @@ def read_container_file(
 
     assert access_token is not None
     assert project_name is not None
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "read_container_file",
-            "source_key": source_key,
-            "path": path,
-            "project_name": project_name,
-            "max_bytes": max_bytes,
-        },
-    )
     shape_defaults: dict[str, object] = {
         "requested_project_name": project_name,
         "source_key": source_key,
@@ -218,7 +207,7 @@ def read_container_file(
         "content": "",
         "file": None,
     }
-    context = _prepare_container_inspection_context(
+    context = await _prepare_container_inspection_context(
         action="read_container_file",
         project_name=project_name,
         source_key=source_key,
@@ -298,7 +287,7 @@ def read_container_file(
     description=LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
-def list_container_directory(
+async def list_container_directory(
     source_key: str,
     path: str | None = None,
     project_name: str | None = None,
@@ -322,16 +311,6 @@ def list_container_directory(
 
     assert access_token is not None
     assert project_name is not None
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "list_container_directory",
-            "source_key": source_key,
-            "path": path,
-            "project_name": project_name,
-        },
-    )
     shape_defaults: dict[str, object] = {
         "requested_project_name": project_name,
         "source_key": source_key,
@@ -339,7 +318,7 @@ def list_container_directory(
         "truncated": False,
         "entries": [],
     }
-    manifest_result = manifest_service.get_or_error(project_name)
+    manifest_result = await manifest_service.get_or_error(project_name)
     if isinstance(manifest_result, ProjectManifestError):
         logger.info(
             "tool error",

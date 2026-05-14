@@ -1,11 +1,25 @@
 from __future__ import annotations
 
-import json
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
+from uuid import UUID
 
 import pytest
 
-from services.log_snapshots import LogSnapshotService, SnapshotGrepError
+from core.types import LogWorkspace
+from database.fields import FileReference
+from database.fields import FileStorage as DBFileStorage
+from database.schemas import CollectLogsSourceOut, CollectLogsWithSourcesOut
+from database.services.collect_logs import CollectLogsService as CollectLogsDBService
+from exception import MissingSessionIdError
+from services.log_snapshots import (
+    LogSnapshotService,
+    SnapshotContext,
+    SnapshotGrepError,
+    SnapshotLookupError,
+)
+from storage import LogFileStorage
 from tests.conftest import override_settings
 from tools.models import LogSnapshotFilePayload, LogSnapshotMetadata
 
@@ -29,14 +43,70 @@ def build_file_payload(output_file: Path) -> LogSnapshotFilePayload:
     )
 
 
+def build_collect_logs_source(
+    *,
+    source_id: int,
+    source_key: str,
+    file_name: str | None,
+    storage_root: Path,
+) -> CollectLogsSourceOut:
+    """Create one collected source contract for snapshot-service tests."""
+
+    return CollectLogsSourceOut(
+        id=source_id,
+        source_key=source_key,
+        source_type="docker",
+        target="backend-container",
+        description="Backend logs.",
+        stream="stdout",
+        parser_type="python_json",
+        normalization_profile="backend_app",
+        default_noise_profile="backend_noise",
+        status="collected" if file_name is not None else "unavailable",
+        file=(
+            FileReference(
+                name=file_name,
+                storage=DBFileStorage(location=storage_root),
+            )
+            if file_name is not None
+            else None
+        ),
+        line_count=2 if file_name is not None else 0,
+        error=None if file_name is not None else "source unavailable",
+        retry_tips=[],
+    )
+
+
+class FakeCollectLogsDBService:
+    """Small fake DB service for snapshot lookup tests."""
+
+    def __init__(self, collect_logs: CollectLogsWithSourcesOut | None) -> None:
+        self.collect_logs = collect_logs
+
+    async def get_session_collect_logs_with_sources(
+        self,
+        *,
+        project_name: str,
+        session_id: str,
+    ) -> CollectLogsWithSourcesOut | None:
+        if self.collect_logs is None:
+            return None
+        if (
+            self.collect_logs.project_name == project_name
+            and str(self.collect_logs.session_id) == session_id
+        ):
+            return self.collect_logs
+        return None
+
+
 def test_prepare_workspace_requires_session_id_for_session_workspace(tmp_path) -> None:
     service = LogSnapshotService()
 
     with override_settings(LOGS_DIR=tmp_path):
-        with pytest.raises(ValueError, match="session_id is required"):
+        with pytest.raises(MissingSessionIdError, match="session_id is required"):
             service.prepare_workspace(
                 project_name="landingpage",
-                workspace="session",
+                workspace=LogWorkspace.SESSION,
                 session_id=None,
             )
 
@@ -47,8 +117,9 @@ def test_prepare_workspace_workflow_creates_latest_and_archive_dirs(tmp_path) ->
     with override_settings(LOGS_DIR=tmp_path):
         snapshot_dir = service.prepare_workspace(
             project_name="landingpage",
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             session_id=None,
+            snapshot_dir="workflow/landingpage/latest",
         )
 
     assert snapshot_dir == tmp_path / "workflow" / "landingpage" / "latest"
@@ -56,113 +127,163 @@ def test_prepare_workspace_workflow_creates_latest_and_archive_dirs(tmp_path) ->
     assert (tmp_path / "workflow" / "landingpage" / "archive").exists()
 
 
-def test_write_metadata_files_for_session_writes_snapshot_metadata_json(tmp_path) -> None:
-    service = LogSnapshotService()
-    session_dir = tmp_path / "sessions" / "session-1" / "landingpage"
-    session_dir.mkdir(parents=True)
-    log_file = session_dir / "backend.log"
-    log_file.write_text("one\ntwo\n", encoding="utf-8")
-    collected_files = [build_file_payload(log_file)]
-
-    with override_settings(LOGS_DIR=tmp_path):
-        snapshot_context = service.write_metadata_files(
-            session_dir,
-            project_name="landingpage",
-            workspace="session",
-            session_id="session-1",
-            collected_files=collected_files,
-        )
-
-    metadata = json.loads(snapshot_context.metadata_file.read_text(encoding="utf-8"))
-    assert snapshot_context.snapshot_dir == session_dir
-    assert snapshot_context.metadata_file == session_dir / "snapshot_metadata.json"
-    assert metadata["project_name"] == "landingpage"
-    assert metadata["workspace"] == "session"
-    assert metadata["session_id"] == "session-1"
-    assert metadata["files"][0]["output_file"] == "sessions/session-1/landingpage/backend.log"
-
-
-def test_write_metadata_files_for_workflow_updates_inventory_latest(tmp_path) -> None:
-    service = LogSnapshotService()
-    latest_dir = tmp_path / "workflow" / "landingpage" / "latest"
-    latest_dir.mkdir(parents=True)
-    log_file = latest_dir / "backend.log"
-    log_file.write_text("one\ntwo\n", encoding="utf-8")
-    collected_files = [build_file_payload(log_file)]
-
-    with override_settings(LOGS_DIR=tmp_path):
-        snapshot_context = service.write_metadata_files(
-            latest_dir,
-            project_name="landingpage",
-            workspace="workflow",
-            session_id=None,
-            collected_files=collected_files,
-        )
-
-    inventory = json.loads(snapshot_context.metadata_file.read_text(encoding="utf-8"))
-    assert snapshot_context.metadata_file == (
-        tmp_path / "workflow" / "landingpage" / "workflow_inventory.json"
+@pytest.mark.anyio
+async def test_load_session_snapshot_returns_context_from_db_contract(tmp_path) -> None:
+    session_id = UUID("11111111-1111-4111-8111-111111111111")
+    source_file = tmp_path / "sessions" / str(session_id) / "landingpage" / "backend.log"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("one\ntwo\n", encoding="utf-8")
+    collect_logs = CollectLogsWithSourcesOut(
+        id=1,
+        session_id=session_id,
+        workspace=LogWorkspace.SESSION,
+        project_name="landingpage",
+        collected_at=datetime(2026, 5, 14, 12, 0, tzinfo=UTC),
+        snapshot_dir=f"sessions/{session_id}/landingpage",
+        archive_name=None,
+        is_latest=False,
+        requested_source_keys=["backend"],
+        resolved_source_keys=["backend"],
+        unknown_requested_source_keys=[],
+        requested_since="1h",
+        requested_until=None,
+        warnings=[],
+        retry_tips=[],
+        sources=[
+            build_collect_logs_source(
+                source_id=1,
+                source_key="backend",
+                file_name=f"sessions/{session_id}/landingpage/backend.log",
+                storage_root=tmp_path,
+            ),
+            build_collect_logs_source(
+                source_id=2,
+                source_key="missing",
+                file_name=None,
+                storage_root=tmp_path,
+            ),
+        ],
     )
-    assert inventory["project_name"] == "landingpage"
-    assert inventory["latest"]["snapshot_dir"] == "workflow/landingpage/latest"
-    assert inventory["latest"]["files"][0]["output_file"] == (
-        "workflow/landingpage/latest/backend.log"
+    service = LogSnapshotService(
+        collect_logs_db_service=cast(
+            CollectLogsDBService,
+            FakeCollectLogsDBService(collect_logs),
+        ),
+        storage=LogFileStorage(root=tmp_path),
     )
-    assert inventory["archives"] == []
+
+    result = await service.load_session_snapshot(
+        project_name="landingpage",
+        session_id=str(session_id),
+    )
+
+    assert isinstance(result, SnapshotContext)
+    assert result.project_name == "landingpage"
+    assert result.snapshot_dir == tmp_path / "sessions" / str(session_id) / "landingpage"
+    assert result.metadata.project_name == "landingpage"
+    assert result.metadata.workspace == "session"
+    assert result.metadata.session_id == str(session_id)
+    assert result.metadata.files[0].source_key == "backend"
+    assert result.metadata.files[0].output_file == (
+        f"sessions/{session_id}/landingpage/backend.log"
+    )
+    assert result.sources == collect_logs.sources
 
 
-def test_archive_workflow_latest_moves_latest_and_updates_inventory(tmp_path) -> None:
+@pytest.mark.anyio
+async def test_load_session_snapshot_returns_lookup_error_when_db_object_missing() -> None:
+    service = LogSnapshotService(
+        collect_logs_db_service=cast(
+            CollectLogsDBService,
+            FakeCollectLogsDBService(None),
+        ),
+    )
+
+    result = await service.load_session_snapshot(
+        project_name="landingpage",
+        session_id="11111111-1111-4111-8111-111111111111",
+    )
+
+    assert isinstance(result, SnapshotLookupError)
+    assert result.error_code == "snapshot_not_found"
+    assert result.message == "Requested session log snapshot was not found."
+
+
+def test_prepare_workspace_uses_injected_storage_root(tmp_path) -> None:
+    service = LogSnapshotService(storage=LogFileStorage(root=tmp_path))
+
+    snapshot_dir = service.prepare_workspace(
+        project_name="landingpage",
+        workspace=LogWorkspace.WORKFLOW,
+        session_id=None,
+        snapshot_dir="workflow/landingpage/latest",
+    )
+
+    assert snapshot_dir == tmp_path / "workflow" / "landingpage" / "latest"
+    assert (tmp_path / "workflow" / "landingpage" / "archive").exists()
+
+
+def test_prepare_workspace_replaces_workflow_latest_without_inventory(tmp_path) -> None:
     service = LogSnapshotService()
     latest_dir = tmp_path / "workflow" / "landingpage" / "latest"
     archive_dir = tmp_path / "workflow" / "landingpage" / "archive"
     latest_dir.mkdir(parents=True)
     archive_dir.mkdir(parents=True)
-    log_file = latest_dir / "backend.log"
-    log_file.write_text("one\ntwo\n", encoding="utf-8")
-    collected_files = [build_file_payload(log_file)]
+    (latest_dir / "backend.log").write_text("one\ntwo\n", encoding="utf-8")
 
     with override_settings(LOGS_DIR=tmp_path):
-        service.write_metadata_files(
-            latest_dir,
+        snapshot_dir = service.prepare_workspace(
             project_name="landingpage",
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             session_id=None,
-            collected_files=collected_files,
-        )
-        service.archive_workflow_latest(
-            project_name="landingpage",
-            latest_output_dir=latest_dir,
-            archive_dir=archive_dir,
+            snapshot_dir="workflow/landingpage/latest",
         )
 
-    inventory = json.loads(
-        (tmp_path / "workflow" / "landingpage" / "workflow_inventory.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    archived_dir = tmp_path / inventory["archives"][0]["snapshot_dir"]
-
-    assert inventory["latest"] is None
-    assert archived_dir.exists()
-    assert (archived_dir / "backend.log").read_text(encoding="utf-8") == "one\ntwo\n"
-    assert inventory["archives"][0]["files"][0]["output_file"] == (
-        f"{inventory['archives'][0]['snapshot_dir']}/backend.log"
-    )
+    assert snapshot_dir == latest_dir
+    assert latest_dir.exists()
+    assert not (latest_dir / "backend.log").exists()
+    assert archive_dir.exists()
 
 
-def test_grep_snapshot_returns_error_for_invalid_snapshot_file_metadata(tmp_path) -> None:
+def test_grep_snapshot_returns_error_for_missing_db_source_file(tmp_path) -> None:
     service = LogSnapshotService()
-    bad_file_payload = build_file_payload(Path("/outside/logs/backend.log"))
+    missing_file = tmp_path / "workflow" / "landingpage" / "latest" / "backend.log"
     metadata = LogSnapshotMetadata(
         project_name="landingpage",
-        workspace="workflow",
+        workspace=LogWorkspace.WORKFLOW,
         collected_at="2026-05-06T10:00:00+00:00",
-        files=[bad_file_payload],
+        files=[build_file_payload(missing_file)],
+    )
+    context = SnapshotContext(
+        project_name="landingpage",
+        snapshot_dir=missing_file.parent,
+        metadata=metadata,
+        sources=[
+            CollectLogsSourceOut(
+                id=1,
+                source_key="backend",
+                source_type="docker",
+                target="backend-container",
+                description="Backend logs.",
+                stream="stdout",
+                parser_type="python_json",
+                normalization_profile="backend_app",
+                default_noise_profile="backend_noise",
+                status="collected",
+                file=FileReference(
+                    name="workflow/landingpage/latest/backend.log",
+                    storage=DBFileStorage(location=tmp_path),
+                ),
+                line_count=2,
+                error=None,
+                retry_tips=[],
+            )
+        ],
     )
 
     with override_settings(LOGS_DIR=tmp_path):
         result = service.grep_snapshot(
-            metadata,
+            context,
             grep="error",
             source_keys=["backend"],
             match_offset=0,
@@ -170,5 +291,98 @@ def test_grep_snapshot_returns_error_for_invalid_snapshot_file_metadata(tmp_path
         )
 
     assert isinstance(result, SnapshotGrepError)
-    assert result.error_code == "invalid_snapshot_file_metadata"
-    assert result.message == "Requested log snapshot file metadata is invalid."
+    assert result.error_code == "snapshot_file_not_found"
+    assert result.message == "Requested log snapshot file was not found on disk."
+
+
+def test_grep_snapshot_returns_matches_from_db_source_files(tmp_path) -> None:
+    service = LogSnapshotService()
+    backend_file = tmp_path / "workflow" / "landingpage" / "latest" / "backend.log"
+    nginx_file = tmp_path / "workflow" / "landingpage" / "latest" / "nginx.log"
+    backend_file.parent.mkdir(parents=True)
+    backend_file.write_text("INFO boot\nERROR backend failed\n", encoding="utf-8")
+    nginx_file.write_text("ERROR gateway failed\nINFO ok\n", encoding="utf-8")
+    sources = [
+        build_collect_logs_source(
+            source_id=1,
+            source_key="backend",
+            file_name="workflow/landingpage/latest/backend.log",
+            storage_root=tmp_path,
+        ),
+        build_collect_logs_source(
+            source_id=2,
+            source_key="nginx",
+            file_name="workflow/landingpage/latest/nginx.log",
+            storage_root=tmp_path,
+        ),
+    ]
+    metadata = LogSnapshotMetadata(
+        project_name="landingpage",
+        workspace=LogWorkspace.WORKFLOW,
+        collected_at="2026-05-06T10:00:00+00:00",
+        files=[
+            service.source_to_file_payload(source) for source in sources if source.file is not None
+        ],
+    )
+    context = SnapshotContext(
+        project_name="landingpage",
+        snapshot_dir=backend_file.parent,
+        metadata=metadata,
+        sources=sources,
+    )
+
+    result = service.grep_snapshot(
+        context,
+        grep="ERROR",
+        source_keys=None,
+        match_offset=0,
+        match_limit=10,
+    )
+
+    assert not isinstance(result, SnapshotGrepError)
+    matches, total_match_count = result
+    assert total_match_count == 2
+    assert [match.source_key for match in matches] == ["backend", "nginx"]
+    assert [match.output_file for match in matches] == [
+        "workflow/landingpage/latest/backend.log",
+        "workflow/landingpage/latest/nginx.log",
+    ]
+    assert [match.line_number for match in matches] == [2, 1]
+
+
+def test_grep_snapshot_returns_error_for_unknown_source_key(tmp_path) -> None:
+    service = LogSnapshotService()
+    backend_file = tmp_path / "workflow" / "landingpage" / "latest" / "backend.log"
+    backend_file.parent.mkdir(parents=True)
+    backend_file.write_text("ERROR backend failed\n", encoding="utf-8")
+    sources = [
+        build_collect_logs_source(
+            source_id=1,
+            source_key="backend",
+            file_name="workflow/landingpage/latest/backend.log",
+            storage_root=tmp_path,
+        )
+    ]
+    context = SnapshotContext(
+        project_name="landingpage",
+        snapshot_dir=backend_file.parent,
+        metadata=LogSnapshotMetadata(
+            project_name="landingpage",
+            workspace=LogWorkspace.WORKFLOW,
+            collected_at="2026-05-06T10:00:00+00:00",
+            files=[service.source_to_file_payload(sources[0])],
+        ),
+        sources=sources,
+    )
+
+    result = service.grep_snapshot(
+        context,
+        grep="ERROR",
+        source_keys=["missing"],
+        match_offset=0,
+        match_limit=10,
+    )
+
+    assert isinstance(result, SnapshotGrepError)
+    assert result.error_code == "snapshot_source_key_not_found"
+    assert result.message == "Requested log snapshot source_keys were not found: missing"

@@ -1,29 +1,90 @@
 services:
+  db:
+    container_name: mcp-db
+    image: mcp-db:18
+    build:
+      context: .
+      dockerfile: docker/db/Dockerfile
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME:-mcp_log_server}
+      POSTGRES_USER: ${DATABASE_USER:-mcp_log_server}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-mcp-log-server-local-password}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "127.0.0.1:${DATABASE_PORT_HOST:-5437}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   app:
     build:
       context: .
       dockerfile: docker/app/Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
     volumes:
       - ./src:/app/src
-      - ${LOGS_DIR_HOST:-./logs}:${DOCKER_LOGS_DIR:-/app/logs}
+      - ./migrations:/app/migrations
+      - ${LOGS_DIR_HOST:-./logs}:${LOGS_DIR:-/app/logs}
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      DOCKER_LOGS_DIR: ${DOCKER_LOGS_DIR:-/app/logs}
+      LOGS_DIR: ${LOGS_DIR:-/app/logs}
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${DATABASE_NAME:-mcp_log_server}
+      DATABASE_USER: ${DATABASE_USER:-mcp_log_server}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-mcp-log-server-local-password}
       HOST: 0.0.0.0
       PYTHONPATH: /app/src
+      # Used by `uv run commands ...` to find this Compose app service.
+      # Must match the Compose project name and the `services.app` key.
+      COMMANDS_COMPOSE_PROJECT_NAME: mcp-log-server
+      COMMANDS_APP_SERVICE: app
     ports:
-      - "8001:8001"
+      - "127.0.0.1:${MCP_PORT_HOST:-8001}:8001"
     command: ["uv", "run", "watchfiles", "--filter", "all", "python -m main", "/app/src"]
 
-  tests:
+  test:
     build:
       context: .
       dockerfile: docker/app/Dockerfile
+    profiles: ["test"]
+    depends_on:
+      db:
+        condition: service_healthy
     volumes:
       - ./src:/app/src
+      - ./migrations:/app/migrations
       - ./logs:/app/logs
     environment:
-      DOCKER_LOGS_DIR: /app/logs
+      LOGS_DIR: /app/logs
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: mcp_log_server_test
+      DATABASE_USER: mcp_log_server
+      DATABASE_PASSWORD: mcp-log-server-local-password
       HOST: 0.0.0.0
       PYTHONPATH: /app/src
-    command: ["uv", "run", "pytest"]
+      # Used by command tests when they execute through the Compose test service.
+      # Must match the Compose project name and the `services.app` key.
+      COMMANDS_COMPOSE_PROJECT_NAME: mcp-log-server
+      COMMANDS_APP_SERVICE: app
+    command:
+      [
+        "sh",
+        "-lc",
+        "uv run python -m database.ensure_test_database && uv run migrate && uv run pytest",
+      ]
+
+volumes:
+  postgres-data:

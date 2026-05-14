@@ -22,12 +22,12 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any, Literal
 
-from services.log_snapshots import LogSnapshotService, SnapshotReadError
+from database.schemas import CollectLogsSourceOut
+from services.log_snapshots import LogSnapshotService
 from tools.models import (
     GroupedErrorPayload,
     IncidentBundlePayload,
     IncidentSourceSummaryPayload,
-    LogSnapshotFilePayload,
     LogSnapshotMetadata,
     SnapshotLineReferencePayload,
 )
@@ -260,9 +260,8 @@ class LogAnalysisService:
 
     def group_snapshot_errors(
         self,
-        metadata: LogSnapshotMetadata,
-        *,
-        source_keys: list[str] | None,
+        sources: list[CollectLogsSourceOut],
+        requested_source_keys: list[str] | None,
         max_groups: int,
     ) -> GroupedSnapshotAnalysis:
         """Group repeated error-like lines from selected persisted source files.
@@ -273,40 +272,46 @@ class LogAnalysisService:
         returns both the truncated groups and the untruncated group count.
 
         Raises:
-            ValueError: When `source_keys` contains a key that is not present in
-                the snapshot metadata, or when one persisted source file cannot
+            ValueError: When `requested_source_keys` contains a key that is not
+                present in the collected source objects, or when one persisted source file cannot
                 be safely resolved on disk.
         """
 
-        selected_files = self._select_snapshot_files(metadata, source_keys)
+        selected_files = self._select_snapshot_files(
+            requested_source_keys,
+            sources=sources,
+        )
         groups: dict[str, ErrorGroupAccumulator] = {}
         matching_line_count = 0
 
         for item in selected_files:
-            output_path = self.snapshot_service.resolve_snapshot_file_path(item)
-            if isinstance(output_path, SnapshotReadError):
-                raise ValueError(output_path.message)
-            with output_path.open("r", encoding="utf-8", errors="replace") as handle:
-                for line_number, raw_line in enumerate(handle, start=1):
-                    event = self._classify_line(
-                        source_key=item.source_key,
-                        output_file=item.output_file,
-                        line_number=line_number,
-                        raw_line=raw_line.rstrip("\n"),
-                    )
-                    if event is None:
-                        continue
-                    matching_line_count += 1
-                    group = groups.get(event.fingerprint)
-                    if group is None:
-                        group = ErrorGroupAccumulator(
-                            fingerprint=event.fingerprint,
-                            category=event.category,
-                            severity=event.severity,
-                            message_summary=event.message_summary,
+            assert item.file is not None
+            try:
+                with open(item.file.path, encoding="utf-8", errors="replace") as file:
+                    for line_number, raw_line in enumerate(file, start=1):
+                        event = self._classify_line(
+                            source_key=item.source_key,
+                            output_file=item.file.name,
+                            line_number=line_number,
+                            raw_line=raw_line.rstrip("\n"),
                         )
-                        groups[event.fingerprint] = group
-                    group.add(event)
+                        if event is None:
+                            continue
+                        matching_line_count += 1
+                        group = groups.get(event.fingerprint)
+                        if group is None:
+                            group = ErrorGroupAccumulator(
+                                fingerprint=event.fingerprint,
+                                category=event.category,
+                                severity=event.severity,
+                                message_summary=event.message_summary,
+                            )
+                            groups[event.fingerprint] = group
+                        group.add(event)
+            except ValueError as error:
+                raise ValueError("Requested persisted source file reference is invalid.") from error
+            except OSError as error:
+                raise ValueError("Requested log snapshot file was not found on disk.") from error
 
         sorted_groups = sorted(
             (group.to_payload() for group in groups.values()),
@@ -329,7 +334,8 @@ class LogAnalysisService:
         self,
         metadata: LogSnapshotMetadata,
         *,
-        source_keys: list[str] | None,
+        sources: list[CollectLogsSourceOut],
+        requested_source_keys: list[str] | None,
         max_groups: int,
         requested_project_name: str | None,
         project_name: str,
@@ -356,8 +362,8 @@ class LogAnalysisService:
         """
 
         analysis = self.group_snapshot_errors(
-            metadata,
-            source_keys=source_keys,
+            sources=sources,
+            requested_source_keys=requested_source_keys,
             max_groups=max_groups,
         )
         high_count = sum(1 for group in analysis.groups if group.severity == "high")
@@ -387,27 +393,30 @@ class LogAnalysisService:
 
     @staticmethod
     def _select_snapshot_files(
-        metadata: LogSnapshotMetadata,
-        source_keys: list[str] | None,
-    ) -> list[LogSnapshotFilePayload]:
+        requested_source_keys: list[str] | None,
+        *,
+        sources: list[CollectLogsSourceOut],
+    ) -> list[CollectLogsSourceOut]:
         """Return source files selected for analysis, validating requested keys.
 
-        `None` or an empty list means "all files in this snapshot." Explicit
-        keys must all exist in metadata; callers get one deterministic
-        `ValueError` listing the missing keys when they do not.
+        `None` or an empty list means "all collected files in this snapshot."
+        Explicit keys must all exist in DB-backed collected sources; callers get
+        one deterministic `ValueError` listing missing keys when they do not.
         """
 
-        if not source_keys:
-            return list(metadata.files)
-
-        available_source_keys = {item.source_key for item in metadata.files}
-        unknown_source_keys = sorted(set(source_keys) - available_source_keys)
+        available_sources = [
+            source for source in sources if source.status == "collected" and source.file is not None
+        ]
+        if not requested_source_keys:
+            return available_sources
+        available_source_keys = {item.source_key for item in available_sources}
+        unknown_source_keys = sorted(set(requested_source_keys) - available_source_keys)
         if unknown_source_keys:
             raise ValueError(
                 "Requested log snapshot source_keys were not found: "
                 + ", ".join(unknown_source_keys)
             )
-        return [item for item in metadata.files if item.source_key in source_keys]
+        return [item for item in available_sources if item.source_key in requested_source_keys]
 
     @staticmethod
     def _build_source_summaries(

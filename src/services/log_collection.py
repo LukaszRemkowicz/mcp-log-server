@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import re
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
+from uuid import UUID, uuid4
 
 from docker.errors import APIError, DockerException
 from pydantic import BaseModel
@@ -14,12 +16,20 @@ from requests import exceptions as requests_exceptions
 
 import docker
 from conf import settings
+from core.types import LogWorkspace
+from database.schemas import (
+    CollectLogsCreate,
+    CollectLogsOut,
+    CollectLogsSourceCreate,
+    CollectLogsWithSourcesOut,
+)
+from database.services.collect_logs import CollectLogsService as CollectLogsDBService
+from database.services.collect_logs import CollectLogsSourceService as CollectLogsSourceDBService
+from exception import InvalidTimeFilterError, MissingSessionIdError
 from manifests.models import Manifest, SourceDefinition
-from tools.agent_hints import COLLECT_LOGS_NEXT_STEP_TIPS
 from tools.models import (
     CollectedSourcePayload,
     LogSnapshotFilePayload,
-    LogSnapshotMetadata,
     ProjectCollectLogsPayload,
     SnapshotWorkspace,
 )
@@ -31,6 +41,7 @@ if TYPE_CHECKING:
 
 DOCKER_LOG_TIMEOUT_SECONDS = 15
 _DOCKER_DURATION_PATTERN = re.compile(r"(?P<value>\d+)(?P<unit>[smhd])")
+DockerTimeFilter = datetime | int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +50,14 @@ class CollectionDefaults:
 
     source_keys: list[str]
     since: str
+
+
+@dataclass(frozen=True, slots=True)
+class DockerTimeFilters:
+    """Docker-ready since/until filters normalized from collect_logs input."""
+
+    since: DockerTimeFilter
+    until: DockerTimeFilter
 
 
 class BuildLogsError(BaseModel):
@@ -94,12 +113,20 @@ class LogCollectionService:
     snapshot lifecycle belongs to `LogSnapshotService`.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        collect_logs_db_service: CollectLogsDBService | None = None,
+        collect_logs_source_db_service: CollectLogsSourceDBService | None = None,
+    ) -> None:
         self.snapshot_service = LogSnapshotService()
+        self.collect_logs_db_service = collect_logs_db_service or CollectLogsDBService()
+        self.collect_logs_source_db_service = (
+            collect_logs_source_db_service or CollectLogsSourceDBService()
+        )
 
     @staticmethod
     def normalize_params(
-        *,
         source_keys: list[str] | None,
         since: str | None,
     ) -> CollectionDefaults:
@@ -110,9 +137,18 @@ class LogCollectionService:
             since=settings.DEFAULT_LOG_WINDOW if since is None else since,
         )
 
-    def build_logs(
+    @staticmethod
+    def resolve_session_id(session_id: object) -> UUID:
+        """Return the effective collect_logs session id for the request."""
+
+        if isinstance(session_id, UUID):
+            return session_id
+        if isinstance(session_id, str) and session_id.strip():
+            return UUID(session_id.strip())
+        return uuid4()
+
+    async def build_logs(
         self,
-        *,
         manifest: Manifest,
         sources: list[SourceDefinition],
         missing_source_keys: list[str],
@@ -137,81 +173,174 @@ class LogCollectionService:
         failures are kept inside the successful project payload.
         """
 
-        project_name: str = manifest.project_key
-        warnings: list[str]
-        retry_tips: list[str]
+        try:
+            time_filters = self.validate_and_normalize_time_filters(
+                sources=sources,
+                since=since,
+                until=until,
+            )
+        except InvalidTimeFilterError as error:
+            return self._build_invalid_time_filter_error(error)
+
+        if workspace == LogWorkspace.SESSION:
+            return await self.build_session_logs(
+                manifest=manifest,
+                sources=sources,
+                missing_source_keys=missing_source_keys,
+                source_keys=source_keys,
+                session_id=session_id,
+                since=since,
+                until=until,
+                time_filters=time_filters,
+            )
+        if workspace == LogWorkspace.WORKFLOW:
+            return await self.build_workflow_logs(
+                manifest=manifest,
+                sources=sources,
+                missing_source_keys=missing_source_keys,
+                source_keys=source_keys,
+                session_id=session_id,
+                since=since,
+                until=until,
+                time_filters=time_filters,
+            )
+        raise RuntimeError(f"Unsupported collect_logs workspace: {workspace}")
+
+    async def build_session_logs(
+        self,
+        *,
+        manifest: Manifest,
+        sources: list[SourceDefinition],
+        missing_source_keys: list[str],
+        source_keys: list[str],
+        session_id: str | None,
+        since: str | None,
+        until: str | None,
+        time_filters: DockerTimeFilters,
+    ) -> ProjectCollectLogsPayload | BuildLogsError:
+        """Collect one session snapshot and persist its DB metadata."""
+
+        project_name = manifest.project_key
         warnings, retry_tips = self._build_feedback(missing_source_keys=missing_source_keys)
         normalized_session_id: str | None = session_id.strip() if session_id is not None else None
         try:
             snapshot_dir = self.snapshot_service.prepare_workspace(
                 project_name=project_name,
-                workspace=workspace,
+                workspace=LogWorkspace.SESSION,
                 session_id=normalized_session_id,
+                snapshot_dir=None,
             )
-        except ValueError as error:
+        except MissingSessionIdError:
             return BuildLogsError(
-                message=str(error),
+                message=(
+                    "Session workspace is unavailable because MCP did not provide "
+                    "the required session_id."
+                ),
                 error_code="missing_session_id",
                 retry_tips=[
-                    "Retry with session_id set when workspace='session'.",
+                    "This is a system error, not something the agent can fix with tool arguments.",
                     (
-                        "Reuse the same session_id for later collect_logs calls "
-                        "in the same agent session."
+                        "Ask administrator to check MCP middleware, session propagation, "
+                        "and system logs."
                     ),
                 ],
             )
-        try:
-            collected_results: list[LogSnapshotFilePayload | CollectSourceError] = []
-            for source in sources:
-                collected_results.append(
-                    self.collect_source(
-                        source,
-                        output_file=snapshot_dir / f"{source.source_key}.log",
-                        since=since,
-                        until=until,
-                    )
-                )
-        except ValueError as error:
-            return BuildLogsError(
-                message=str(error),
-                error_code="invalid_time_filter",
-                retry_tips=[
-                    (
-                        "Retry with since/until as an ISO-8601 timestamp, "
-                        "unix seconds, or a duration like 30m, 1h, or 1d."
-                    )
-                ],
-            )
-        collected_files = [
-            item for item in collected_results if isinstance(item, LogSnapshotFilePayload)
-        ]
-        snapshot_context = self.snapshot_service.write_metadata_files(
-            snapshot_dir,
-            project_name=project_name,
-            workspace=workspace,
-            session_id=normalized_session_id,
-            collected_files=collected_files,
+        collected_results = self.collect_sources(
+            sources=sources,
+            snapshot_dir=snapshot_dir,
+            time_filters=time_filters,
         )
-        return self._build_response(
-            project_name=project_name,
-            workspace=workspace,
-            session_id=normalized_session_id,
-            snapshot_dir=str(snapshot_context.snapshot_dir),
-            metadata_file=str(snapshot_context.metadata_file),
-            requested_since=since,
-            requested_until=until,
-            warnings=warnings,
-            retry_tips=retry_tips,
-            missing_source_keys=missing_source_keys,
-            source_keys=source_keys,
-            collected_at=snapshot_context.metadata.collected_at,
-            metadata=snapshot_context.metadata,
+
+        requested_source_keys = [*source_keys, *missing_source_keys]
+        collect_logs_obj = await self.save_logs_to_db(
+            collect_logs_payload=CollectLogsCreate(
+                session_id=(
+                    UUID(normalized_session_id) if normalized_session_id is not None else None
+                ),
+                workspace=LogWorkspace.SESSION,
+                project_name=project_name,
+                collected_at=datetime.now(UTC),
+                snapshot_dir=snapshot_dir.as_posix(),
+                is_latest=False,
+                requested_source_keys=requested_source_keys,
+                resolved_source_keys=source_keys,
+                unknown_requested_source_keys=missing_source_keys,
+                requested_since=since,
+                requested_until=until,
+                warnings=warnings,
+                retry_tips=retry_tips,
+            ),
             collected_results=collected_results,
         )
+        return self._build_project_payload(collect_logs_obj)
+
+    async def build_workflow_logs(
+        self,
+        *,
+        manifest: Manifest,
+        sources: list[SourceDefinition],
+        missing_source_keys: list[str],
+        source_keys: list[str],
+        session_id: str | None,
+        since: str | None,
+        until: str | None,
+        time_filters: DockerTimeFilters,
+    ) -> ProjectCollectLogsPayload | BuildLogsError:
+        """Collect the latest workflow snapshot and persist its DB metadata."""
+
+        project_name = manifest.project_key
+        warnings, retry_tips = self._build_feedback(missing_source_keys=missing_source_keys)
+        normalized_session_id: str | None = session_id.strip() if session_id is not None else None
+
+        workflow_collect_logs_obj = await self.create_workflow_collect_logs_obj(
+            session_id=normalized_session_id,
+            project_name=project_name,
+            source_keys=source_keys,
+            missing_source_keys=missing_source_keys,
+            since=since,
+            until=until,
+            warnings=warnings,
+            retry_tips=retry_tips,
+        )
+        snapshot_dir = self.snapshot_service.prepare_workspace(
+            project_name=project_name,
+            workspace=LogWorkspace.WORKFLOW,
+            session_id=normalized_session_id,
+            snapshot_dir=workflow_collect_logs_obj.snapshot_dir,
+        )
+        collected_results = self.collect_sources(
+            sources=sources,
+            snapshot_dir=snapshot_dir,
+            time_filters=time_filters,
+        )
+        collect_logs_obj = await self.save_sources_to_db(
+            collect_logs_obj=workflow_collect_logs_obj,
+            collected_results=collected_results,
+        )
+        return self._build_project_payload(collect_logs_obj)
+
+    def collect_sources(
+        self,
+        *,
+        sources: list[SourceDefinition],
+        snapshot_dir: Path,
+        time_filters: DockerTimeFilters,
+    ) -> list[LogSnapshotFilePayload | CollectSourceError]:
+        """Collect all resolved sources into the prepared snapshot directory."""
+
+        collected_results: list[LogSnapshotFilePayload | CollectSourceError] = []
+        for source in sources:
+            collected_results.append(
+                self.collect_source(
+                    source,
+                    output_file=snapshot_dir / f"{source.source_key}.log",
+                    time_filters=time_filters,
+                )
+            )
+        return collected_results
 
     @staticmethod
     def _build_feedback(
-        *,
         missing_source_keys: list[str],
     ) -> tuple[list[str], list[str]]:
         """Build deterministic warnings and retry tips for one collection request."""
@@ -231,13 +360,210 @@ class LogCollectionService:
 
         return warnings, retry_tips
 
+    async def save_logs_to_db(
+        self,
+        *,
+        collect_logs_payload: CollectLogsCreate,
+        collected_results: list[LogSnapshotFilePayload | CollectSourceError],
+    ) -> CollectLogsWithSourcesOut:
+        """Save CollectLogs and CollectLogsSource rows for the written snapshot files."""
+
+        collect_logs_obj = await self.collect_logs_db_service.create(collect_logs_payload)
+        return await self.save_sources_to_db(
+            collect_logs_obj=collect_logs_obj,
+            collected_results=collected_results,
+        )
+
+    async def save_sources_to_db(
+        self,
+        *,
+        collect_logs_obj: CollectLogsOut,
+        collected_results: list[LogSnapshotFilePayload | CollectSourceError],
+    ) -> CollectLogsWithSourcesOut:
+        """Save CollectLogsSource objects for one existing CollectLogs artifact object."""
+
+        await self.collect_logs_source_db_service.create_many(
+            collect_logs_obj,
+            [
+                self._build_source_create_payload(
+                    result=result,
+                )
+                for result in collected_results
+            ],
+        )
+        return await self.collect_logs_db_service.get_with_sources(collect_logs_obj.id)
+
+    async def create_workflow_collect_logs_obj(
+        self,
+        *,
+        session_id: str | None,
+        project_name: str,
+        source_keys: list[str],
+        missing_source_keys: list[str],
+        since: str | None,
+        until: str | None,
+        warnings: list[str],
+        retry_tips: list[str],
+    ) -> CollectLogsOut:
+        """Archive previous latest and create the DB object that owns workflow snapshot_dir."""
+
+        await self.archive_latest_for_project(project_name)
+        return await self.collect_logs_db_service.create(
+            CollectLogsCreate(
+                session_id=UUID(session_id) if session_id is not None else None,
+                workspace=LogWorkspace.WORKFLOW,
+                project_name=project_name,
+                collected_at=datetime.now(UTC),
+                snapshot_dir=self.snapshot_service.storage.workflow_latest_dir(
+                    project_name
+                ).as_posix(),
+                is_latest=True,
+                requested_source_keys=[*source_keys, *missing_source_keys],
+                resolved_source_keys=source_keys,
+                unknown_requested_source_keys=missing_source_keys,
+                requested_since=since,
+                requested_until=until,
+                warnings=warnings,
+                retry_tips=retry_tips,
+            )
+        )
+
+    @staticmethod
+    def validate_and_normalize_time_filters(
+        *,
+        sources: list[SourceDefinition],
+        since: str | None,
+        until: str | None,
+    ) -> DockerTimeFilters:
+        """Return Docker-ready time filters for docker sources."""
+
+        if not any(source.source_type == "docker" for source in sources):
+            return DockerTimeFilters(since=None, until=None)
+        return DockerTimeFilters(
+            since=LogCollectionService.normalize_docker_time_filter(since),
+            until=LogCollectionService.normalize_docker_time_filter(until),
+        )
+
+    @staticmethod
+    def _build_invalid_time_filter_error(error: InvalidTimeFilterError) -> BuildLogsError:
+        """Return the public invalid time filter error."""
+
+        return BuildLogsError(
+            message=str(error),
+            error_code="invalid_docker_time_filter",
+            retry_tips=[
+                (
+                    "Retry with since/until as ISO-8601, unix seconds, or a "
+                    "duration like 30m, 1h, or 1d."
+                ),
+                "Omit since/until if you want the current default collection range.",
+            ],
+        )
+
+    async def archive_latest_for_project(self, project_name: str) -> None:
+        """Archive the current latest workflow snapshot for one project."""
+
+        obj = await self.collect_logs_db_service.get_latest_with_sources(project_name)
+        if obj is None:
+            return
+
+        archive_name = obj.collected_at.astimezone(UTC).strftime("%Y-%m-%dT%H-%M-%SZ")
+        archive_snapshot_dir = self._archived_snapshot_dir(obj.snapshot_dir, archive_name)
+        current_snapshot_dir = self._resolve_storage_path(obj.snapshot_dir)
+        archive_path = self._resolve_storage_path(archive_snapshot_dir)
+        if archive_path.exists():
+            shutil.rmtree(archive_path)
+        if current_snapshot_dir.exists():
+            archive_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(current_snapshot_dir), archive_path)
+        for source in obj.sources:
+            if source.file is None:
+                continue
+            await self.collect_logs_source_db_service.update_file(
+                source.id,
+                self._archived_source_file(source.file.name, archive_name),
+            )
+        await self.collect_logs_db_service.archive(
+            obj.id,
+            archive_name=archive_name,
+            snapshot_dir=archive_snapshot_dir,
+        )
+
+    @staticmethod
+    def _archived_snapshot_dir(snapshot_dir: str, archive_name: str) -> str:
+        """Return snapshot dir rewritten from workflow latest to archive path."""
+
+        path = Path(snapshot_dir)
+        if path.name != "latest":
+            return snapshot_dir
+        return (path.parent / "archive" / archive_name).as_posix()
+
+    @staticmethod
+    def _archived_source_file(file_name: str, archive_name: str) -> str:
+        """Return source file path rewritten from workflow latest to archive path."""
+
+        path = Path(file_name)
+        parts = list(path.parts)
+        if "latest" not in parts:
+            return file_name
+        latest_index = parts.index("latest")
+        parts[latest_index : latest_index + 1] = ["archive", archive_name]
+        return Path(*parts).as_posix()
+
+    def _resolve_storage_path(self, path: str) -> Path:
+        """Resolve an absolute or logs-root-relative snapshot path."""
+
+        snapshot_path = Path(path)
+        if snapshot_path.is_absolute():
+            return snapshot_path
+        return self.snapshot_service.storage.path(snapshot_path)
+
+    def _build_source_create_payload(
+        self,
+        *,
+        result: LogSnapshotFilePayload | CollectSourceError,
+    ) -> CollectLogsSourceCreate:
+        """Build one DB source payload from a collection result."""
+
+        if isinstance(result, CollectSourceError):
+            return CollectLogsSourceCreate(
+                source_key=result.source_key,
+                source_type=result.source_type,
+                target=result.target,
+                description=result.description,
+                stream=result.stream,
+                parser_type=result.parser_type,
+                normalization_profile=result.normalization_profile,
+                default_noise_profile=result.default_noise_profile,
+                status="unavailable",
+                file=None,
+                line_count=0,
+                error=result.error,
+                retry_tips=result.retry_tips,
+            )
+
+        file_path = self.snapshot_service.storage.relative_name(Path(result.output_file))
+        return CollectLogsSourceCreate(
+            source_key=result.source_key,
+            source_type=result.source_type,
+            target=result.target,
+            description=result.description,
+            stream=result.stream,
+            parser_type=result.parser_type,
+            normalization_profile=result.normalization_profile,
+            default_noise_profile=result.default_noise_profile,
+            status="collected",
+            file=file_path,
+            line_count=result.line_count,
+            error=None,
+            retry_tips=[],
+        )
+
     def collect_source(
         self,
         definition: SourceDefinition,
-        *,
         output_file: Path,
-        since: str | None,
-        until: str | None,
+        time_filters: DockerTimeFilters,
     ) -> LogSnapshotFilePayload | CollectSourceError:
         """Collect one manifest source through its deterministic adapter.
 
@@ -252,8 +578,7 @@ class LogCollectionService:
         return self._collect_docker_source(
             definition,
             output_file=output_file,
-            since=since,
-            until=until,
+            time_filters=time_filters,
         )
 
     @staticmethod
@@ -318,7 +643,7 @@ class LogCollectionService:
         try:
             parsed_datetime = datetime.fromisoformat(normalized_iso_value)
         except ValueError as error:
-            raise ValueError(
+            raise InvalidTimeFilterError(
                 f"Invalid docker time filter {value!r}. Use an ISO-8601 timestamp, "
                 "unix seconds, or a duration like 30m, 1h, or 1d."
             ) from error
@@ -330,41 +655,31 @@ class LogCollectionService:
     def _collect_file_source(
         self,
         definition: SourceDefinition,
-        *,
         output_file: Path,
     ) -> LogSnapshotFilePayload | CollectSourceError:
         """Collect one file-backed source declared by the manifest.
 
-        Absolute targets are read as-is. Relative targets are resolved under
-        `FILE_SOURCE_ROOT`, not under the manifest directory, because manifests
-        describe sources but do not own the log files themselves.
+        File-backed sources must point at an explicit absolute path. Different
+        sources can live in different places, so the manifest owns that path.
         """
 
         target_path = Path(definition.target)
-        path = target_path if target_path.is_absolute() else settings.file_source_root / target_path
         if not target_path.is_absolute():
-            try:
-                path.resolve(strict=False).relative_to(settings.file_source_root.resolve())
-            except ValueError:
-                return CollectSourceError(
-                    source_key=definition.source_key,
-                    source_type=definition.source_type,
-                    target=definition.target,
-                    description=definition.description,
-                    stream=definition.stream,
-                    parser_type=definition.parser_type,
-                    normalization_profile=definition.normalization_profile,
-                    default_noise_profile=definition.default_noise_profile,
-                    error=(
-                        "Relative file source resolves outside the configured file source root."
-                    ),
-                    retry_tips=[
-                        (
-                            "Use a clean relative path inside FILE_SOURCE_ROOT or "
-                            "an explicit absolute path."
-                        )
-                    ],
-                )
+            return CollectSourceError(
+                source_key=definition.source_key,
+                source_type=definition.source_type,
+                target=definition.target,
+                description=definition.description,
+                stream=definition.stream,
+                parser_type=definition.parser_type,
+                normalization_profile=definition.normalization_profile,
+                default_noise_profile=definition.default_noise_profile,
+                error="File source target must be an absolute path.",
+                retry_tips=[
+                    "Use an explicit absolute path in the persisted manifest source target."
+                ],
+            )
+        path = target_path
         if not path.exists():
             return CollectSourceError(
                 source_key=definition.source_key,
@@ -398,23 +713,19 @@ class LogCollectionService:
             byte_count=byte_count,
         )
 
+    @staticmethod
     def _collect_docker_source(
-        self,
         definition: SourceDefinition,
-        *,
         output_file: Path,
-        since: str | None,
-        until: str | None,
+        time_filters: DockerTimeFilters,
     ) -> LogSnapshotFilePayload | CollectSourceError:
         """Collect one docker-backed source through the Docker Engine API."""
 
         logs_kwargs: dict[str, int | str | datetime] = {}
-        normalized_since = self.normalize_docker_time_filter(since)
-        normalized_until = self.normalize_docker_time_filter(until)
-        if normalized_since is not None:
-            logs_kwargs["since"] = normalized_since
-        if normalized_until is not None:
-            logs_kwargs["until"] = normalized_until
+        if time_filters.since is not None:
+            logs_kwargs["since"] = time_filters.since
+        if time_filters.until is not None:
+            logs_kwargs["until"] = time_filters.until
 
         try:
             client: DockerClient = docker.from_env(  # type: ignore[attr-defined]
@@ -509,84 +820,40 @@ class LogCollectionService:
         )
 
     @staticmethod
-    def _build_response(
-        *,
-        project_name: str,
-        workspace: SnapshotWorkspace,
-        session_id: str | None,
-        snapshot_dir: str,
-        metadata_file: str,
-        requested_since: str | None,
-        requested_until: str | None,
-        warnings: list[str],
-        retry_tips: list[str],
-        missing_source_keys: list[str],
-        source_keys: list[str],
-        collected_at: str,
-        metadata: LogSnapshotMetadata,
-        collected_results: list[LogSnapshotFilePayload | CollectSourceError],
+    def _build_project_payload(
+        collect_logs: CollectLogsWithSourcesOut,
     ) -> ProjectCollectLogsPayload:
-        """Assemble the final agent-facing payload for one project collection.
+        """Build the public per-project collect_logs summary from DB output."""
 
-        The snapshot metadata is the source of truth for successfully persisted
-        files. Source-level errors are merged back into the response as
-        `status="unavailable"` entries so callers can see partial collection
-        failures without losing successful source metadata.
-        """
-
-        file_payloads_by_source_key = {item.source_key: item for item in metadata.files}
-        sources: list[CollectedSourcePayload] = []
-        for result in collected_results:
-            if isinstance(result, CollectSourceError):
-                sources.append(
-                    CollectedSourcePayload(
-                        source_key=result.source_key,
-                        source_type=result.source_type,
-                        target=result.target,
-                        description=result.description,
-                        stream=result.stream,
-                        status="unavailable",
-                        line_count=0,
-                        byte_count=0,
-                        output_file=None,
-                        error=result.error,
-                        retry_tips=result.retry_tips,
-                    )
-                )
-                continue
-            file_payload = file_payloads_by_source_key[result.source_key]
-            sources.append(
-                CollectedSourcePayload(
-                    source_key=file_payload.source_key,
-                    source_type=file_payload.source_type,
-                    target=file_payload.target,
-                    description=file_payload.description,
-                    stream=file_payload.stream,
-                    status="collected",
-                    line_count=file_payload.line_count,
-                    byte_count=file_payload.byte_count,
-                    output_file=file_payload.output_file,
-                    error=None,
-                    retry_tips=[],
-                )
-            )
+        source_payload_fields = {
+            "source_key",
+            "source_type",
+            "target",
+            "description",
+            "stream",
+            "status",
+            "line_count",
+            "byte_count",
+            "output_file",
+            "error",
+            "retry_tips",
+        }
 
         return ProjectCollectLogsPayload(
-            requested_project_name=project_name,
-            project_name=project_name,
-            workspace=workspace,
-            session_id=None if workspace == "workflow" else session_id,
-            snapshot_dir=snapshot_dir,
-            metadata_file=metadata_file,
-            persisted=True,
-            requested_source_keys=[],
-            requested_since=requested_since,
-            requested_until=requested_until,
-            next_step_tips=COLLECT_LOGS_NEXT_STEP_TIPS,
-            warnings=warnings,
-            retry_tips=retry_tips,
-            unknown_requested_source_keys=missing_source_keys,
-            resolved_source_keys=source_keys,
-            collected_at=collected_at,
-            sources=sources,
+            requested_project_name=collect_logs.project_name,
+            project_name=collect_logs.project_name,
+            workspace=collect_logs.workspace,
+            snapshot_dir=collect_logs.snapshot_dir,
+            requested_source_keys=collect_logs.requested_source_keys,
+            requested_since=collect_logs.requested_since,
+            requested_until=collect_logs.requested_until,
+            warnings=collect_logs.warnings,
+            retry_tips=collect_logs.retry_tips,
+            unknown_requested_source_keys=collect_logs.unknown_requested_source_keys,
+            resolved_source_keys=collect_logs.resolved_source_keys,
+            collected_at=collect_logs.collected_at.isoformat(),
+            sources=[
+                CollectedSourcePayload(**source.model_dump(include=source_payload_fields))
+                for source in collect_logs.sources
+            ],
         )

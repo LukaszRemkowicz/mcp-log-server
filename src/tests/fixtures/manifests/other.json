@@ -5,7 +5,7 @@
     {
       "source_key": "app_file",
       "source_type": "file",
-      "target": "other/app_file.log",
+      "target": "/app/src/tests/fixtures/logs/other/app_file.log",
       "description": "Other application logs.",
       "required": true,
       "parser_type": "json_lines",

@@ -11,7 +11,8 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from services.log_snapshots import LogSnapshotService, SnapshotReadError
+from database.schemas import CollectLogsSourceOut
+from services.log_snapshots import LogSnapshotService
 from tools.models import (
     CreateFilteredViewPayload,
     FilteredViewSourceSummaryPayload,
@@ -136,6 +137,7 @@ class LogFilteringService:
         self,
         metadata: LogSnapshotMetadata,
         *,
+        sources: list[CollectLogsSourceOut],
         source_contexts: dict[str, SourceNoiseContext],
         source_keys: list[str] | None,
         max_lines: int,
@@ -153,8 +155,12 @@ class LogFilteringService:
         them to the normal MCP error shape.
         """
 
+        available_sources = [
+            source for source in sources if source.status == "collected" and source.file is not None
+        ]
+        available_source_keys = {item.source_key for item in available_sources}
+
         if source_keys:
-            available_source_keys = {item.source_key for item in metadata.files}
             unknown_source_keys = sorted(set(source_keys) - available_source_keys)
             if unknown_source_keys:
                 return CreateFilteredViewError(
@@ -171,17 +177,19 @@ class LogFilteringService:
                     ],
                 )
 
-        selected_files = [
-            item for item in metadata.files if source_keys is None or item.source_key in source_keys
+        selected_items = [
+            item
+            for item in available_sources
+            if source_keys is None or item.source_key in source_keys
         ]
-        searched_source_keys = [item.source_key for item in selected_files]
+        searched_source_keys = [item.source_key for item in selected_items]
         cleaned_lines: list[SnapshotLineReferencePayload] = []
         source_summaries: dict[str, SourceFilteredSummary] = {}
         total_line_count = 0
         kept_line_count = 0
         excluded_line_count = 0
 
-        for item in selected_files:
+        for item in selected_items:
             context = source_contexts.get(
                 item.source_key,
                 SourceNoiseContext(
@@ -192,38 +200,49 @@ class LogFilteringService:
                 ),
             )
             summary = source_summaries.setdefault(item.source_key, SourceFilteredSummary(context))
-            output_path = self.snapshot_service.resolve_snapshot_file_path(item)
-            if isinstance(output_path, SnapshotReadError):
-                return CreateFilteredViewError(
-                    message=output_path.message,
-                    error_code=output_path.error_code,
-                    retry_tips=output_path.retry_tips,
-                )
-            with output_path.open("r", encoding="utf-8", errors="replace") as handle:
-                for line_number, raw_line in enumerate(handle, start=1):
-                    line = raw_line.rstrip("\n")
-                    total_line_count += 1
-                    summary.total_line_count += 1
-                    decision = self._apply_noise_profile(context, line)
-                    truncated_line, line_truncated = self._truncate_line(line)
-                    if decision.keep:
-                        kept_line_count += 1
-                        summary.kept_line_count += 1
-                        if len(cleaned_lines) < max_lines:
-                            cleaned_lines.append(
-                                SnapshotLineReferencePayload(
-                                    source_key=item.source_key,
-                                    output_file=item.output_file,
-                                    line_number=line_number,
-                                    line=truncated_line,
-                                    line_truncated=line_truncated,
+            assert item.file is not None
+            try:
+                with open(item.file.path, encoding="utf-8", errors="replace") as file:
+                    for line_number, raw_line in enumerate(file, start=1):
+                        line = raw_line.rstrip("\n")
+                        total_line_count += 1
+                        summary.total_line_count += 1
+                        decision = self._apply_noise_profile(context, line)
+                        truncated_line, line_truncated = self._truncate_line(line)
+                        if decision.keep:
+                            kept_line_count += 1
+                            summary.kept_line_count += 1
+                            if len(cleaned_lines) < max_lines:
+                                cleaned_lines.append(
+                                    SnapshotLineReferencePayload(
+                                        source_key=item.source_key,
+                                        output_file=item.file.name,
+                                        line_number=line_number,
+                                        line=truncated_line,
+                                        line_truncated=line_truncated,
+                                    )
                                 )
-                            )
-                    else:
-                        excluded_line_count += 1
-                        summary.excluded_line_count += 1
-                        assert summary.exclusion_reasons is not None
-                        summary.exclusion_reasons[decision.reason or "excluded_by_profile"] += 1
+                        else:
+                            excluded_line_count += 1
+                            summary.excluded_line_count += 1
+                            assert summary.exclusion_reasons is not None
+                            summary.exclusion_reasons[decision.reason or "excluded_by_profile"] += 1
+            except ValueError:
+                return CreateFilteredViewError(
+                    message="Requested persisted source file reference is invalid.",
+                    error_code="invalid_source_file_reference",
+                    retry_tips=[
+                        "Run collect_logs again to recreate source files for this project.",
+                    ],
+                )
+            except OSError:
+                return CreateFilteredViewError(
+                    message="Requested log snapshot file was not found on disk.",
+                    error_code="snapshot_file_not_found",
+                    retry_tips=[
+                        "Run collect_logs again to recreate the missing persisted file.",
+                    ],
+                )
 
         payload_source_summaries = [
             FilteredViewSourceSummaryPayload(

@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from pathlib import Path
-
+import pytest
 from pytest_mock import MockerFixture
 
 from services.docker_service import ContainerPathStat, DockerServiceError
-from tests.conftest import CustomAccessToken, override_settings
+from tests.conftest import CustomAccessToken
 from tools.container_inspection import list_container_directory, read_container_file
 
 
-def test_read_container_file_reads_whitelisted_project_file(
-    container_manifests_dir: Path,
+@pytest.mark.anyio
+async def test_read_container_file_reads_whitelisted_project_file(
     custom_access_token: CustomAccessToken,
     mocker: MockerFixture,
 ) -> None:
@@ -18,7 +17,7 @@ def test_read_container_file_reads_whitelisted_project_file(
         "codex-agent",
         ["container.files.read"],
         "codex-agent",
-        {"allowed_projects": ["landingpage"]},
+        {"allowed_projects": ["dockerpage"]},
     )
     mocker.patch(
         "tools.container_inspection.docker_service.stat_container_path",
@@ -35,13 +34,12 @@ def test_read_container_file_reads_whitelisted_project_file(
         return_value=("2026.04.26\n", False),
     )
 
-    with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = read_container_file(
-            project_name="landingpage",
-            source_key="backend",
-            path="/app/VERSION",
-            access_token=access_token,
-        )
+    result = await read_container_file(
+        project_name="dockerpage",
+        source_key="backend",
+        path="/app/VERSION",
+        access_token=access_token,
+    )
 
     payload = result.structured_content
     assert payload is not None
@@ -55,23 +53,22 @@ def test_read_container_file_reads_whitelisted_project_file(
     assert payload["file"]["name"] == "VERSION"
 
 
-def test_read_container_file_rejects_non_whitelisted_path(
-    container_manifests_dir: Path,
+@pytest.mark.anyio
+async def test_read_container_file_rejects_non_whitelisted_path(
     custom_access_token: CustomAccessToken,
 ) -> None:
     access_token = custom_access_token(
         "codex-agent",
         ["container.files.read"],
         "codex-agent",
-        {"allowed_projects": ["landingpage"]},
+        {"allowed_projects": ["dockerpage"]},
     )
-    with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = read_container_file(
-            project_name="landingpage",
-            source_key="backend",
-            path="/etc/passwd",
-            access_token=access_token,
-        )
+    result = await read_container_file(
+        project_name="dockerpage",
+        source_key="backend",
+        path="/etc/passwd",
+        access_token=access_token,
+    )
 
     payload = result.structured_content
     assert payload is not None
@@ -84,23 +81,22 @@ def test_read_container_file_rejects_non_whitelisted_path(
     assert payload["path"] == "/etc/passwd"
 
 
-def test_read_container_file_rejects_parent_directory_traversal(
-    container_manifests_dir: Path,
+@pytest.mark.anyio
+async def test_read_container_file_rejects_parent_directory_traversal(
     custom_access_token: CustomAccessToken,
 ) -> None:
     access_token = custom_access_token(
         "codex-agent",
         ["container.files.read"],
         "codex-agent",
-        {"allowed_projects": ["landingpage"]},
+        {"allowed_projects": ["dockerpage"]},
     )
-    with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = read_container_file(
-            project_name="landingpage",
-            source_key="backend",
-            path="/app/../etc/passwd",
-            access_token=access_token,
-        )
+    result = await read_container_file(
+        project_name="dockerpage",
+        source_key="backend",
+        path="/app/../etc/passwd",
+        access_token=access_token,
+    )
 
     payload = result.structured_content
     assert payload is not None
@@ -112,8 +108,8 @@ def test_read_container_file_rejects_parent_directory_traversal(
     assert payload["path"] == "/app/../etc/passwd"
 
 
-def test_list_container_directory_lists_immediate_entries(
-    container_manifests_dir: Path,
+@pytest.mark.anyio
+async def test_list_container_directory_lists_immediate_entries(
     custom_access_token: CustomAccessToken,
     mocker: MockerFixture,
 ) -> None:
@@ -121,7 +117,7 @@ def test_list_container_directory_lists_immediate_entries(
         "codex-agent",
         ["container.files.read"],
         "codex-agent",
-        {"allowed_projects": ["landingpage"]},
+        {"allowed_projects": ["dockerpage"]},
     )
     mocker.patch(
         "tools.container_inspection.docker_service.list_container_directory",
@@ -146,13 +142,12 @@ def test_list_container_directory_lists_immediate_entries(
         ),
     )
 
-    with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = list_container_directory(
-            project_name="landingpage",
-            source_key="frontend",
-            path="/app",
-            access_token=access_token,
-        )
+    result = await list_container_directory(
+        project_name="dockerpage",
+        source_key="frontend",
+        path="/app",
+        access_token=access_token,
+    )
 
     payload = result.structured_content
     assert payload is not None
@@ -163,8 +158,8 @@ def test_list_container_directory_lists_immediate_entries(
     assert payload["entries"][1]["is_dir"] is False
 
 
-def test_list_container_directory_defaults_to_manifest_inspection_root(
-    container_manifests_dir: Path,
+@pytest.mark.anyio
+async def test_list_container_directory_defaults_to_manifest_inspection_root(
     custom_access_token: CustomAccessToken,
     mocker: MockerFixture,
 ) -> None:
@@ -172,19 +167,18 @@ def test_list_container_directory_defaults_to_manifest_inspection_root(
         "codex-agent",
         ["container.files.read"],
         "codex-agent",
-        {"allowed_projects": ["landingpage"]},
+        {"allowed_projects": ["dockerpage"]},
     )
     list_directory = mocker.patch(
         "tools.container_inspection.docker_service.list_container_directory",
         return_value=([], False),
     )
 
-    with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = list_container_directory(
-            project_name="landingpage",
-            source_key="frontend",
-            access_token=access_token,
-        )
+    result = await list_container_directory(
+        project_name="dockerpage",
+        source_key="frontend",
+        access_token=access_token,
+    )
 
     payload = result.structured_content
     assert payload is not None
@@ -194,8 +188,8 @@ def test_list_container_directory_defaults_to_manifest_inspection_root(
     list_directory.assert_called_once_with("frontend-container", "/app")
 
 
-def test_list_container_directory_returns_single_file_entry(
-    container_manifests_dir: Path,
+@pytest.mark.anyio
+async def test_list_container_directory_returns_single_file_entry(
     custom_access_token: CustomAccessToken,
     mocker: MockerFixture,
 ) -> None:
@@ -203,7 +197,7 @@ def test_list_container_directory_returns_single_file_entry(
         "codex-agent",
         ["container.files.read"],
         "codex-agent",
-        {"allowed_projects": ["landingpage"]},
+        {"allowed_projects": ["dockerpage"]},
     )
     list_directory = mocker.patch(
         "tools.container_inspection.docker_service.list_container_directory",
@@ -221,13 +215,12 @@ def test_list_container_directory_returns_single_file_entry(
         ),
     )
 
-    with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = list_container_directory(
-            project_name="landingpage",
-            source_key="nginx",
-            path="/etc/nginx/nginx.conf",
-            access_token=access_token,
-        )
+    result = await list_container_directory(
+        project_name="dockerpage",
+        source_key="nginx",
+        path="/etc/nginx/nginx.conf",
+        access_token=access_token,
+    )
 
     payload = result.structured_content
     assert payload is not None
@@ -239,8 +232,8 @@ def test_list_container_directory_returns_single_file_entry(
     list_directory.assert_called_once_with("nginx-container", "/etc/nginx/nginx.conf")
 
 
-def test_list_container_directory_maps_docker_service_error_to_tool_error(
-    container_manifests_dir: Path,
+@pytest.mark.anyio
+async def test_list_container_directory_maps_docker_service_error_to_tool_error(
     custom_access_token: CustomAccessToken,
     mocker: MockerFixture,
 ) -> None:
@@ -248,7 +241,7 @@ def test_list_container_directory_maps_docker_service_error_to_tool_error(
         "codex-agent",
         ["container.files.read"],
         "codex-agent",
-        {"allowed_projects": ["landingpage"]},
+        {"allowed_projects": ["dockerpage"]},
     )
     mocker.patch(
         "tools.container_inspection.docker_service.list_container_directory",
@@ -257,13 +250,12 @@ def test_list_container_directory_maps_docker_service_error_to_tool_error(
         ),
     )
 
-    with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = list_container_directory(
-            project_name="landingpage",
-            source_key="nginx",
-            path="/etc/nginx/missing.conf",
-            access_token=access_token,
-        )
+    result = await list_container_directory(
+        project_name="dockerpage",
+        source_key="nginx",
+        path="/etc/nginx/missing.conf",
+        access_token=access_token,
+    )
 
     payload = result.structured_content
     assert payload is not None
@@ -274,23 +266,22 @@ def test_list_container_directory_maps_docker_service_error_to_tool_error(
     assert payload["entries"] == []
 
 
-def test_list_container_directory_maps_invalid_path_to_tool_error(
-    container_manifests_dir: Path,
+@pytest.mark.anyio
+async def test_list_container_directory_maps_invalid_path_to_tool_error(
     custom_access_token: CustomAccessToken,
 ) -> None:
     access_token = custom_access_token(
         "codex-agent",
         ["container.files.read"],
         "codex-agent",
-        {"allowed_projects": ["landingpage"]},
+        {"allowed_projects": ["dockerpage"]},
     )
-    with override_settings(MANIFEST_PATH=container_manifests_dir):
-        result = list_container_directory(
-            project_name="landingpage",
-            source_key="nginx",
-            path="etc/nginx/nginx.conf",
-            access_token=access_token,
-        )
+    result = await list_container_directory(
+        project_name="dockerpage",
+        source_key="nginx",
+        path="etc/nginx/nginx.conf",
+        access_token=access_token,
+    )
 
     payload = result.structured_content
     assert payload is not None

@@ -6,6 +6,9 @@ inspection.
 This repository is the implementation home for the MCP server described in
 [infra/docs/current_project_state.md](infra/docs/current_project_state.md).
 
+Operational database backup/restore and prod build/deploy scripts are documented
+in [infra/scripts/README.md](infra/scripts/README.md).
+
 ## Current Status
 
 Current repository foundation:
@@ -61,8 +64,12 @@ docker-compose.yml
 docker-compose.prod.yml
 infra/docs/
   current_project_state.md
-  NEW/
+  analysis/
   repository_foundation.md
+infra/scripts/
+  README.md
+  db_backup/
+  release/
 ```
 
 ## Local Development
@@ -85,10 +92,15 @@ Production-required secrets/config:
 - `JWT_SHARED_SECRET`
 - `JWT_ISSUER`
 - `JWT_AUDIENCE`
-- `MANIFEST_PATH`
 - `MCP_PATH`
 - `MCP_STATELESS_HTTP`
 - `MCP_JSON_RESPONSE`
+- `DATABASE_HOST`
+- `DATABASE_PORT`
+- `DATABASE_NAME`
+- `DATABASE_USER`
+- `DATABASE_PASSWORD`
+- `TAG`
 
 Production-recommended runtime config:
 
@@ -96,7 +108,7 @@ Production-recommended runtime config:
 - `LOG_FORMAT`
 - `JWT_ALGORITHM`
 - `JWT_EXPIRATION_SECONDS`
-- `FILE_SOURCE_ROOT` when manifests use relative `file` source targets
+- `MCP_PORT_HOST` when the host-side MCP port should differ from `8001`
 
 Local development defaults:
 
@@ -104,6 +116,221 @@ Local development defaults:
 - local development can run without explicitly setting every variable
 - production should not rely on the built-in JWT defaults, especially
   `JWT_SHARED_SECRET=change-me-local-dev-secret`
+
+### Database Runtime Configuration
+
+The repository has local and production PostgreSQL runtime wiring, Tortoise ORM
+configuration, initial model definitions, and an initial database migration.
+Future migration files should be generated only after the related model changes
+are reviewed and approved.
+
+- `DATABASE_HOST`
+  Database host used by app code.
+  Default: `127.0.0.1`
+
+  Docker Compose injects `db` for app/test containers so they connect over the
+  Compose network.
+
+- `DATABASE_PORT`
+  Database port used by app code.
+  Default: `5432`
+
+- `DATABASE_PORT_HOST`
+  Host port exposed by the local Compose `db` service.
+  Default: `5437`
+
+- `DATABASE_NAME`
+  PostgreSQL database name.
+  Default: `mcp_log_server`
+
+  The Docker Compose `test` service overrides this to
+  `mcp_log_server_test`, so DB tests do not flush or mutate the local app
+  database.
+
+- `DATABASE_USER`
+  PostgreSQL application user.
+  Default: `mcp_log_server`
+
+- `DATABASE_PASSWORD`
+  PostgreSQL application password.
+  Default: `mcp-log-server-local-password`
+
+The Compose files run PostgreSQL through the official `postgres:18` image.
+Database files are stored in the named `postgres-data` Docker volume, so data
+persists when containers are recreated.
+
+The local Compose file uses a plain local build without an explicit app image
+tag. Production uses the same landingpage-style contract as
+`${ENVIRONMENT}-mcp-log-server:${TAG}`; set `ENVIRONMENT=prod` and a release
+`TAG` for production runs.
+
+Host port bindings are loopback-only to keep the MCP stack safe beside
+`landingpage` on the same VPS:
+
+- MCP HTTP: `127.0.0.1:${MCP_PORT_HOST:-8001}->8001`
+- MCP local Postgres: `127.0.0.1:${DATABASE_PORT_HOST:-5437}->5432`
+
+Inside Docker, services should use service DNS names such as `db`, not static
+container IP addresses. Cross-repository integration should later use an
+explicit shared network or reverse-proxy route rather than hard-coded Docker
+IPs.
+
+Start the local database and app together:
+
+```bash
+doppler run -- docker compose up --build
+```
+
+Start only the local database:
+
+```bash
+doppler run -- docker compose up -d db
+```
+
+Reset local database data:
+
+```bash
+doppler run -- docker compose down --volumes
+doppler run -- docker compose up -d db
+```
+
+### ORM Configuration
+
+Tortoise ORM configuration lives in [src/database/config.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/database/config.py:1).
+Database models live in [src/database/models.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/database/models.py:1).
+Database service wrappers live under [src/database/services/](/Users/lukaszremkowicz/Projects/mcp-log-server/src/database/services).
+Database startup/shutdown helpers live in [src/database/lifecycle.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/database/lifecycle.py:1).
+
+The migration tool is Aerich, configured in [pyproject.toml](/Users/lukaszremkowicz/Projects/mcp-log-server/pyproject.toml:62)
+with:
+
+```toml
+[project.scripts]
+commands = "scripts.main:main"
+makemigrations = "database.cli:makemigrations"
+migrate = "database.cli:migrate"
+shell = "scripts.shell:main"
+
+[tool.aerich]
+tortoise_orm = "database.config.TORTOISE_ORM"
+location = "./migrations"
+src_folder = "./src"
+```
+
+Generate new migration files only after the related model structure has been
+reviewed and approved.
+
+After model approval, create and apply migrations from the repository root.
+For local host commands, the aliases default to the Compose-published database
+port `127.0.0.1:${DATABASE_PORT_HOST:-5437}` when `DATABASE_HOST` and
+`DATABASE_PORT` are not already set:
+
+```bash
+docker compose up -d db
+uv run makemigrations --name initial
+uv run migrate
+```
+
+`uv run makemigrations` delegates to `aerich migrate` and writes migration
+files. On the first run against a fresh database, it falls back to
+`aerich init-db` when Aerich reports that initialization is required.
+`uv run migrate` delegates to `aerich upgrade` and applies already generated
+migration files.
+
+For later model changes:
+
+```bash
+uv run makemigrations --name <short_name>
+uv run migrate
+```
+
+Review generated files under `migrations/` before committing them. Production
+deployments should apply already-committed migrations with `aerich upgrade`;
+they should not generate new migration files on the server.
+
+Open a Django `shell_plus`-style developer shell:
+
+```bash
+uv run shell
+```
+
+The shell initializes Tortoise ORM and preloads the database models, database
+services, application services, `settings`, and `TORTOISE_ORM`. Use top-level
+`await` for ORM calls, for example:
+
+```python
+await AgentCall.objects.all().limit(5)
+await CollectLogs.objects.filter(project_name="landingpage")
+```
+
+Upload configured project manifests into the database:
+
+```bash
+uv run commands upload-project-manifest --path src/manifests/projects landingpage
+uv run commands upload-project-manifest --path src/manifests/projects --all
+```
+
+Upload is create-only. Existing project manifests are reported and left
+untouched. To update an existing manifest, run:
+
+```bash
+uv run commands update-project-manifest --path src/manifests/projects --project landingpage
+```
+
+Run this command on the host where the Docker Compose app service is running.
+It uses Docker SDK to execute a hidden internal command inside the app
+container, so database access uses Docker service DNS (`db:5432`) instead of
+host `127.0.0.1:5432`. The command reads manifests from `--path`; when omitted,
+`--path` defaults to the current working directory (`.`).
+
+Runtime MCP tools read project manifests from the database. Manifest JSON files
+are source input for the upload/update commands, not runtime app settings and
+not the lookup path for `collect_logs`, `list_projects`, or manifest-backed
+analysis.
+
+### Database Backup, Restore, Build, And Deploy
+
+Operational scripts live in [infra/scripts/](/Users/lukaszremkowicz/Projects/mcp-log-server/infra/scripts/README.md:1).
+They support only `local` and `prod`; this repository does not have a staging
+environment.
+
+Create a local database backup:
+
+```bash
+ENVIRONMENT=local infra/scripts/db_backup/backup_db.sh
+```
+
+Restore a local database backup:
+
+```bash
+ENVIRONMENT=local infra/scripts/db_backup/restore_db.sh .agent/backups/db/local/<backup>.dump
+```
+
+Build the tagged production image:
+
+```bash
+TAG=v1.2.3 infra/scripts/release/build.sh
+```
+
+The build script refuses to build with uncommitted changes unless
+`EMERGENCY=true` is set.
+
+Deploy the already-built production image:
+
+```bash
+TAG=v1.2.3 infra/scripts/release/deploy.sh
+```
+
+For build and deploy, `TAG` may be provided through the environment. If it is
+omitted, the scripts use the exact Git tag checked out in the working tree.
+
+The deploy script verifies the local image, creates a DB backup by default,
+applies committed migrations with `uv run migrate`, starts the app service, and
+checks that the app accepts TCP connections inside the container. It asks for
+confirmation before mutating the target stack unless `AUTO_APPROVE=true`, and
+starts the app with `--force-recreate` so the selected image is rerun. Use
+`SKIP_BACKUP=true` or `SKIP_MIGRATE=true` only for an intentional
+operator-controlled run.
 
 ### Auth Configuration
 
@@ -242,29 +469,13 @@ LOG_LEVEL=DEBUG LOG_FORMAT=text doppler run -- docker compose up --build
 
 These variables control how the local FastMCP HTTP server starts.
 
-- `MANIFEST_PATH`
-  Path to the directory containing project source manifests.
-  Default: `src/manifests/projects`
+Manifests and logs are intentionally separate:
 
-  This is resolved relative to the repository root, so:
-
-  - `MANIFEST_PATH=src/manifests/projects`
-    resolves to `/app/src/manifests/projects` in Docker
-  - an absolute path is also allowed
-
-  The manifest is the project inventory/config that later collector-style
-  tools will use to know what sources exist for the selected project.
-
-- `FILE_SOURCE_ROOT`
-  Root path used only for relative `file` source targets inside manifests.
-  Default: sibling `logs/` directory next to `MANIFEST_PATH`.
-
-  Manifests and logs are intentionally separate:
-
-  - `MANIFEST_PATH` points at project manifest JSON files
-  - `FILE_SOURCE_ROOT` points at the filesystem root for file-backed log
-    sources
-  - absolute file source targets bypass `FILE_SOURCE_ROOT`
+- manifest JSON paths are passed to `uv run commands upload-project-manifest`
+  and `uv run commands update-project-manifest` with `--path`
+- runtime MCP tools read persisted manifest rows from the database
+- file-backed manifest source targets must be absolute paths, so each source
+  declares exactly where its log file lives
 
 - `MCP_PATH`
   HTTP path where the FastMCP endpoint is exposed.
@@ -307,6 +518,9 @@ The `app` service mounts `./src` into the container and reloads automatically
 when files under `src/` change, including copied workflow assets such as
 prompts, skills, schemas, and examples.
 
+The local Compose stack also starts a `db` service and stores its data in the
+named `postgres-data` volume.
+
 For a production-like container run without bind mounts or file watching, use
 the dedicated production compose file:
 
@@ -316,7 +530,7 @@ doppler run -- docker compose -f docker-compose.prod.yml up --build -d
 
 Production compose differences:
 
-- runs only the `app` service
+- runs the `app` and `db` services
 - does not mount the local source tree
 - does not use `watchfiles`
 - starts the server with `uv run python -m main`
@@ -557,9 +771,11 @@ Important:
 - if `source_keys` is omitted, the server behaves as if `source_keys=["all"]`
 - `collect_logs` now always persists per-project artifacts for the requested workspace
 - `workspace="workflow"` does not require `session_id`
-- `workspace="session"` requires an agent-chosen `session_id`
-- the agent must choose `session_id` itself when starting a new investigation
-- reuse the same `session_id` when the investigation later needs logs from another project
+- `workspace="session"` creates a server-generated `session_id` when the request omits it
+- the fixed `workflow-agent` token may only use `workspace="workflow"`; use a
+  non-workflow agent token for interactive `workspace="session"` investigations
+- use the returned `session_id` for later calls in the same investigation
+- reuse the returned `session_id` when the investigation later needs logs from another project
 - session follow-up tools use `session_id` plus `project_name`
 - `collect_logs` does not search log content; persisted snapshot search happens through `grep_log_snapshot`
 
@@ -571,7 +787,7 @@ What it returns:
 - `requested_project_names`
 - `projects`
   - each project entry contains its own persisted artifact details such as
-    `snapshot_dir`, `metadata_file`,
+    `snapshot_dir`,
     `resolved_source_keys`, `warnings`, `retry_tips`, `collected_at`, and
     `sources`
 - `sources` includes per-source deterministic metadata and status
@@ -601,7 +817,7 @@ curl -sS \
   http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
 ```
 
-Example session collection call with an agent-owned session id:
+Example session collection call that starts a new MCP-owned session:
 
 ```bash
 curl -sS \
@@ -617,16 +833,15 @@ curl -sS \
       "arguments":{
         "project_names":["landingpage"],
         "source_keys":["backend"],
-        "workspace":"session",
-        "session_id":"redis-timeout-debug-2026-04-27"
+        "workspace":"session"
       }
     }
   }' \
   http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
 ```
 
-Example session collection call that adds another project into the same
-investigation session:
+The response includes `session_id`. Reuse that returned value to add another
+project into the same investigation session:
 
 ```bash
 curl -sS \
@@ -643,7 +858,7 @@ curl -sS \
         "project_names":["landingpage","traefik"],
         "source_keys":["backend"],
         "workspace":"session",
-        "session_id":"redis-timeout-debug-2026-04-27"
+        "session_id":"<returned_session_id>"
       }
     }
   }' \
@@ -675,6 +890,8 @@ Cleaned-view guidance:
 
 Artifact lookup guidance:
 
+- workflow artifact lookup is database-only; `workflow_inventory.json` is not
+  written or read
 - use `project_name` alone when you want the newest workflow artifact
 - use `archive_name` plus `project_name` when you want to keep reading or
   grepping the same archived workflow artifact later
@@ -932,12 +1149,12 @@ The manifest path whitelist still applies. For example:
 
 Current write layout:
 
-- `DOCKER_LOGS_DIR` is the logs root
+- `LOGS_DIR` is the logs root
 - workflow collections write under:
-  - `<DOCKER_LOGS_DIR>/workflow/<project_key>/latest/`
-  - `<DOCKER_LOGS_DIR>/workflow/<project_key>/archive/<archive_name>/`
+  - `<LOGS_DIR>/workflow/<project_key>/latest/`
+  - `<LOGS_DIR>/workflow/<project_key>/archive/<archive_name>/`
 - session collections write under:
-  - `<DOCKER_LOGS_DIR>/sessions/<session_id>/<project_key>/`
+  - `<LOGS_DIR>/sessions/<session_id>/<project_key>/`
 
 ### 3. List Concrete Resources
 
@@ -1070,8 +1287,15 @@ Current intended agent sequence:
 To run the test suite in Docker:
 
 ```bash
-doppler run -- docker compose run --rm tests
+uv run test
 ```
+
+`uv run test` delegates to `docker compose run --rm test`, which starts the
+Compose database dependency, creates `mcp_log_server_test` when needed, runs
+`uv run migrate` against that test database, then runs the full `uv run pytest`
+suite inside the app test container. Tests that require the real database are
+marked with `@pytest.mark.db`; the test container provides normal
+`DATABASE_*` settings, and the tests use `Settings.db` to resolve the DSN.
 
 If you prefer host execution while iterating, use `uv`:
 
@@ -1092,9 +1316,9 @@ Run all configured checks manually:
 
 ```bash
 uv run pre-commit run --all-files
-uv run pytest
+uv run test
 docker compose config
-docker compose build app tests
+docker compose build app test
 ```
 
 GitHub Actions is wired through the shared
@@ -1105,9 +1329,13 @@ lives there.
 Current checks and release flows:
 
 - pre-commit
-- shared `python-tests-uv` workflow running `uv run pytest`
+- shared Python test workflow running `uv run pytest`
   - covers unit-style FastMCP client tests
   - covers JWT-protected HTTP integration tests
+  - covers DB-marked service integration tests against the shared workflow
+    Postgres service
+  - applies committed migrations from the pytest DB setup before DB-marked
+    tests run
   - covers docker-backed collection logic with mocks inside pytest
 - curl-driven MCP HTTP end-to-end checks via `infra/scripts/run_http_e2e.sh`
 - Docker Compose validation

@@ -7,9 +7,10 @@ from functools import cache
 from fastmcp import FastMCP
 from fastmcp.server.auth import AuthProvider
 
+from database.lifecycle import database_lifespan
 from middleware.audit import AccessAuditMiddleware
 
-mcp: FastMCP = FastMCP(name="mcp-log-server")
+mcp: FastMCP = FastMCP(name="mcp-log-server", lifespan=database_lifespan)
 
 
 @cache

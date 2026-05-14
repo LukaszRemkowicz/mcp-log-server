@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.conftest import override_settings
+from conf import settings
 from tools.errors import (
     build_container_inspection_error_details,
     classify_container_inspection_error,
@@ -137,9 +137,7 @@ def test_classify_container_inspection_error_returns_expected_mapping(
             "wrong-project",
             "backend",
             "/app/missing.py",
-            {
-                "manifests_dir": "/tmp/manifests",
-            },
+            {"requested_project_name": "wrong-project"},
         ),
         (
             "unknown_container_source_key",
@@ -214,19 +212,12 @@ def test_build_container_inspection_error_details_returns_expected_details(
     path: str,
     expected_details: dict[str, str | None] | None,
 ) -> None:
-    manifest_path = tmp_path / "landingpage.json"
-    manifest_path.write_text("{}", encoding="utf-8")
+    details = build_container_inspection_error_details(
+        error_code=error_code,
+        requested_project_name=requested_project_name,
+        source_key=source_key,
+        path=path,
+        settings=settings,
+    )
 
-    with override_settings(MANIFEST_PATH=manifest_path.parent) as effective_settings:
-        details = build_container_inspection_error_details(
-            error_code=error_code,
-            requested_project_name=requested_project_name,
-            source_key=source_key,
-            path=path,
-            settings=effective_settings,
-        )
-
-    if error_code == "manifest_project_mismatch":
-        assert details == {"manifests_dir": str(effective_settings.MANIFEST_PATH)}
-    else:
-        assert details == expected_details
+    assert details == expected_details

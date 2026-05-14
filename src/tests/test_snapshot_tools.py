@@ -1,23 +1,30 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
+import pytest
 from fastmcp.server.auth import AccessToken
 
-from tests.conftest import copy_mutable_log_fixture_root, override_settings
+from database.fields import FileReference
+from database.models import CollectLogsSource
+from tests.conftest import (
+    _seed_project_manifests,
+    copy_manifest_and_log_fixtures,
+    override_settings,
+)
 from tools.collection import collect_logs
 from tools.snapshots import grep_log_snapshot, list_log_snapshot_files, read_log_snapshot_file
 
 
-def test_list_read_and_grep_log_snapshot_use_persisted_workflow_snapshot(
+@pytest.mark.anyio
+async def test_list_read_and_grep_log_snapshot_use_persisted_workflow_snapshot(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        collect_result = collect_logs(
+        collect_result = await collect_logs(
             project_names=["landingpage"],
             source_keys=["snapshot_text"],
             workspace="workflow",
@@ -28,7 +35,7 @@ def test_list_read_and_grep_log_snapshot_use_persisted_workflow_snapshot(
         collect_payload = collect_result.structured_content
         assert collect_payload is not None
 
-        list_result = list_log_snapshot_files(
+        list_result = await list_log_snapshot_files(
             project_name="landingpage",
             access_token=valid_access_token,
         )
@@ -38,7 +45,7 @@ def test_list_read_and_grep_log_snapshot_use_persisted_workflow_snapshot(
         assert list_payload["action"] == "list_log_snapshot_files"
         assert list_payload["files"][0]["source_key"] == "snapshot_text"
 
-        read_result = read_log_snapshot_file(
+        read_result = await read_log_snapshot_file(
             source_key="snapshot_text",
             project_name="landingpage",
             max_bytes=5,
@@ -54,7 +61,7 @@ def test_list_read_and_grep_log_snapshot_use_persisted_workflow_snapshot(
         assert read_payload["truncated"] is True
         assert read_payload["file"]["source_key"] == "snapshot_text"
 
-        grep_result = grep_log_snapshot(
+        grep_result = await grep_log_snapshot(
             grep="match",
             project_name="landingpage",
             source_keys=["snapshot_text"],
@@ -76,7 +83,8 @@ def test_list_read_and_grep_log_snapshot_use_persisted_workflow_snapshot(
     assert grep_payload["matches"][1]["line_truncated"] is False
 
 
-def test_read_log_snapshot_file_rejects_tampered_absolute_metadata_path(
+@pytest.mark.anyio
+async def test_read_log_snapshot_file_rejects_tampered_absolute_metadata_path(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
@@ -85,7 +93,7 @@ def test_read_log_snapshot_file_rejects_tampered_absolute_metadata_path(
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        collect_result = collect_logs(
+        collect_result = await collect_logs(
             project_names=["landingpage"],
             source_keys=["snapshot_text"],
             workspace="workflow",
@@ -93,14 +101,11 @@ def test_read_log_snapshot_file_rejects_tampered_absolute_metadata_path(
         )
         collect_payload = collect_result.structured_content
         assert collect_payload is not None
-        collected_project = collect_payload["projects"][0]
+        source_row = await CollectLogsSource.objects.get(source_key="snapshot_text")
+        source_row.file = FileReference(outside_file.as_posix())
+        await source_row.save(update_fields=["file"])
 
-        metadata_file = Path(collected_project["metadata_file"])
-        metadata = json.loads(metadata_file.read_text(encoding="utf-8"))
-        metadata["latest"]["files"][0]["output_file"] = str(outside_file)
-        metadata_file.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
-
-        read_result = read_log_snapshot_file(
+        read_result = await read_log_snapshot_file(
             source_key="snapshot_text",
             project_name="landingpage",
             access_token=valid_access_token,
@@ -111,21 +116,22 @@ def test_read_log_snapshot_file_rejects_tampered_absolute_metadata_path(
     assert read_payload["error_code"] == "invalid_snapshot_file_metadata"
 
 
-def test_grep_log_snapshot_rejects_unknown_source_keys(
+@pytest.mark.anyio
+async def test_grep_log_snapshot_rejects_unknown_source_keys(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        collect_logs(
+        await collect_logs(
             project_names=["landingpage"],
             source_keys=["snapshot_text"],
             workspace="workflow",
             access_token=valid_access_token,
         )
 
-        grep_result = grep_log_snapshot(
+        grep_result = await grep_log_snapshot(
             grep="match",
             project_name="landingpage",
             source_keys=["typo"],
@@ -137,21 +143,22 @@ def test_grep_log_snapshot_rejects_unknown_source_keys(
     assert grep_payload["error_code"] == "snapshot_source_key_not_found"
 
 
-def test_grep_log_snapshot_supports_paged_match_windows(
+@pytest.mark.anyio
+async def test_grep_log_snapshot_supports_paged_match_windows(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        collect_logs(
+        await collect_logs(
             project_names=["landingpage"],
             source_keys=["snapshot_text"],
             workspace="workflow",
             access_token=valid_access_token,
         )
 
-        grep_result = grep_log_snapshot(
+        grep_result = await grep_log_snapshot(
             grep="match",
             project_name="landingpage",
             source_keys=["snapshot_text"],
@@ -171,29 +178,27 @@ def test_grep_log_snapshot_supports_paged_match_windows(
     assert grep_payload["matches"][1]["line"] == "match three"
 
 
-def test_grep_log_snapshot_truncates_large_match_lines(
+@pytest.mark.anyio
+async def test_grep_log_snapshot_truncates_large_match_lines(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
     long_line = "match " + ("x" * 40)
-    fixture_root = copy_mutable_log_fixture_root(tmp_path)
+    fixture_root = copy_manifest_and_log_fixtures(tmp_path)
     log_file = fixture_root / "logs" / "landingpage" / "app_file.log"
     log_file.write_text(f"{long_line}\n", encoding="utf-8")
     logs_dir = tmp_path / "collected-logs"
+    await _seed_project_manifests(fixture_root / "manifests")
 
-    with override_settings(
-        MANIFEST_PATH=fixture_root / "manifests",
-        FILE_SOURCE_ROOT=fixture_root / "logs",
-        LOGS_DIR=logs_dir,
-    ):
-        collect_logs(
+    with override_settings(LOGS_DIR=logs_dir):
+        await collect_logs(
             project_names=["landingpage"],
             source_keys=["app_file"],
             workspace="workflow",
             access_token=valid_access_token,
         )
 
-        grep_result = grep_log_snapshot(
+        grep_result = await grep_log_snapshot(
             grep="match",
             project_name="landingpage",
             source_keys=["app_file"],
@@ -208,29 +213,27 @@ def test_grep_log_snapshot_truncates_large_match_lines(
     assert grep_payload["matches"][0]["line"] == long_line
 
 
-def test_grep_log_snapshot_truncates_very_large_match_lines(
+@pytest.mark.anyio
+async def test_grep_log_snapshot_truncates_very_large_match_lines(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
     long_line = "match " + ("x" * 4000)
-    fixture_root = copy_mutable_log_fixture_root(tmp_path)
+    fixture_root = copy_manifest_and_log_fixtures(tmp_path)
     log_file = fixture_root / "logs" / "landingpage" / "app_file.log"
     log_file.write_text(f"{long_line}\n", encoding="utf-8")
     logs_dir = tmp_path / "collected-logs"
+    await _seed_project_manifests(fixture_root / "manifests")
 
-    with override_settings(
-        MANIFEST_PATH=fixture_root / "manifests",
-        FILE_SOURCE_ROOT=fixture_root / "logs",
-        LOGS_DIR=logs_dir,
-    ):
-        collect_logs(
+    with override_settings(LOGS_DIR=logs_dir):
+        await collect_logs(
             project_names=["landingpage"],
             source_keys=["app_file"],
             workspace="workflow",
             access_token=valid_access_token,
         )
 
-        grep_result = grep_log_snapshot(
+        grep_result = await grep_log_snapshot(
             grep="match",
             project_name="landingpage",
             source_keys=["app_file"],
@@ -248,21 +251,22 @@ def test_grep_log_snapshot_truncates_very_large_match_lines(
     )
 
 
-def test_read_log_snapshot_file_supports_line_chunks(
+@pytest.mark.anyio
+async def test_read_log_snapshot_file_supports_line_chunks(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        collect_logs(
+        await collect_logs(
             project_names=["landingpage"],
             source_keys=["snapshot_text"],
             workspace="workflow",
             access_token=valid_access_token,
         )
 
-        read_result = read_log_snapshot_file(
+        read_result = await read_log_snapshot_file(
             source_key="snapshot_text",
             project_name="landingpage",
             start_line=2,
@@ -277,14 +281,15 @@ def test_read_log_snapshot_file_supports_line_chunks(
     assert read_payload["content"] == "match one\nmatch two\n"
 
 
-def test_grep_log_snapshot_matches_across_multiple_persisted_files(
+@pytest.mark.anyio
+async def test_grep_log_snapshot_matches_across_multiple_persisted_files(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        collect_result = collect_logs(
+        collect_result = await collect_logs(
             project_names=["landingpage"],
             source_keys=["app_first", "app_second"],
             workspace="workflow",
@@ -296,7 +301,7 @@ def test_grep_log_snapshot_matches_across_multiple_persisted_files(
         assert collect_payload is not None
         collected_project = collect_payload["projects"][0]
 
-        grep_result = grep_log_snapshot(
+        grep_result = await grep_log_snapshot(
             grep="shared match",
             project_name="landingpage",
             source_keys=["app_first", "app_second"],

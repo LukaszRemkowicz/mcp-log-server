@@ -3,13 +3,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from conf import settings
 from manifests.loader import load_manifest
 from manifests.models import Manifest, SourceDefinition
+from tests.conftest import TEST_MANIFESTS_DIR
 
 
 def test_manifest_loads_into_valid_source_manifest() -> None:
-    manifest = load_manifest(settings.MANIFEST_PATH / "landingpage.json")
+    manifest = load_manifest(TEST_MANIFESTS_DIR / "landingpage.json")
 
     assert isinstance(manifest, Manifest)
     assert manifest.project_key == "landingpage"
@@ -24,7 +24,7 @@ def test_manifest_loads_into_valid_source_manifest() -> None:
         "traefik",
     ]
     assert manifest.sources[0].source_type == "file"
-    assert manifest.sources[0].target == "landingpage/backend.log"
+    assert manifest.sources[0].target == "/app/src/tests/fixtures/logs/landingpage/backend.log"
     assert manifest.sources[0].stream is None
 
 
@@ -64,7 +64,7 @@ def test_manifest_loads_absolute_file_source_target(tmp_path: Path) -> None:
 def test_source_definition_rejects_dot_segments_in_file_source_target() -> None:
     """Verify source targets cannot use path traversal or current-dir segments."""
 
-    with pytest.raises(ValidationError, match="clean absolute or relative path"):
+    with pytest.raises(ValidationError, match="clean absolute path"):
         SourceDefinition(
             source_key="app_file",
             source_type="file",
@@ -91,7 +91,7 @@ def test_source_definition_rejects_dot_segments_in_file_source_target() -> None:
 def test_source_definition_rejects_ambiguous_file_source_target(target: str) -> None:
     """Verify file source targets reject expandable or ambiguous path forms."""
 
-    with pytest.raises(ValidationError, match="clean absolute or relative path"):
+    with pytest.raises(ValidationError, match="clean absolute path"):
         SourceDefinition(
             source_key="app_file",
             source_type="file",
@@ -146,5 +146,5 @@ def test_manifest_rejects_dot_segments_in_file_source_target(tmp_path: Path) -> 
         encoding="utf-8",
     )
 
-    with pytest.raises(ValidationError, match="clean absolute or relative path"):
+    with pytest.raises(ValidationError, match="clean absolute path"):
         load_manifest(manifest_path)

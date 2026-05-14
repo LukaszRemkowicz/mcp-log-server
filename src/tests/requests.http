@@ -95,8 +95,8 @@ Authorization: {{workflowAuth}}
   }
 }
 
-### Collect logs into an agent-owned session workspace
-### Choose session_id yourself. Reuse the same value for later collect/list/read/grep calls in that session.
+### Collect logs into an MCP-owned session workspace
+### Omit session_id to start a new session. Reuse the returned value for later collect/list/read/grep calls in that session.
 POST {{baseUrl}}/mcp
 Content-Type: application/json
 Accept: application/json
@@ -111,8 +111,7 @@ Authorization: {{workflowAuth}}
     "arguments": {
       "project_names": ["landingpage"],
       "source_keys": ["backend"],
-      "workspace": "session",
-      "session_id": "redis-timeout-debug-2026-04-27",
+      "workspace": "session"
     }
   }
 }

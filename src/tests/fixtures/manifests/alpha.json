@@ -5,7 +5,7 @@
     {
       "source_key": "app_file",
       "source_type": "file",
-      "target": "alpha/app_file.log",
+      "target": "/app/src/tests/fixtures/logs/alpha/app_file.log",
       "description": "Alpha application logs.",
       "required": true,
       "parser_type": "json_lines",

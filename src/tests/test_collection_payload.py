@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from docker.errors import DockerException
@@ -12,27 +12,45 @@ from pytest_mock import MockerFixture
 from requests import exceptions as requests_exceptions
 
 from conf import settings
+from core.types import LogWorkspace
+from exception import InvalidTimeFilterError
+from manifests.loader import load_project_manifest
 from manifests.models import SourceDefinition
-from services.log_collection import BuildLogsError, CollectSourceError, LogCollectionService
+from services.log_collection import (
+    BuildLogsError,
+    CollectSourceError,
+    DockerTimeFilters,
+    LogCollectionService,
+)
 from services.project_authorization import ProjectAuthorizationError, ProjectAuthorizationService
 from services.project_manifest import ProjectManifestService
-from tests.conftest import FakeDockerClient, copy_mutable_log_fixture_root, override_settings
+from tests.conftest import (
+    TEST_FILE_SOURCE_ROOT,
+    TEST_MANIFESTS_DIR,
+    FakeDockerClient,
+    copy_manifest_and_log_fixtures,
+    override_settings,
+    runtime_test_manifest,
+)
 from tools.models import SnapshotWorkspace
 
+SESSION_ID = "8f197fe7-11d8-4b03-9edb-130ece9dc241"
+SECOND_SESSION_ID = "19e70607-0ff0-4853-bd64-2400db93ee31"
 
-def build_collect_logs(
+
+async def build_collect_logs(
     token: AccessToken,
     *,
     requested_project_name: str | None,
     requested_source_keys: list[str] | None,
     workspace: SnapshotWorkspace,
+    manifests_dir: Path = TEST_MANIFESTS_DIR,
     session_id: str | None = None,
     since: str | None,
     until: str | None,
 ):
     """Assemble a collection payload directly through the real services for tests."""
 
-    manifest_service = ProjectManifestService()
     project_authorization_service = ProjectAuthorizationService()
     collection_service = LogCollectionService()
     project_name = project_authorization_service.authorize_caller_for_project(
@@ -41,19 +59,20 @@ def build_collect_logs(
     )
     if isinstance(project_name, ProjectAuthorizationError):
         raise ValueError(project_name.message)
-    manifest_result = manifest_service.get(project_name)
-    if manifest_result is None:
+    try:
+        manifest = runtime_test_manifest(load_project_manifest(manifests_dir, project_name))
+    except FileNotFoundError:
         raise ValueError(
             f"Unknown project {project_name!r}. No manifest file was found for that project."
-        )
+        ) from None
     normalized_since = since or settings.DEFAULT_LOG_WINDOW
-    manifest_sources = manifest_service.get_manifest_source_keys(
-        manifest_result.manifest,
+    manifest_sources = ProjectManifestService.get_manifest_source_keys(
+        manifest,
         requested_source_keys,
     )
 
-    return collection_service.build_logs(
-        manifest=manifest_result.manifest,
+    return await collection_service.build_logs(
+        manifest=manifest,
         sources=manifest_sources.sources,
         missing_source_keys=manifest_sources.missing_source_keys,
         source_keys=manifest_sources.source_keys,
@@ -73,28 +92,33 @@ def collect_source(
 ):
     """Collect one source directly through the deterministic adapter service for tests."""
 
-    return LogCollectionService().collect_source(
+    service = LogCollectionService()
+    return service.collect_source(
         definition,
         output_file=output_file,
-        since=since,
-        until=until,
+        time_filters=service.validate_and_normalize_time_filters(
+            sources=[definition],
+            since=since,
+            until=until,
+        ),
     )
 
 
-def test_build_collect_logs_collects_requested_file_source(
+@pytest.mark.anyio
+async def test_build_collect_logs_collects_requested_file_source(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
-    source_file = settings.file_source_root / "landingpage" / "app_file.log"
+    source_file = TEST_FILE_SOURCE_ROOT / "landingpage" / "app_file.log"
     expected_content = source_file.read_text(encoding="utf-8")
 
     with override_settings(LOGS_DIR=logs_dir):
-        payload = build_collect_logs(
+        payload = await build_collect_logs(
             valid_access_token,
             requested_project_name="landingpage",
             requested_source_keys=["app_file", "unknown_source"],
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             since=None,
             until=None,
         )
@@ -116,30 +140,30 @@ def test_build_collect_logs_collects_requested_file_source(
     archive_dir = logs_dir / "workflow" / "landingpage" / "archive"
 
     assert payload.snapshot_dir == str(latest_dir)
-    assert payload.persisted is True
-    assert Path(payload.metadata_file).exists()
-    assert Path(payload.metadata_file).name == "workflow_inventory.json"
+    assert "persisted" not in payload.model_dump()
     assert payload.sources[0].status == "collected"
     output_file = payload.sources[0].output_file
     assert output_file is not None
     assert (logs_dir / output_file).read_text(encoding="utf-8") == expected_content
     assert not (latest_dir / "collected_at.txt").exists()
     assert not (latest_dir / "snapshot_metadata.json").exists()
+    assert not (logs_dir / "workflow" / "landingpage" / "workflow_inventory.json").exists()
     assert archive_dir.exists()
 
 
-def test_build_collect_logs_uses_runtime_default_log_window(
+@pytest.mark.anyio
+async def test_build_collect_logs_uses_runtime_default_log_window(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir, DEFAULT_LOG_WINDOW="12h"):
-        payload = build_collect_logs(
+        payload = await build_collect_logs(
             valid_access_token,
             requested_project_name="landingpage",
             requested_source_keys=["app_file"],
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             since=None,
             until=None,
         )
@@ -147,36 +171,35 @@ def test_build_collect_logs_uses_runtime_default_log_window(
     assert payload["requested_since"] == "12h"
 
 
-def test_build_collect_logs_archives_previous_latest_snapshot(
+@pytest.mark.anyio
+async def test_build_collect_logs_archives_previous_latest_snapshot(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
-    fixture_root = copy_mutable_log_fixture_root(tmp_path)
+    fixture_root = copy_manifest_and_log_fixtures(tmp_path)
     log_file = fixture_root / "logs" / "landingpage" / "app_file.log"
     log_file.write_text("first\nsecond\nthird\n", encoding="utf-8")
     logs_dir = tmp_path / "collected-logs"
 
-    with override_settings(
-        MANIFEST_PATH=fixture_root / "manifests",
-        FILE_SOURCE_ROOT=fixture_root / "logs",
-        LOGS_DIR=logs_dir,
-    ):
-        build_collect_logs(
+    with override_settings(LOGS_DIR=logs_dir):
+        await build_collect_logs(
             valid_access_token,
             requested_project_name="landingpage",
             requested_source_keys=["app_file"],
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
+            manifests_dir=fixture_root / "manifests",
             since=None,
             until=None,
         )
 
         log_file.write_text("fourth\nfifth\nsixth\n", encoding="utf-8")
 
-        build_collect_logs(
+        await build_collect_logs(
             valid_access_token,
             requested_project_name="landingpage",
             requested_source_keys=["app_file"],
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
+            manifests_dir=fixture_root / "manifests",
             since=None,
             until=None,
         )
@@ -192,60 +215,56 @@ def test_build_collect_logs_archives_previous_latest_snapshot(
     )
 
 
-def test_workflow_inventory_points_to_latest_and_archived_files(
+@pytest.mark.anyio
+async def test_workflow_archive_files_are_tracked_without_inventory_json(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
-    fixture_root = copy_mutable_log_fixture_root(tmp_path)
+    fixture_root = copy_manifest_and_log_fixtures(tmp_path)
     log_file = fixture_root / "logs" / "landingpage" / "app_file.log"
     log_file.write_text("first\nsecond\nthird\n", encoding="utf-8")
     logs_dir = tmp_path / "collected-logs"
 
-    with override_settings(
-        MANIFEST_PATH=fixture_root / "manifests",
-        FILE_SOURCE_ROOT=fixture_root / "logs",
-        LOGS_DIR=logs_dir,
-    ):
-        build_collect_logs(
+    with override_settings(LOGS_DIR=logs_dir):
+        await build_collect_logs(
             valid_access_token,
             requested_project_name="landingpage",
             requested_source_keys=["app_file"],
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
+            manifests_dir=fixture_root / "manifests",
             since=None,
             until=None,
         )
         log_file.write_text("fourth\nfifth\nsixth\n", encoding="utf-8")
-        build_collect_logs(
+        await build_collect_logs(
             valid_access_token,
             requested_project_name="landingpage",
             requested_source_keys=["app_file"],
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
+            manifests_dir=fixture_root / "manifests",
             since=None,
             until=None,
         )
 
     archive_root = logs_dir / "workflow" / "landingpage" / "archive"
     archived_snapshot = next(path for path in archive_root.iterdir() if path.is_dir())
-    workflow_inventory = json.loads(
-        (logs_dir / "workflow" / "landingpage" / "workflow_inventory.json").read_text(
-            encoding="utf-8"
-        )
-    )
 
-    assert workflow_inventory["latest"]["files"][0]["output_file"] == (
-        "workflow/landingpage/latest/app_file.log"
-    )
-    assert workflow_inventory["archives"][0]["files"][0]["output_file"] == (
-        f"workflow/landingpage/archive/{archived_snapshot.name}/app_file.log"
+    assert not (logs_dir / "workflow" / "landingpage" / "workflow_inventory.json").exists()
+    assert (logs_dir / "workflow" / "landingpage" / "latest" / "app_file.log").read_text(
+        encoding="utf-8"
+    ) == "fourth\nfifth\nsixth\n"
+    assert (archived_snapshot / "app_file.log").read_text(encoding="utf-8") == (
+        "first\nsecond\nthird\n"
     )
 
 
-def test_build_collect_logs_replaces_incomplete_workflow_latest_snapshot(
+@pytest.mark.anyio
+async def test_build_collect_logs_replaces_incomplete_workflow_latest_snapshot(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
-    source_file = settings.file_source_root / "landingpage" / "app_file.log"
+    source_file = TEST_FILE_SOURCE_ROOT / "landingpage" / "app_file.log"
     expected_content = source_file.read_text(encoding="utf-8")
 
     latest_dir = logs_dir / "workflow" / "landingpage" / "latest"
@@ -253,11 +272,11 @@ def test_build_collect_logs_replaces_incomplete_workflow_latest_snapshot(
     (latest_dir / "stale.log").write_text("stale\n", encoding="utf-8")
 
     with override_settings(LOGS_DIR=logs_dir):
-        payload = build_collect_logs(
+        payload = await build_collect_logs(
             valid_access_token,
             requested_project_name="landingpage",
             requested_source_keys=["app_file"],
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             since=None,
             until=None,
         )
@@ -267,7 +286,8 @@ def test_build_collect_logs_replaces_incomplete_workflow_latest_snapshot(
     assert (latest_dir / "app_file.log").read_text(encoding="utf-8") == expected_content
 
 
-def test_session_snapshot_cleanup_uses_configured_retention_window(
+@pytest.mark.anyio
+async def test_session_snapshot_cleanup_uses_configured_retention_window(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
@@ -293,23 +313,23 @@ def test_session_snapshot_cleanup_uses_configured_retention_window(
     recent_file.write_text("recent\n", encoding="utf-8")
 
     with override_settings(LOGS_DIR=logs_dir, LOG_SNAPSHOT_RETENTION="10m"):
-        payload = build_collect_logs(
+        await build_collect_logs(
             valid_access_token,
             requested_project_name="landingpage",
             requested_source_keys=["app_file"],
-            workspace="session",
-            session_id="cleanup-session",
+            workspace=LogWorkspace.SESSION,
+            session_id=SESSION_ID,
             since=None,
             until=None,
         )
 
     assert not old_session_root.exists()
     assert recent_session_root.exists()
-    assert payload.session_id == "cleanup-session"
-    assert (sessions_root / "cleanup-session" / "landingpage").exists()
+    assert (sessions_root / SESSION_ID / "landingpage").exists()
 
 
-def test_build_collect_logs_rejects_project_mismatch(
+@pytest.mark.anyio
+async def test_build_collect_logs_rejects_project_mismatch(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
@@ -320,28 +340,29 @@ def test_build_collect_logs_rejects_project_mismatch(
             ValueError,
             match="Requested project is not allowed by the authenticated access token.",
         ):
-            build_collect_logs(
+            await build_collect_logs(
                 valid_access_token,
                 requested_project_name="other-project",
                 requested_source_keys=None,
-                workspace="workflow",
+                workspace=LogWorkspace.WORKFLOW,
                 since=None,
                 until=None,
             )
 
 
-def test_build_collect_logs_collects_full_window_without_tail_controls(
+@pytest.mark.anyio
+async def test_build_collect_logs_collects_full_window_without_tail_controls(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        payload = build_collect_logs(
+        payload = await build_collect_logs(
             valid_access_token,
             requested_project_name="landingpage",
             requested_source_keys=["app_file"],
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             since=None,
             until=None,
         )
@@ -350,26 +371,24 @@ def test_build_collect_logs_collects_full_window_without_tail_controls(
     assert payload["retry_tips"] == []
 
 
-def test_build_collect_logs_persists_large_file_without_inline_logs(
+@pytest.mark.anyio
+async def test_build_collect_logs_persists_large_file_without_inline_logs(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
-    fixture_root = copy_mutable_log_fixture_root(tmp_path)
+    fixture_root = copy_manifest_and_log_fixtures(tmp_path)
     log_file = fixture_root / "logs" / "landingpage" / "app_file.log"
     full_content = "x" * 200_001
     log_file.write_text(full_content, encoding="utf-8")
     logs_dir = tmp_path / "collected-logs"
 
-    with override_settings(
-        MANIFEST_PATH=fixture_root / "manifests",
-        FILE_SOURCE_ROOT=fixture_root / "logs",
-        LOGS_DIR=logs_dir,
-    ):
-        payload = build_collect_logs(
+    with override_settings(LOGS_DIR=logs_dir):
+        payload = await build_collect_logs(
             valid_access_token,
             requested_project_name="landingpage",
             requested_source_keys=["app_file"],
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
+            manifests_dir=fixture_root / "manifests",
             since=None,
             until=None,
         )
@@ -468,6 +487,11 @@ def test_collect_source_uses_docker_sdk_filters(
     assert captured_until.tzinfo == UTC
 
 
+def test_normalize_docker_time_filter_raises_specific_error() -> None:
+    with pytest.raises(InvalidTimeFilterError, match="Invalid docker time filter"):
+        LogCollectionService.normalize_docker_time_filter("thirty-minutes")
+
+
 def test_collect_source_streams_persisted_docker_logs_without_following(
     fake_docker_client: FakeDockerClient,
     mocker: MockerFixture,
@@ -495,8 +519,10 @@ def test_collect_source_streams_persisted_docker_logs_without_following(
     result = LogCollectionService().collect_source(
         definition,
         output_file=output_file,
-        since="30m",
-        until="10m",
+        time_filters=DockerTimeFilters(
+            since=LogCollectionService.normalize_docker_time_filter("30m"),
+            until=LogCollectionService.normalize_docker_time_filter("10m"),
+        ),
     )
 
     assert result["output_file"] == str(output_file)
@@ -514,7 +540,7 @@ def test_collect_source_streams_persisted_file_logs_to_output_file(tmp_path) -> 
     definition = SourceDefinition(
         source_key="app_file",
         source_type="file",
-        target="source.log",
+        target=str(source_file),
         description="Application file logs.",
         required=True,
         parser_type="plain_text",
@@ -525,13 +551,11 @@ def test_collect_source_streams_persisted_file_logs_to_output_file(tmp_path) -> 
     )
 
     output_file = tmp_path / "persisted.log"
-    with override_settings(MANIFEST_PATH=tmp_path / "manifests", FILE_SOURCE_ROOT=tmp_path):
-        result = LogCollectionService().collect_source(
-            definition,
-            output_file=output_file,
-            since=None,
-            until=None,
-        )
+    result = LogCollectionService().collect_source(
+        definition,
+        output_file=output_file,
+        time_filters=DockerTimeFilters(since=None, until=None),
+    )
 
     assert result["output_file"] == str(output_file)
     assert result["line_count"] == 2
@@ -539,20 +563,11 @@ def test_collect_source_streams_persisted_file_logs_to_output_file(tmp_path) -> 
     assert output_file.read_text(encoding="utf-8") == "log line 1\nlog line 2\n"
 
 
-def test_collect_source_rejects_relative_symlink_escape(tmp_path: Path) -> None:
-    outside_dir = tmp_path / "outside"
-    outside_dir.mkdir()
-    outside_file = outside_dir / "source.log"
-    outside_file.write_text("escaped\n", encoding="utf-8")
-    manifest_dir = tmp_path / "manifests"
-    manifest_dir.mkdir()
-    file_source_root = tmp_path / "logs"
-    file_source_root.mkdir()
-    (file_source_root / "escape").symlink_to(outside_dir, target_is_directory=True)
-    definition = SourceDefinition(
+def test_collect_source_rejects_relative_file_target(tmp_path: Path) -> None:
+    definition = SourceDefinition.model_construct(
         source_key="app_file",
         source_type="file",
-        target="escape/source.log",
+        target="source.log",
         description="Application file logs.",
         required=True,
         parser_type="plain_text",
@@ -562,16 +577,14 @@ def test_collect_source_rejects_relative_symlink_escape(tmp_path: Path) -> None:
         stream=None,
     )
 
-    with override_settings(MANIFEST_PATH=manifest_dir, FILE_SOURCE_ROOT=file_source_root):
-        result = LogCollectionService().collect_source(
-            definition,
-            output_file=tmp_path / "persisted.log",
-            since=None,
-            until=None,
-        )
+    result = LogCollectionService().collect_source(
+        definition,
+        output_file=tmp_path / "persisted.log",
+        time_filters=DockerTimeFilters(since=None, until=None),
+    )
 
     assert isinstance(result, CollectSourceError)
-    assert "resolves outside" in result.error
+    assert result.error == "File source target must be an absolute path."
 
 
 def test_collect_source_reports_docker_api_unavailable(
@@ -610,18 +623,19 @@ def test_collect_source_reports_docker_api_unavailable(
     ]
 
 
-def test_build_collect_logs_requires_agent_chosen_session_id(
+@pytest.mark.anyio
+async def test_build_collect_logs_requires_agent_chosen_session_id(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        payload = build_collect_logs(
+        payload = await build_collect_logs(
             valid_access_token,
             requested_project_name="landingpage",
             requested_source_keys=["app_file"],
-            workspace="session",
+            workspace=LogWorkspace.SESSION,
             session_id=None,
             since=None,
             until=None,
@@ -629,32 +643,60 @@ def test_build_collect_logs_requires_agent_chosen_session_id(
 
     assert isinstance(payload, BuildLogsError)
     assert payload.error_code == "missing_session_id"
-    assert "session_id is required" in payload.message
+    assert payload.message == (
+        "Session workspace is unavailable because MCP did not provide the required session_id."
+    )
+    assert payload.retry_tips == [
+        "This is a system error, not something the agent can fix with tool arguments.",
+        ("Ask administrator to check MCP middleware, session propagation, and system logs."),
+    ]
 
 
-def test_build_collect_logs_reuses_agent_chosen_session_id(
+def test_collect_logs_service_generates_session_id_for_session_workspace() -> None:
+    session_id = LogCollectionService.resolve_session_id(None)
+
+    assert session_id is not None
+    assert isinstance(session_id, UUID)
+
+
+def test_collect_logs_service_reuses_session_id_for_session_workspace() -> None:
+    existing_session_id = UUID("8f197fe7-11d8-4b03-9edb-130ece9dc241")
+
+    assert (
+        LogCollectionService.resolve_session_id(f" {existing_session_id} ") == existing_session_id
+    )
+
+
+def test_collect_logs_service_generates_session_id_without_existing_value() -> None:
+    session_id = LogCollectionService.resolve_session_id(None)
+
+    assert isinstance(session_id, UUID)
+
+
+@pytest.mark.anyio
+async def test_build_collect_logs_reuses_agent_chosen_session_id(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        payload = build_collect_logs(
+        payload = await build_collect_logs(
             valid_access_token,
             requested_project_name="landingpage",
             requested_source_keys=["app_file"],
-            workspace="session",
-            session_id="agent-session-1",
+            workspace=LogWorkspace.SESSION,
+            session_id=SECOND_SESSION_ID,
             since=None,
             until=None,
         )
 
     assert payload.workspace == "session"
-    assert payload.session_id == "agent-session-1"
-    snapshot_dir = logs_dir / "sessions" / "agent-session-1" / "landingpage"
+    snapshot_dir = logs_dir / "sessions" / SECOND_SESSION_ID / "landingpage"
     assert payload.snapshot_dir == str(snapshot_dir)
     assert snapshot_dir.exists()
-    source_file = settings.file_source_root / "landingpage" / "app_file.log"
+    assert not (snapshot_dir / "snapshot_metadata.json").exists()
+    source_file = TEST_FILE_SOURCE_ROOT / "landingpage" / "app_file.log"
     assert (snapshot_dir / "app_file.log").read_text(encoding="utf-8") == source_file.read_text(
         encoding="utf-8"
     )

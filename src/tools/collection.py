@@ -11,6 +11,7 @@ from fastmcp.tools.base import ToolResult
 
 from auth.scopes import LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE
 from conf import settings
+from core.types import LogWorkspace
 from decorators import project_authorized_tool, workflow_discoverable_tool
 from logging_config import get_logger
 from services.log_collection import BuildLogsError, LogCollectionService
@@ -20,8 +21,8 @@ from services.project_authorization import (
     ProjectAuthorizationService,
 )
 from services.project_manifest import ProjectManifestError, ProjectManifestService
-from tools.agent_hints import COLLECT_LOGS_TOOL_DESCRIPTION
-from tools.errors import build_collect_logs_error_result
+from tools.agent_hints import COLLECT_LOGS_NEXT_STEP_TIPS, COLLECT_LOGS_TOOL_DESCRIPTION
+from tools.errors import build_collect_logs_error_details, build_collect_logs_error_result
 from tools.models import CollectLogsPayload, ProjectManifestSummary, SnapshotWorkspace
 from utils.mcp_errors import build_agent_tool_error_result
 
@@ -33,10 +34,10 @@ project_authorization_service = ProjectAuthorizationService()
 
 
 @workflow_discoverable_tool(PROJECTS_READ_SCOPE)
-def list_projects(
+async def list_projects(
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> list[ProjectManifestSummary]:
-    """List projects currently available through bundled manifest files.
+    """List projects currently available through persisted manifest rows.
 
     This is the lightweight discovery entrypoint for project-scoped log tools.
     Callers use it to learn:
@@ -48,13 +49,6 @@ def list_projects(
     manifest contents.
     """
 
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "list_projects",
-        },
-    )
     assert access_token is not None
     project_access_scope: ProjectAccessScope | ProjectAuthorizationError = (
         project_authorization_service.get_required_project_access_scope_or_error(access_token)
@@ -78,7 +72,7 @@ def list_projects(
         )
 
     if project_access_scope.all_projects:
-        all_project_summaries: list[ProjectManifestSummary] = manifest_service.all().root
+        all_project_summaries: list[ProjectManifestSummary] = (await manifest_service.all()).root
         logger.info(
             "tool result",
             extra={
@@ -91,7 +85,7 @@ def list_projects(
 
     project_summaries: list[ProjectManifestSummary] = []
     for project_name in sorted(project_access_scope.allowed_projects):
-        manifest_context = manifest_service.get(project_name)
+        manifest_context = await manifest_service.get(project_name)
         if manifest_context is not None:
             project_summaries.append(
                 ProjectManifestSummary(
@@ -118,10 +112,10 @@ def list_projects(
     mcp_description=COLLECT_LOGS_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
-def collect_logs(
+async def collect_logs(
     project_names: list[str] | None = None,
     source_keys: list[str] | None = None,
-    workspace: SnapshotWorkspace = "workflow",
+    workspace: SnapshotWorkspace = LogWorkspace.WORKFLOW,
     session_id: str | None = None,
     since: str | None = settings.DEFAULT_LOG_WINDOW,
     until: str | None = None,
@@ -138,14 +132,17 @@ def collect_logs(
     - use `project_names`, even for one project
     - `workspace="workflow"` writes shared workflow artifacts
     - `workspace="session"` writes investigation artifacts under one shared
-      `session_id`
-    - reuse the same `session_id` when the same investigation later needs logs
-      from another project
+      `session_id`; MCP creates one when the request omits it
+    - the fixed workflow agent is not allowed to use `workspace="session"`
+    - reuse the returned `session_id` when the same investigation later needs
+      logs from another project or a narrower time window
 
     Important runtime note:
 
     - for real MCP/API calls, middleware authorizes and normalizes
       `project_names` before this tool runs
+    - for real MCP/API `collect_logs` calls, middleware also injects a generated
+      `session_id` when `workspace="session"` and the request omitted it
     - when `project_names` is omitted or empty in the HTTP path, middleware may
       inject all projects accessible to the current JWT
     - direct Python calls to `collect_logs(...)` do not go through middleware,
@@ -158,24 +155,11 @@ def collect_logs(
         source_keys=source_keys,
         since=since,
     )
-    logger.info(
-        "tool call",
-        extra={
-            "event": "tool_call",
-            "tool_name": "collect_logs",
-            "project_names": project_names,
-            "source_keys": defaults.source_keys,
-            "workspace": workspace,
-            "session_id": session_id,
-            "since": defaults.since,
-            "until": until,
-        },
-    )
     assert project_names, "collect_logs expects middleware-normalized non-empty project_names"
 
     project_payloads = []
     for project_name in project_names:
-        manifest_result = manifest_service.get_or_error(project_name)
+        manifest_result = await manifest_service.get_or_error(project_name)
         if isinstance(manifest_result, ProjectManifestError):
             logger.info(
                 "tool error",
@@ -203,7 +187,7 @@ def collect_logs(
             manifest_result.manifest,
             defaults.source_keys,
         )
-        project_payload = collection_service.build_logs(
+        project_payload = await collection_service.build_logs(
             manifest=manifest_result.manifest,
             sources=manifest_sources.sources,
             missing_source_keys=manifest_sources.missing_source_keys,
@@ -228,27 +212,27 @@ def collect_logs(
                     "until": until,
                 },
             )
-            return build_collect_logs_error_result(
-                project_payload.message,
-                settings=settings,
-                access_token=access_token,
-                project_names=project_names,
-                workspace=workspace,
-                session_id=session_id,
+            return build_agent_tool_error_result(
+                error_code=project_payload.error_code,
+                message=project_payload.message,
+                retry_tips=project_payload.retry_tips,
+                details=build_collect_logs_error_details(
+                    project_payload.error_code,
+                    settings=settings,
+                    access_token=access_token,
+                    project_names=project_names,
+                    workspace=workspace,
+                    session_id=session_id,
+                ),
             )
-        project_payload.requested_source_keys = defaults.source_keys
         project_payloads.append(project_payload)
 
     payload = CollectLogsPayload(
         action="collect_logs",
         workspace=workspace,
-        session_id=session_id if workspace == "session" else None,
+        session_id=session_id if workspace == LogWorkspace.SESSION else None,
         requested_project_names=project_names,
-        next_step_tips=[
-            "Use session_id and project_name for later session follow-up tools.",
-            "Use project_name alone for the newest workflow artifact.",
-            "Use archive_name plus project_name only when you need an archived workflow artifact.",
-        ],
+        next_step_tips=COLLECT_LOGS_NEXT_STEP_TIPS,
         projects=project_payloads,
     )
 

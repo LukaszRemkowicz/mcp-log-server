@@ -1,0 +1,42 @@
+{
+  "project_key": "dockerpage",
+  "project_summary": "Docker-backed project for collection error tests.",
+  "sources": [
+    {
+      "source_key": "backend",
+      "source_type": "docker",
+      "target": "app-container",
+      "description": "Backend test container.",
+      "required": true,
+      "parser_type": "plain_text",
+      "normalization_profile": "app_logs",
+      "retention_class": "short",
+      "default_noise_profile": "app_noise",
+      "inspect_path_prefixes": ["/app/"]
+    },
+    {
+      "source_key": "frontend",
+      "source_type": "docker",
+      "target": "frontend-container",
+      "description": "Frontend test container.",
+      "required": true,
+      "parser_type": "plain_text",
+      "normalization_profile": "app_logs",
+      "retention_class": "short",
+      "default_noise_profile": "app_noise",
+      "inspect_path_prefixes": ["/app/"]
+    },
+    {
+      "source_key": "nginx",
+      "source_type": "docker",
+      "target": "nginx-container",
+      "description": "Nginx test container.",
+      "required": true,
+      "parser_type": "plain_text",
+      "normalization_profile": "app_logs",
+      "retention_class": "short",
+      "default_noise_profile": "app_noise",
+      "inspect_path_prefixes": ["/etc/nginx/"]
+    }
+  ]
+}
