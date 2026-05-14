@@ -28,6 +28,7 @@ from conf import set_settings, settings
 from database.schemas import ProjectManifestCreate, ProjectManifestUpdate
 from database.services.project_manifests import ProjectManifestService as ProjectManifestDBService
 from manifests.loader import list_project_manifests
+from manifests.models import Manifest
 from settings import Settings
 
 JwtOverrides = dict[str, Any] | None
@@ -137,6 +138,35 @@ def override_settings(
         set_settings(previous_settings)
 
 
+def _test_manifest_sources_payload(manifest: Manifest) -> list[dict[str, Any]]:
+    """Return test manifest sources with fixture file targets valid in this runtime."""
+
+    sources: list[dict[str, Any]] = []
+    for source in manifest.sources:
+        source_payload = source.model_dump(mode="json")
+        if source_payload["source_type"] == "file":
+            source_target = Path(source_payload["target"])
+            try:
+                relative_source_path = source_target.relative_to("/app/src/tests/fixtures/logs")
+            except ValueError:
+                relative_source_path = None
+            if relative_source_path is not None:
+                source_payload["target"] = (TEST_FILE_SOURCE_ROOT / relative_source_path).as_posix()
+        sources.append(source_payload)
+    return sources
+
+
+def runtime_test_manifest(manifest: Manifest) -> Manifest:
+    """Return a test manifest whose file sources exist in this runtime."""
+
+    return Manifest.model_validate(
+        {
+            **manifest.model_dump(mode="json"),
+            "sources": _test_manifest_sources_payload(manifest),
+        }
+    )
+
+
 def _run_aerich_for_tests(*args: str) -> subprocess.CompletedProcess[str]:
     """Run one Aerich command against the current test settings database."""
 
@@ -233,7 +263,7 @@ async def _seed_project_manifests_sql() -> None:
                 manifest.project_summary,
                 json.dumps(manifest.static_asset_paths),
                 json.dumps(manifest.static_asset_extensions),
-                json.dumps([source.model_dump(mode="json") for source in manifest.sources]),
+                json.dumps(_test_manifest_sources_payload(manifest)),
             )
     finally:
         await connection.close()
@@ -355,7 +385,7 @@ async def _seed_project_manifests(
 
     service = ProjectManifestDBService()
     for manifest in list_project_manifests(manifests_dir):
-        sources = [source.model_dump(mode="json") for source in manifest.sources]
+        sources = _test_manifest_sources_payload(manifest)
         if await service.exists(manifest.project_key):
             existing = await service.get(manifest.project_key)
             await service.update(

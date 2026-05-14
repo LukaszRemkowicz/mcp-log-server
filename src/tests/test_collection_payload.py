@@ -30,6 +30,7 @@ from tests.conftest import (
     FakeDockerClient,
     copy_manifest_and_log_fixtures,
     override_settings,
+    runtime_test_manifest,
 )
 from tools.models import SnapshotWorkspace
 
@@ -59,7 +60,7 @@ async def build_collect_logs(
     if isinstance(project_name, ProjectAuthorizationError):
         raise ValueError(project_name.message)
     try:
-        manifest = load_project_manifest(manifests_dir, project_name)
+        manifest = runtime_test_manifest(load_project_manifest(manifests_dir, project_name))
     except FileNotFoundError:
         raise ValueError(
             f"Unknown project {project_name!r}. No manifest file was found for that project."

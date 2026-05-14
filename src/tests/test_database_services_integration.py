@@ -25,7 +25,7 @@ from manifests.models import Manifest, SourceDefinition
 from services.log_collection import BuildLogsError, LogCollectionService
 from services.project_manifest import ProjectManifestService as RuntimeProjectManifestService
 from storage import storage
-from tests.conftest import TEST_MANIFESTS_DIR, override_settings
+from tests.conftest import TEST_MANIFESTS_DIR, override_settings, runtime_test_manifest
 
 
 @pytest.mark.anyio
@@ -204,7 +204,7 @@ async def test_log_collection_service_persists_collect_logs_metadata(
     """Verify collect_logs orchestration writes artifact and source rows."""
 
     logs_dir = tmp_path / "collected-logs"
-    manifest = load_project_manifest(TEST_MANIFESTS_DIR, "landingpage")
+    manifest = runtime_test_manifest(load_project_manifest(TEST_MANIFESTS_DIR, "landingpage"))
     manifest_sources = RuntimeProjectManifestService.get_manifest_source_keys(
         manifest,
         ["app_file", "missing"],
@@ -254,7 +254,7 @@ async def test_log_collection_service_persists_session_source_file_path(
 
     logs_dir = tmp_path / "collected-logs"
     session_id = uuid4()
-    manifest = load_project_manifest(TEST_MANIFESTS_DIR, "landingpage")
+    manifest = runtime_test_manifest(load_project_manifest(TEST_MANIFESTS_DIR, "landingpage"))
     manifest_sources = RuntimeProjectManifestService.get_manifest_source_keys(
         manifest,
         ["app_file"],
