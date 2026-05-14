@@ -33,16 +33,13 @@ The key design boundary remains:
 
 Current persistence note:
 
-- workflow and session artifacts are still filesystem-backed
-- `snapshot_metadata.json` is a temporary filesystem metadata sidecar for the
-  current non-database session implementation
-- database model definitions and committed migrations now exist for audit rows,
-  manifest rows, and future collect-log snapshot metadata rows, but MCP services
-  do not write collect-log snapshot rows yet
-- database service modules now wrap ORM access for agent call and project
-  manifest metadata, but MCP tools do not call them yet
-- when database-backed services are implemented, filesystem metadata must remain
-  in place until a later explicit migration removes it as a source of truth
+- collected log bytes are still stored on disk under `LOGS_DIR`
+- workflow artifact lookup is database-only through `CollectLogs` and
+  `CollectLogsSource`; `workflow_inventory.json` is no longer written or read
+- session artifacts also write `CollectLogs` and `CollectLogsSource` rows for
+  follow-up tools
+- `snapshot_metadata.json` may still be written beside session files for local
+  artifact readability, but MCP runtime lookup does not depend on it
 
 ## Implementation Status
 
@@ -61,13 +58,15 @@ The repository currently includes:
 - database service modules for agent call and project manifest metadata
 - database models for agent calls, project manifests, collect-log artifacts, and
   collect-log artifact sources
+- `collect_logs` persistence through `CollectLogs` and `CollectLogsSource`
+- DB-backed snapshot read, grep, and analysis tools
 - HTTP integration tests and in-memory FastMCP client tests
 
 Current next-step note:
 
-- an initial `collect_logs` tool now exists, so the next collection work should
-  move toward snapshot inventory and retention rather than reworking the basic
-  collection contract again.
+- workflow/session artifact lookup is now DB-backed; upcoming collection work
+  should build on the database contracts instead of adding filesystem metadata
+  indexes.
 
 ## Current Phase Status
 
@@ -95,9 +94,9 @@ Current Phase 4 boundary:
 - collect-log snapshot metadata models and migrations exist
 - real DB tests now prove `CollectLogs`, `CollectLogsSource`, enum fields, JSON
   fields, relations, and custom `FileField` behavior against Postgres
-- `collect_logs`, snapshot read/grep, and analysis tools still use filesystem
-  metadata as their runtime source of truth
-- no MCP tool currently writes `CollectLogs` or `CollectLogsSource` rows
+- `collect_logs`, snapshot read/grep, and analysis tools use DB artifact rows
+  as their runtime lookup source
+- workflow lookup is DB-only; no workflow inventory JSON is written or read
 
 ## Current MCP Surface
 
@@ -175,17 +174,19 @@ Important collection response note:
 - explicit agent-side session closing is not implemented yet
 - `tail_lines` is optional; if omitted, agents get a warning that full source
   output may be slow or large
-- `DOCKER_LOGS_DIR` is treated as a logs root, not a flat one-run output path
+- `LOGS_DIR` is treated as a logs root, not a flat one-run output path
 - manifests and file-backed source logs are separate:
-  - `MANIFEST_PATH` points to project manifest JSON files used by manifest
-    upload/update commands
+  - manifest JSON paths are passed directly to manifest upload/update commands
+    with `--path`
   - runtime MCP tools read manifests from persisted database rows
-  - relative manifest `file` source targets resolve under `FILE_SOURCE_ROOT`
-  - if `FILE_SOURCE_ROOT` is omitted, it defaults to the sibling `logs/`
-    directory next to `MANIFEST_PATH`
+  - manifest `file` source targets must be absolute paths, so each source
+    declares its own filesystem location
 - the current on-disk layout is:
-  - `<DOCKER_LOGS_DIR>/<project_key>/latest/...`
-  - `<DOCKER_LOGS_DIR>/<project_key>/archive/<timestamp>/...`
+  - `<LOGS_DIR>/workflow/<project_key>/latest/...`
+  - `<LOGS_DIR>/workflow/<project_key>/archive/<timestamp>/...`
+  - `<LOGS_DIR>/sessions/<session_id>/<project_key>/...`
+- these paths are file storage locations only; artifact identity and lookup
+  metadata live in the database
 
 ## Current Auth Model
 

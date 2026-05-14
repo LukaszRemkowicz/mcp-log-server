@@ -35,5 +35,6 @@ def test_developer_shell_bootstraps_project_namespace(
         "from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest"
         in output
     )
+    assert "from core.types import LogWorkspace" in output
     assert "from database.types import AgentCallEvent, CollectLogsSourceStatus" in output
     assert "from database.services.project_manifests import ProjectManifestService" in output

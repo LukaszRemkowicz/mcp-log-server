@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastmcp.server.auth import AccessToken
 
+from core.types import LogWorkspace
 from services.log_filtering import CreateFilteredViewError, LogFilteringService
 from tests.conftest import override_settings
 from tools import collection as collection_tools
@@ -23,7 +24,7 @@ def test_log_filtering_service_returns_error_for_unknown_source_key() -> None:
     service = LogFilteringService()
     metadata = LogSnapshotMetadata(
         project_name="landingpage",
-        workspace="workflow",
+        workspace=LogWorkspace.WORKFLOW,
         session_id=None,
         files=[
             LogSnapshotFilePayload(
@@ -43,6 +44,7 @@ def test_log_filtering_service_returns_error_for_unknown_source_key() -> None:
 
     result = service.create_filtered_view(
         metadata,
+        sources=[],
         source_contexts={},
         source_keys=["missing_source"],
         max_lines=10,
@@ -68,7 +70,7 @@ async def test_group_errors_groups_repeated_failures(
         await collection_tools.collect_logs(
             project_names=["landingpage"],
             source_keys=["backend", "nginx"],
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             access_token=valid_access_token,
         )
         result = await group_errors(
@@ -125,7 +127,7 @@ async def test_group_errors_summarizes_docker_prefixed_json(
         await collection_tools.collect_logs(
             project_names=["landingpage"],
             source_keys=["traefik"],
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             access_token=valid_access_token,
         )
         result = await group_errors(
@@ -208,7 +210,7 @@ async def test_build_incident_bundle_returns_grouped_summary(
         await collection_tools.collect_logs(
             project_names=["landingpage"],
             source_keys=["app_file"],
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             access_token=valid_access_token,
         )
         result = await build_incident_bundle(
@@ -280,7 +282,7 @@ async def test_create_filtered_view_removes_manifest_profile_noise(
         await collection_tools.collect_logs(
             project_names=["landingpage"],
             source_keys=["backend", "nginx"],
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             access_token=valid_access_token,
         )
         result = await create_filtered_view(
@@ -330,7 +332,7 @@ async def test_create_filtered_view_reports_unknown_source_key(
         await collection_tools.collect_logs(
             project_names=["landingpage"],
             source_keys=["app_file"],
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             access_token=valid_access_token,
         )
         result = await create_filtered_view(

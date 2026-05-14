@@ -254,10 +254,7 @@ def test_collect_logs_api_returns_requested_and_resolved_file_sources(
 ) -> None:
     """Verify collect_logs persists requested file sources and reports unknown keys."""
 
-    with override_settings(
-        FILE_SOURCE_ROOT=file_backed_project_context.file_source_root,
-        LOGS_DIR=file_backed_project_context.logs_dir,
-    ):
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
         response = jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(
@@ -287,7 +284,7 @@ def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     assert project_payload["snapshot_dir"] == str(
         file_backed_project_context.logs_dir / "workflow" / "landingpage" / "latest"
     )
-    assert project_payload["persisted"] is True
+    assert "persisted" not in project_payload
     assert project_payload["sources"][0]["source_key"] == "app_file"
     assert project_payload["sources"][0]["status"] == "collected"
     assert project_payload["sources"][0]["output_file"] == (
@@ -312,10 +309,7 @@ def test_analysis_tools_api_read_collected_snapshot(
 ) -> None:
     """Verify grouped analysis tools read the latest collected workflow snapshot."""
 
-    with override_settings(
-        FILE_SOURCE_ROOT=file_backed_project_context.file_source_root,
-        LOGS_DIR=file_backed_project_context.logs_dir,
-    ):
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
         collect_response = jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
@@ -367,10 +361,7 @@ def test_create_filtered_view_api_reads_collected_snapshot(
 ) -> None:
     """Verify create_filtered_view reads a collected snapshot through JSON-RPC."""
 
-    with override_settings(
-        FILE_SOURCE_ROOT=file_backed_project_context.file_source_root,
-        LOGS_DIR=file_backed_project_context.logs_dir,
-    ):
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
         collect_response = jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
@@ -528,10 +519,7 @@ def test_snapshot_tools_api_accept_valid_bearer_token(
 ) -> None:
     """Verify snapshot tools accept valid tokens after a workflow snapshot exists."""
 
-    with override_settings(
-        FILE_SOURCE_ROOT=file_backed_project_context.file_source_root,
-        LOGS_DIR=file_backed_project_context.logs_dir,
-    ):
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
         collect_response = jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
@@ -784,10 +772,7 @@ def test_collect_logs_api_uses_all_accessible_projects_when_project_names_not_pr
         wraps=collection_tools.collection_service.build_logs,
     )
 
-    with override_settings(
-        FILE_SOURCE_ROOT=multi_project_collect_context.file_source_root,
-        LOGS_DIR=multi_project_collect_context.logs_dir,
-    ):
+    with override_settings(LOGS_DIR=multi_project_collect_context.logs_dir):
         response = jsonrpc.post(
             token=token,
             data=request_data,
@@ -841,10 +826,7 @@ def test_collect_logs_api_generates_session_id_before_tool_call(
         "middleware.audit.agent_call_audit_service.complete_tool_call",
         new=mocker.AsyncMock(),
     )
-    with override_settings(
-        FILE_SOURCE_ROOT=file_backed_project_context.file_source_root,
-        LOGS_DIR=file_backed_project_context.logs_dir,
-    ):
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
         response = jsonrpc.post(
             token=token,
             data=build_collect_logs_request(

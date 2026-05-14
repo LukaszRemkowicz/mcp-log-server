@@ -7,19 +7,14 @@ import os
 from typing import Any
 
 from conf import settings
+from core.types import LogWorkspace
 from database.config import TORTOISE_ORM
 from database.lifecycle import close_database, initialize_database
 from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest
 from database.schemas import AgentCallCreate, AgentCallFilter, AgentCallUpdate
 from database.services.agent_calls import AgentCallService
 from database.services.project_manifests import ProjectManifestService
-from database.types import (
-    AgentCallEvent,
-    CollectLogsSourceStatus,
-    LogSourceType,
-    LogStream,
-    LogWorkspace,
-)
+from database.types import AgentCallEvent, CollectLogsSourceStatus, LogSourceType, LogStream
 from services.agent_calls import AgentCallAuditService, AgentCallCreateError
 from services.log_collection import LogCollectionService
 
@@ -30,9 +25,10 @@ SHELL_IMPORT_LINES = [
     "from database.config import TORTOISE_ORM",
     "from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest",
     "from database.schemas import AgentCallCreate, AgentCallFilter, AgentCallUpdate",
+    "from core.types import LogWorkspace",
     (
         "from database.types import AgentCallEvent, CollectLogsSourceStatus, "
-        "LogSourceType, LogStream, LogWorkspace"
+        "LogSourceType, LogStream"
     ),
     "from database.services.agent_calls import AgentCallService",
     "from database.services.project_manifests import ProjectManifestService",

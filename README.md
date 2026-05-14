@@ -92,7 +92,6 @@ Production-required secrets/config:
 - `JWT_SHARED_SECRET`
 - `JWT_ISSUER`
 - `JWT_AUDIENCE`
-- `MANIFEST_PATH`
 - `MCP_PATH`
 - `MCP_STATELESS_HTTP`
 - `MCP_JSON_RESPONSE`
@@ -109,7 +108,6 @@ Production-recommended runtime config:
 - `LOG_FORMAT`
 - `JWT_ALGORITHM`
 - `JWT_EXPIRATION_SECONDS`
-- `FILE_SOURCE_ROOT` when manifests use relative `file` source targets
 - `MCP_PORT_HOST` when the host-side MCP port should differ from `8001`
 
 Local development defaults:
@@ -268,26 +266,27 @@ await CollectLogs.objects.filter(project_name="landingpage")
 Upload configured project manifests into the database:
 
 ```bash
-uv run commands upload-project-manifest landingpage
-uv run commands upload-project-manifest --all
+uv run commands upload-project-manifest --path src/manifests/projects landingpage
+uv run commands upload-project-manifest --path src/manifests/projects --all
 ```
 
 Upload is create-only. Existing project manifests are reported and left
 untouched. To update an existing manifest, run:
 
 ```bash
-uv run commands update-project-manifest --project landingpage
+uv run commands update-project-manifest --path src/manifests/projects --project landingpage
 ```
 
 Run this command on the host where the Docker Compose app service is running.
 It uses Docker SDK to execute a hidden internal command inside the app
 container, so database access uses Docker service DNS (`db:5432`) instead of
-host `127.0.0.1:5432`. The internal command reads manifests from
-`settings.MANIFEST_PATH` inside the app container.
+host `127.0.0.1:5432`. The command reads manifests from `--path`; when omitted,
+`--path` defaults to the current working directory (`.`).
 
-Runtime MCP tools read project manifests from the database. The JSON files under
-`MANIFEST_PATH` are source input for the upload/update commands, not the runtime
-lookup path for `collect_logs`, `list_projects`, or manifest-backed analysis.
+Runtime MCP tools read project manifests from the database. Manifest JSON files
+are source input for the upload/update commands, not runtime app settings and
+not the lookup path for `collect_logs`, `list_projects`, or manifest-backed
+analysis.
 
 ### Database Backup, Restore, Build, And Deploy
 
@@ -470,30 +469,13 @@ LOG_LEVEL=DEBUG LOG_FORMAT=text doppler run -- docker compose up --build
 
 These variables control how the local FastMCP HTTP server starts.
 
-- `MANIFEST_PATH`
-  Path to the directory containing project source manifest JSON files.
-  Default: `src/manifests/projects`
+Manifests and logs are intentionally separate:
 
-  This is resolved relative to the repository root, so:
-
-  - `MANIFEST_PATH=src/manifests/projects`
-    resolves to `/app/src/manifests/projects` in Docker
-  - an absolute path is also allowed
-
-  The manifest JSON is the project inventory/config source. Upload it into the
-  database before using runtime MCP tools; the tools resolve project manifests
-  from persisted database rows.
-
-- `FILE_SOURCE_ROOT`
-  Root path used only for relative `file` source targets inside manifests.
-  Default: sibling `logs/` directory next to `MANIFEST_PATH`.
-
-  Manifests and logs are intentionally separate:
-
-  - `MANIFEST_PATH` points at project manifest JSON files
-  - `FILE_SOURCE_ROOT` points at the filesystem root for file-backed log
-    sources
-  - absolute file source targets bypass `FILE_SOURCE_ROOT`
+- manifest JSON paths are passed to `uv run commands upload-project-manifest`
+  and `uv run commands update-project-manifest` with `--path`
+- runtime MCP tools read persisted manifest rows from the database
+- file-backed manifest source targets must be absolute paths, so each source
+  declares exactly where its log file lives
 
 - `MCP_PATH`
   HTTP path where the FastMCP endpoint is exposed.
@@ -805,7 +787,7 @@ What it returns:
 - `requested_project_names`
 - `projects`
   - each project entry contains its own persisted artifact details such as
-    `snapshot_dir`, `metadata_file`,
+    `snapshot_dir`,
     `resolved_source_keys`, `warnings`, `retry_tips`, `collected_at`, and
     `sources`
 - `sources` includes per-source deterministic metadata and status
@@ -908,6 +890,8 @@ Cleaned-view guidance:
 
 Artifact lookup guidance:
 
+- workflow artifact lookup is database-only; `workflow_inventory.json` is not
+  written or read
 - use `project_name` alone when you want the newest workflow artifact
 - use `archive_name` plus `project_name` when you want to keep reading or
   grepping the same archived workflow artifact later
@@ -1165,12 +1149,12 @@ The manifest path whitelist still applies. For example:
 
 Current write layout:
 
-- `DOCKER_LOGS_DIR` is the logs root
+- `LOGS_DIR` is the logs root
 - workflow collections write under:
-  - `<DOCKER_LOGS_DIR>/workflow/<project_key>/latest/`
-  - `<DOCKER_LOGS_DIR>/workflow/<project_key>/archive/<archive_name>/`
+  - `<LOGS_DIR>/workflow/<project_key>/latest/`
+  - `<LOGS_DIR>/workflow/<project_key>/archive/<archive_name>/`
 - session collections write under:
-  - `<DOCKER_LOGS_DIR>/sessions/<session_id>/<project_key>/`
+  - `<LOGS_DIR>/sessions/<session_id>/<project_key>/`
 
 ### 3. List Concrete Resources
 

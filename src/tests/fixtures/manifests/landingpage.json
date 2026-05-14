@@ -23,7 +23,7 @@
     {
       "source_key": "backend",
       "source_type": "file",
-      "target": "landingpage/backend.log",
+      "target": "/app/src/tests/fixtures/logs/landingpage/backend.log",
       "description": "Backend logs.",
       "required": true,
       "parser_type": "json_lines",
@@ -35,7 +35,7 @@
     {
       "source_key": "nginx",
       "source_type": "file",
-      "target": "landingpage/nginx.log",
+      "target": "/app/src/tests/fixtures/logs/landingpage/nginx.log",
       "description": "Nginx logs.",
       "required": true,
       "parser_type": "json_lines",
@@ -47,7 +47,7 @@
     {
       "source_key": "app_file",
       "source_type": "file",
-      "target": "landingpage/app_file.log",
+      "target": "/app/src/tests/fixtures/logs/landingpage/app_file.log",
       "description": "File-backed application logs.",
       "required": true,
       "parser_type": "json_lines",
@@ -59,7 +59,7 @@
     {
       "source_key": "app_first",
       "source_type": "file",
-      "target": "landingpage/first.log",
+      "target": "/app/src/tests/fixtures/logs/landingpage/first.log",
       "description": "First file-backed application logs.",
       "required": true,
       "parser_type": "plain_text",
@@ -71,7 +71,7 @@
     {
       "source_key": "app_second",
       "source_type": "file",
-      "target": "landingpage/second.log",
+      "target": "/app/src/tests/fixtures/logs/landingpage/second.log",
       "description": "Second file-backed application logs.",
       "required": true,
       "parser_type": "plain_text",
@@ -83,7 +83,7 @@
     {
       "source_key": "snapshot_text",
       "source_type": "file",
-      "target": "landingpage/snapshot_text.log",
+      "target": "/app/src/tests/fixtures/logs/landingpage/snapshot_text.log",
       "description": "Plain text log fixture for snapshot read and grep tests.",
       "required": true,
       "parser_type": "plain_text",
@@ -95,7 +95,7 @@
     {
       "source_key": "traefik",
       "source_type": "file",
-      "target": "landingpage/traefik.log",
+      "target": "/app/src/tests/fixtures/logs/landingpage/traefik.log",
       "description": "Traefik edge and routing logs for parsing tests.",
       "required": true,
       "parser_type": "json_lines",

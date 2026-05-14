@@ -67,8 +67,15 @@ async def test_collect_logs_returns_agent_error_for_unknown_project_without_midd
 
 @pytest.mark.anyio
 async def test_collect_logs_returns_agent_error_for_missing_session_id(
-    valid_access_token: AccessToken,
+    custom_access_token: CustomAccessToken,
 ) -> None:
+    token = custom_access_token(
+        "codex-agent",
+        ["logs.collect"],
+        "codex-agent",
+        {"projects_access": "all"},
+    )
+
     result = await collect_logs(
         project_names=["landingpage"],
         source_keys=["app_file"],
@@ -76,12 +83,19 @@ async def test_collect_logs_returns_agent_error_for_missing_session_id(
         session_id=None,
         since=None,
         until=None,
-        access_token=valid_access_token,
+        access_token=token,
     )
     mcp_result = result.to_mcp_result()
 
     assert mcp_result.isError is True
     assert mcp_result.structuredContent["error_code"] == "missing_session_id"
+    assert mcp_result.structuredContent["message"] == (
+        "Session workspace is unavailable because MCP did not provide the required session_id."
+    )
+    assert mcp_result.structuredContent["retry_tips"] == [
+        "This is a system error, not something the agent can fix with tool arguments.",
+        "Ask administrator to check MCP middleware, session propagation, and system logs.",
+    ]
 
 
 @pytest.mark.anyio

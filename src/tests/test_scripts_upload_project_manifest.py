@@ -14,7 +14,6 @@ from typer.testing import CliRunner
 from scripts.commands import upload_project_manifest as upload_command
 from scripts.docker_commands import DockerCommandResult
 from scripts.main import app
-from settings import Settings
 
 runner = CliRunner()
 
@@ -90,11 +89,13 @@ def test_upload_project_manifest_internal_uploads_one_project(monkeypatch, tmp_p
     _write_manifest(manifests_dir, "landingpage")
     fake_service = FakeProjectManifestService()
 
-    monkeypatch.setattr(upload_command, "settings", Settings(MANIFEST_PATH=manifests_dir))
     monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
     monkeypatch.setattr(upload_command, "database_context", fake_database_context)
 
-    result = runner.invoke(app, ["upload-project-manifest-internal", "landingpage"])
+    result = runner.invoke(
+        app,
+        ["upload-project-manifest-internal", "--path", str(manifests_dir), "landingpage"],
+    )
 
     assert result.exit_code == 0
     assert fake_service.uploaded_project_keys == ["landingpage"]
@@ -109,11 +110,13 @@ def test_upload_project_manifest_internal_uploads_all_projects(monkeypatch, tmp_
     _write_manifest(manifests_dir, "alpha")
     fake_service = FakeProjectManifestService()
 
-    monkeypatch.setattr(upload_command, "settings", Settings(MANIFEST_PATH=manifests_dir))
     monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
     monkeypatch.setattr(upload_command, "database_context", fake_database_context)
 
-    result = runner.invoke(app, ["upload-project-manifest-internal", "--all"])
+    result = runner.invoke(
+        app,
+        ["upload-project-manifest-internal", "--path", str(manifests_dir), "--all"],
+    )
 
     assert result.exit_code == 0
     assert fake_service.uploaded_project_keys == ["alpha", "zeta"]
@@ -130,11 +133,13 @@ def test_upload_project_manifest_internal_reports_existing_without_update(
     fake_service = FakeProjectManifestService()
     fake_service.existing_project_keys.add("landingpage")
 
-    monkeypatch.setattr(upload_command, "settings", Settings(MANIFEST_PATH=manifests_dir))
     monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
     monkeypatch.setattr(upload_command, "database_context", fake_database_context)
 
-    result = runner.invoke(app, ["upload-project-manifest-internal", "landingpage"])
+    result = runner.invoke(
+        app,
+        ["upload-project-manifest-internal", "--path", str(manifests_dir), "landingpage"],
+    )
 
     assert result.exit_code == 0
     assert fake_service.uploaded_project_keys == []
@@ -154,11 +159,19 @@ def test_update_project_manifest_internal_updates_existing_project(
     fake_service = FakeProjectManifestService()
     fake_service.existing_project_keys.add("landingpage")
 
-    monkeypatch.setattr(upload_command, "settings", Settings(MANIFEST_PATH=manifests_dir))
     monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
     monkeypatch.setattr(upload_command, "database_context", fake_database_context)
 
-    result = runner.invoke(app, ["update-project-manifest-internal", "--project", "landingpage"])
+    result = runner.invoke(
+        app,
+        [
+            "update-project-manifest-internal",
+            "--path",
+            str(manifests_dir),
+            "--project",
+            "landingpage",
+        ],
+    )
 
     assert result.exit_code == 0
     assert len(fake_service.updated_project_keys) == 1
@@ -174,11 +187,19 @@ def test_update_project_manifest_internal_reports_missing_project(
     _write_manifest(manifests_dir, "landingpage")
     fake_service = FakeProjectManifestService()
 
-    monkeypatch.setattr(upload_command, "settings", Settings(MANIFEST_PATH=manifests_dir))
     monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
     monkeypatch.setattr(upload_command, "database_context", fake_database_context)
 
-    result = runner.invoke(app, ["update-project-manifest-internal", "--project", "landingpage"])
+    result = runner.invoke(
+        app,
+        [
+            "update-project-manifest-internal",
+            "--path",
+            str(manifests_dir),
+            "--project",
+            "landingpage",
+        ],
+    )
 
     assert result.exit_code == 0
     assert fake_service.updated_project_keys == []
@@ -234,6 +255,8 @@ def test_upload_project_manifest_command_runs_inside_app_container(monkeypatch) 
                 "-m",
                 "scripts.main",
                 "upload-project-manifest-internal",
+                "--path",
+                ".",
                 "landingpage",
             ],
         }
@@ -261,6 +284,8 @@ def test_upload_project_manifest_command_passes_all_to_app_container(monkeypatch
         "-m",
         "scripts.main",
         "upload-project-manifest-internal",
+        "--path",
+        ".",
         "--all",
     ]
 
@@ -290,6 +315,8 @@ def test_update_project_manifest_command_runs_inside_app_container(monkeypatch) 
         "-m",
         "scripts.main",
         "update-project-manifest-internal",
+        "--path",
+        ".",
         "--project",
         "landingpage",
     ]

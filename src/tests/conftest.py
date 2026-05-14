@@ -35,15 +35,6 @@ TEST_FIXTURES_ROOT = Path(__file__).parent / "fixtures"
 TEST_MANIFESTS_DIR = TEST_FIXTURES_ROOT / "manifests"
 TEST_FILE_SOURCE_ROOT = TEST_FIXTURES_ROOT / "logs"
 
-set_settings(
-    settings.model_copy(
-        update={
-            "MANIFEST_PATH": TEST_MANIFESTS_DIR,
-            "FILE_SOURCE_ROOT": TEST_FILE_SOURCE_ROOT,
-        }
-    )
-)
-
 
 class CustomJwtToken(Protocol):
     """Callable fixture type for creating test JWTs with optional claim overrides."""
@@ -184,7 +175,7 @@ async def _seed_project_manifests_sql() -> None:
         database=settings.DATABASE_NAME,
     )
     try:
-        for manifest in list_project_manifests(settings.manifests_dir):
+        for manifest in list_project_manifests(TEST_MANIFESTS_DIR):
             await connection.execute(
                 """
                 INSERT INTO "project_manifests" (
@@ -319,11 +310,13 @@ def build_collect_logs_request(
     return payload
 
 
-async def _seed_project_manifests() -> None:
+async def _seed_project_manifests(
+    manifests_dir: Path = TEST_MANIFESTS_DIR,
+) -> None:
     """Persist current test manifests for MCP tools that now read manifests from DB."""
 
     service = ProjectManifestDBService()
-    for manifest in list_project_manifests(settings.manifests_dir):
+    for manifest in list_project_manifests(manifests_dir):
         sources = [source.model_dump(mode="json") for source in manifest.sources]
         if await service.exists(manifest.project_key):
             existing = await service.get(manifest.project_key)
@@ -353,7 +346,6 @@ class FileBackedProjectContext:
     """API test paths for the single file-backed landingpage manifest scenario."""
 
     logs_dir: Path
-    file_source_root: Path
 
 
 @dataclass(slots=True)
@@ -361,7 +353,6 @@ class MultiProjectCollectContext:
     """API test paths for the multi-project manifest scenario."""
 
     logs_dir: Path
-    file_source_root: Path
 
 
 @pytest.fixture
@@ -405,12 +396,33 @@ def fake_docker_client() -> FakeDockerClient:
     return FakeDockerClient()
 
 
-def copy_mutable_log_fixture_root(tmp_path: Path) -> Path:
-    """Copy manifest and log fixtures for tests that rewrite source log files."""
+def copy_manifest_and_log_fixtures(tmp_path: Path) -> Path:
+    """Copy manifest/log fixtures and point file sources at the copied logs.
+
+    Some tests rewrite fixture log content to exercise collection and grep
+    behavior. Those tests must not mutate repository fixtures, and the seeded
+    project manifests must point at the copied files instead of the original
+    `/app/src/tests/fixtures/logs` paths.
+    """
 
     fixture_root = tmp_path / "fixtures"
-    shutil.copytree(settings.MANIFEST_PATH, fixture_root / "manifests")
-    shutil.copytree(settings.file_source_root, fixture_root / "logs")
+    shutil.copytree(TEST_MANIFESTS_DIR, fixture_root / "manifests")
+    shutil.copytree(TEST_FILE_SOURCE_ROOT, fixture_root / "logs")
+    for manifest_path in (fixture_root / "manifests").glob("*.json"):
+        manifest_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for source in manifest_data.get("sources", []):
+            if source.get("source_type") != "file":
+                continue
+            source_target = Path(source["target"])
+            try:
+                relative_source_path = source_target.relative_to("/app/src/tests/fixtures/logs")
+            except ValueError:
+                relative_source_path = Path(*source_target.parts[-2:])
+            source["target"] = (fixture_root / "logs" / relative_source_path).as_posix()
+        manifest_path.write_text(
+            json.dumps(manifest_data, indent=2) + "\n",
+            encoding="utf-8",
+        )
     return fixture_root
 
 
@@ -487,7 +499,6 @@ def file_backed_project_context(
 
     return FileBackedProjectContext(
         logs_dir=logs_dir,
-        file_source_root=settings.file_source_root,
     )
 
 
@@ -500,5 +511,4 @@ def multi_project_collect_context(
     logs_dir: Path = tmp_path / "collected-logs"
     return MultiProjectCollectContext(
         logs_dir=logs_dir,
-        file_source_root=settings.file_source_root,
     )

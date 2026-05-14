@@ -41,14 +41,15 @@ jobs:
     with:
       working_directory: .
       postgres_enabled: true
-      postgres_db: mcp_log_server
+      postgres_db: mcp_log_server_test
       postgres_user: mcp_log_server
       postgres_password: mcp-log-server-local-password
       postgres_port: "5432"
+      test_command: uv run migrate && uv run pytest
       test_environment: |
         DATABASE_HOST=localhost
         DATABASE_PORT=5432
-        DATABASE_NAME=mcp_log_server
+        DATABASE_NAME=mcp_log_server_test
         DATABASE_USER=mcp_log_server
         DATABASE_PASSWORD=mcp-log-server-local-password
 

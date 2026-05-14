@@ -7,7 +7,11 @@ from fastmcp.server.auth import AccessToken
 
 from database.fields import FileReference
 from database.models import CollectLogsSource
-from tests.conftest import copy_mutable_log_fixture_root, override_settings
+from tests.conftest import (
+    _seed_project_manifests,
+    copy_manifest_and_log_fixtures,
+    override_settings,
+)
 from tools.collection import collect_logs
 from tools.snapshots import grep_log_snapshot, list_log_snapshot_files, read_log_snapshot_file
 
@@ -180,16 +184,13 @@ async def test_grep_log_snapshot_truncates_large_match_lines(
     valid_access_token: AccessToken,
 ) -> None:
     long_line = "match " + ("x" * 40)
-    fixture_root = copy_mutable_log_fixture_root(tmp_path)
+    fixture_root = copy_manifest_and_log_fixtures(tmp_path)
     log_file = fixture_root / "logs" / "landingpage" / "app_file.log"
     log_file.write_text(f"{long_line}\n", encoding="utf-8")
     logs_dir = tmp_path / "collected-logs"
+    await _seed_project_manifests(fixture_root / "manifests")
 
-    with override_settings(
-        MANIFEST_PATH=fixture_root / "manifests",
-        FILE_SOURCE_ROOT=fixture_root / "logs",
-        LOGS_DIR=logs_dir,
-    ):
+    with override_settings(LOGS_DIR=logs_dir):
         await collect_logs(
             project_names=["landingpage"],
             source_keys=["app_file"],
@@ -218,16 +219,13 @@ async def test_grep_log_snapshot_truncates_very_large_match_lines(
     valid_access_token: AccessToken,
 ) -> None:
     long_line = "match " + ("x" * 4000)
-    fixture_root = copy_mutable_log_fixture_root(tmp_path)
+    fixture_root = copy_manifest_and_log_fixtures(tmp_path)
     log_file = fixture_root / "logs" / "landingpage" / "app_file.log"
     log_file.write_text(f"{long_line}\n", encoding="utf-8")
     logs_dir = tmp_path / "collected-logs"
+    await _seed_project_manifests(fixture_root / "manifests")
 
-    with override_settings(
-        MANIFEST_PATH=fixture_root / "manifests",
-        FILE_SOURCE_ROOT=fixture_root / "logs",
-        LOGS_DIR=logs_dir,
-    ):
+    with override_settings(LOGS_DIR=logs_dir):
         await collect_logs(
             project_names=["landingpage"],
             source_keys=["app_file"],

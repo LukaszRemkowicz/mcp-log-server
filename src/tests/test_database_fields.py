@@ -9,6 +9,7 @@ from tortoise.exceptions import ConfigurationError, ValidationError
 from tortoise.models import Model
 
 from database.fields import FileField, FileReference, FileStorage
+from database.schemas import CollectLogsSourceOut
 
 
 def test_file_storage_resolves_path_url_size_and_open(tmp_path: Path) -> None:
@@ -76,3 +77,30 @@ def test_file_field_validates_max_length_before_storing() -> None:
 
     with pytest.raises(ValidationError, match="Length"):
         field.to_db_value("too-long.log", Model)
+
+
+def test_collect_logs_source_out_exposes_response_file_fields(tmp_path: Path) -> None:
+    storage = FileStorage(location=tmp_path)
+    log_file = tmp_path / "workflow" / "landingpage" / "latest" / "backend.log"
+    log_file.parent.mkdir(parents=True)
+    log_file.write_bytes(b"log payload")
+
+    source = CollectLogsSourceOut(
+        id=1,
+        source_key="backend",
+        source_type="docker",
+        target="backend-container",
+        description="Backend logs.",
+        stream="stdout",
+        status="collected",
+        file=FileReference(
+            name="workflow/landingpage/latest/backend.log",
+            storage=storage,
+        ),
+        line_count=1,
+        error=None,
+        retry_tips=[],
+    )
+
+    assert source.output_file == "workflow/landingpage/latest/backend.log"
+    assert source.byte_count == len(b"log payload")

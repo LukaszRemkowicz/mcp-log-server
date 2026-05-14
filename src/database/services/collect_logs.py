@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from core.types import LogWorkspace
+from database.fields import FileReference, FileStorage
 from database.models import CollectLogs, CollectLogsSource
 from database.schemas import (
     CollectLogsCreate,
@@ -17,6 +19,7 @@ from database.schemas import (
     CollectLogsSourceOut,
     CollectLogsWithSourcesOut,
 )
+from storage import storage as log_storage
 
 
 class CollectLogsService:
@@ -35,6 +38,12 @@ class CollectLogsService:
 
         obj = await self.model.objects.get(id=collect_logs_id)
         return self._to_out(obj)
+
+    async def get_with_sources(self, collect_logs_id: int) -> CollectLogsWithSourcesOut:
+        """Return one collect_logs artifact row with source rows by id."""
+
+        obj = await self.model.objects.get(id=collect_logs_id)
+        return await self._to_out_with_sources(obj)
 
     async def get_latest(self, project_name: str) -> CollectLogsOut | None:
         """Return current latest workflow row for one project."""
@@ -65,7 +74,7 @@ class CollectLogsService:
 
         obj = await self.model.objects.filter(
             project_name=project_name,
-            workspace="session",
+            workspace=LogWorkspace.SESSION,
             session_id=session_id,
         ).first()
         if obj is None:
@@ -82,7 +91,7 @@ class CollectLogsService:
 
         obj = await self.model.objects.filter(
             project_name=project_name,
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             archive_name=archive_name,
         ).first()
         if obj is None:
@@ -96,11 +105,10 @@ class CollectLogsService:
         return CollectLogsOut(
             id=obj.id,
             session_id=obj.session_id,
-            workspace=obj.workspace.value,
+            workspace=obj.workspace,
             project_name=obj.project_name,
             collected_at=obj.collected_at,
             snapshot_dir=obj.snapshot_dir,
-            metadata_file=obj.metadata_file,
             archive_name=obj.archive_name,
             is_latest=obj.is_latest,
             requested_source_keys=obj.requested_source_keys,
@@ -130,7 +138,14 @@ class CollectLogsService:
                     normalization_profile=source.normalization_profile,
                     default_noise_profile=source.default_noise_profile,
                     status=source.status.value,
-                    file=source.file,
+                    file=(
+                        FileReference(
+                            name=source.file.name,
+                            storage=FileStorage(location=log_storage.location),
+                        )
+                        if source.file is not None
+                        else None
+                    ),
                     line_count=source.line_count,
                     error=source.error,
                     retry_tips=source.retry_tips,
@@ -181,3 +196,10 @@ class CollectLogsSourceService:
 
         for payload in payloads:
             await self.create(collect_logs, payload)
+
+    async def update_file(self, collect_logs_source_id: int, file: str) -> None:
+        """Update one collected source file path."""
+
+        obj = await self.model.objects.get(id=collect_logs_source_id)
+        obj.file = FileReference(name=file)
+        await obj.save(update_fields=["file"])

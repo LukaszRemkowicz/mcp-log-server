@@ -4,7 +4,6 @@ These helpers intentionally avoid service state. They encode deterministic
 rules for:
 
 - loading snapshot metadata from disk
-- loading workflow inventory metadata from disk
 - resolving workflow latest/archive directories
 - formatting timestamp windows
 
@@ -17,21 +16,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tools.models import LogSnapshotMetadata, WorkflowProjectInventory
-from tools.utils import (
-    SNAPSHOT_METADATA_FILE_NAME,
-    WORKFLOW_INVENTORY_FILE_NAME,
-    load_snapshot_metadata_from_json,
-)
+from tools.models import LogSnapshotMetadata
+from tools.utils import SNAPSHOT_METADATA_FILE_NAME, load_snapshot_metadata_from_json
 
 
 def read_snapshot_metadata(snapshot_dir: Path) -> LogSnapshotMetadata:
     """Load `snapshot_metadata.json` from one session snapshot directory.
 
     Session snapshots store their metadata beside the collected source files.
-    Workflow snapshots are loaded from the per-project workflow inventory
-    instead, so callers should use this helper only when they already have a
-    concrete directory that is expected to contain `snapshot_metadata.json`.
+    Callers should use this helper only when they already have a concrete
+    directory that is expected to contain `snapshot_metadata.json`.
 
     Raises:
         ValueError: When the metadata file is missing or cannot be parsed into
@@ -42,23 +36,6 @@ def read_snapshot_metadata(snapshot_dir: Path) -> LogSnapshotMetadata:
     if not metadata_file.exists():
         raise ValueError("Requested log snapshot metadata was not found.")
     return load_snapshot_metadata_from_json(metadata_file.read_text(encoding="utf-8"))
-
-
-def read_workflow_inventory(workflow_project_dir: Path) -> WorkflowProjectInventory:
-    """Load `workflow_inventory.json` for one workflow project directory.
-
-    The workflow inventory is the source of truth for both the newest `latest`
-    artifact and archived workflow artifacts. It contains relative snapshot
-    directories and relative source file paths under the configured logs root.
-
-    Raises:
-        ValueError: When the inventory file is missing or invalid.
-    """
-
-    inventory_file = workflow_project_dir / WORKFLOW_INVENTORY_FILE_NAME
-    if not inventory_file.exists():
-        raise ValueError("Requested workflow inventory was not found.")
-    return WorkflowProjectInventory.model_validate_json(inventory_file.read_text(encoding="utf-8"))
 
 
 def resolve_workflow_snapshot_dir(project_output_dir: Path, archive_name: str | None) -> Path:

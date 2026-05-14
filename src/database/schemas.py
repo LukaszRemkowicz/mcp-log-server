@@ -6,8 +6,9 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from core.types import LogWorkspace
 from database.fields import FileReference
 
 
@@ -78,11 +79,10 @@ class CollectLogsCreate(BaseModel):
     """Validated payload for creating one collected log artifact row."""
 
     session_id: UUID | None = None
-    workspace: Literal["workflow", "session"]
+    workspace: LogWorkspace
     project_name: str
     collected_at: datetime
     snapshot_dir: str
-    metadata_file: str
     archive_name: str | None = None
     is_latest: bool = False
     requested_source_keys: list[str]
@@ -132,6 +132,24 @@ class CollectLogsSourceOut(BaseModel):
     error: str | None = None
     retry_tips: list[str]
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def output_file(self) -> str | None:
+        """Return the stored source file path for tool response contracts."""
+
+        if self.file is None:
+            return None
+        return self.file.name
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def byte_count(self) -> int:
+        """Return the collected source file size for tool response contracts."""
+
+        if self.file is None:
+            return 0
+        return self.file.size
+
 
 class CollectLogsOut(BaseModel):
     """Pydantic representation of one collect_logs database row."""
@@ -140,11 +158,10 @@ class CollectLogsOut(BaseModel):
 
     id: int
     session_id: UUID | None = None
-    workspace: Literal["workflow", "session"]
+    workspace: LogWorkspace
     project_name: str
     collected_at: datetime
     snapshot_dir: str
-    metadata_file: FileReference
     archive_name: str | None = None
     is_latest: bool
     requested_source_keys: list[str]

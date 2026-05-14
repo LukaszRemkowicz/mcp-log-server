@@ -5,13 +5,6 @@ from __future__ import annotations
 from enum import StrEnum
 
 
-class LogWorkspace(StrEnum):
-    """Known collection/audit workspaces."""
-
-    WORKFLOW = "workflow"
-    SESSION = "session"
-
-
 class AgentCallEvent(StrEnum):
     """Known MCP audit event names."""
 

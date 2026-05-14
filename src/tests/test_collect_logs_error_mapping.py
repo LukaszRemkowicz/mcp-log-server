@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import pytest
 from fastmcp.server.auth import AccessToken
 
 from conf import settings
-from tests.conftest import override_settings
+from core.types import LogWorkspace
 from tools.errors import (
     build_collect_logs_error_details,
     build_collect_logs_error_result,
@@ -65,7 +64,7 @@ def test_build_collect_logs_error_details_returns_project_access_context(
         settings=settings,
         access_token=valid_access_token,
         project_names=["landingpage"],
-        workspace="workflow",
+        workspace=LogWorkspace.WORKFLOW,
         session_id=None,
     )
 
@@ -75,26 +74,20 @@ def test_build_collect_logs_error_details_returns_project_access_context(
     }
 
 
-def test_build_collect_logs_error_details_returns_manifest_context(
-    tmp_path: Path,
+def test_build_collect_logs_error_details_returns_unknown_project_context(
     valid_access_token: AccessToken,
 ) -> None:
-    manifest_path = tmp_path / "landingpage.json"
-    manifest_path.write_text("{}", encoding="utf-8")
-
-    with override_settings(MANIFEST_PATH=manifest_path.parent) as effective_settings:
-        details = build_collect_logs_error_details(
-            "unknown_project",
-            settings=effective_settings,
-            access_token=valid_access_token,
-            project_names=["other-project"],
-            workspace="workflow",
-            session_id=None,
-        )
+    details = build_collect_logs_error_details(
+        "unknown_project",
+        settings=settings,
+        access_token=valid_access_token,
+        project_names=["other-project"],
+        workspace=LogWorkspace.WORKFLOW,
+        session_id=None,
+    )
 
     assert details == {
         "requested_project_names": ["other-project"],
-        "manifests_dir": str(effective_settings.manifests_dir),
     }
 
 
@@ -106,7 +99,7 @@ def test_build_collect_logs_error_details_returns_session_context(
         settings=settings,
         access_token=valid_access_token,
         project_names=["landingpage"],
-        workspace="session",
+        workspace=LogWorkspace.SESSION,
         session_id=None,
     )
 
@@ -125,28 +118,22 @@ def test_render_collect_logs_error_message_sanitizes_snapshot_metadata_errors() 
 
 
 def test_build_collect_logs_error_result_returns_normalized_tool_error(
-    tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
-    manifest_path = tmp_path / "landingpage.json"
-    manifest_path.write_text("{}", encoding="utf-8")
-
-    with override_settings(MANIFEST_PATH=manifest_path.parent) as effective_settings:
-        result = build_collect_logs_error_result(
-            "Unknown project 'other'. No manifest file was found for that project.",
-            settings=effective_settings,
-            access_token=valid_access_token,
-            project_names=["other"],
-            workspace="workflow",
-            session_id=None,
-        )
+    result = build_collect_logs_error_result(
+        "Unknown project 'other'. No persisted manifest was found for that project.",
+        settings=settings,
+        access_token=valid_access_token,
+        project_names=["other"],
+        workspace=LogWorkspace.WORKFLOW,
+        session_id=None,
+    )
     mcp_result: Any = result.to_mcp_result()
 
     assert mcp_result.isError is True
     assert mcp_result.structuredContent["error_code"] == "unknown_project"
     assert mcp_result.structuredContent["details"] == {
         "requested_project_names": ["other"],
-        "manifests_dir": str(effective_settings.manifests_dir),
     }
     assert mcp_result.structuredContent["retry_tips"] == build_collect_logs_error_retry_tips(
         "unknown_project"

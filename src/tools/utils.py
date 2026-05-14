@@ -15,7 +15,6 @@ RETENTION_DURATION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 SNAPSHOT_METADATA_FILE_NAME = "snapshot_metadata.json"
-WORKFLOW_INVENTORY_FILE_NAME = "workflow_inventory.json"
 
 
 def parse_snapshot_retention(value: str) -> timedelta:

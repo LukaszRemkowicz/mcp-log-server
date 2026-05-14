@@ -6,16 +6,11 @@ from typing import Any, ClassVar
 
 from tortoise import fields
 
-from conf import settings
+from core.types import LogWorkspace
 from database.fields import FileField, FileStorage
 from database.managers import CollectLogsManager, DatabaseModel, ObjectsManager
-from database.types import (
-    AgentCallEvent,
-    CollectLogsSourceStatus,
-    LogSourceType,
-    LogStream,
-    LogWorkspace,
-)
+from database.types import AgentCallEvent, CollectLogsSourceStatus, LogSourceType, LogStream
+from storage import storage as log_storage
 
 
 class AgentCall(DatabaseModel):
@@ -140,10 +135,6 @@ class CollectLogs(DatabaseModel):
     snapshot_dir = fields.TextField(
         description="Persisted snapshot directory path under the logs root.",
     )
-    metadata_file = FileField(
-        max_length=1024,
-        description="Path to snapshot_metadata.json or workflow_inventory.json.",
-    )
     archive_name = fields.CharField(
         max_length=255,
         null=True,
@@ -245,7 +236,7 @@ class CollectLogsSource(DatabaseModel):
         description="Collection status, currently collected or unavailable.",
     )
     file = FileField(
-        storage=FileStorage(location=settings.LOGS_DIR),
+        storage=FileStorage(location=log_storage.location),
         max_length=1024,
         null=True,
         description=(

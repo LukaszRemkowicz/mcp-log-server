@@ -11,6 +11,7 @@ from fastmcp.tools.base import ToolResult
 
 from auth.scopes import LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE
 from conf import settings
+from core.types import LogWorkspace
 from decorators import project_authorized_tool, workflow_discoverable_tool
 from logging_config import get_logger
 from services.log_collection import BuildLogsError, LogCollectionService
@@ -20,8 +21,8 @@ from services.project_authorization import (
     ProjectAuthorizationService,
 )
 from services.project_manifest import ProjectManifestError, ProjectManifestService
-from tools.agent_hints import COLLECT_LOGS_TOOL_DESCRIPTION
-from tools.errors import build_collect_logs_error_result
+from tools.agent_hints import COLLECT_LOGS_NEXT_STEP_TIPS, COLLECT_LOGS_TOOL_DESCRIPTION
+from tools.errors import build_collect_logs_error_details, build_collect_logs_error_result
 from tools.models import CollectLogsPayload, ProjectManifestSummary, SnapshotWorkspace
 from utils.mcp_errors import build_agent_tool_error_result
 
@@ -114,7 +115,7 @@ async def list_projects(
 async def collect_logs(
     project_names: list[str] | None = None,
     source_keys: list[str] | None = None,
-    workspace: SnapshotWorkspace = "workflow",
+    workspace: SnapshotWorkspace = LogWorkspace.WORKFLOW,
     session_id: str | None = None,
     since: str | None = settings.DEFAULT_LOG_WINDOW,
     until: str | None = None,
@@ -211,26 +212,27 @@ async def collect_logs(
                     "until": until,
                 },
             )
-            return build_collect_logs_error_result(
-                project_payload.message,
-                settings=settings,
-                access_token=access_token,
-                project_names=project_names,
-                workspace=workspace,
-                session_id=session_id,
+            return build_agent_tool_error_result(
+                error_code=project_payload.error_code,
+                message=project_payload.message,
+                retry_tips=project_payload.retry_tips,
+                details=build_collect_logs_error_details(
+                    project_payload.error_code,
+                    settings=settings,
+                    access_token=access_token,
+                    project_names=project_names,
+                    workspace=workspace,
+                    session_id=session_id,
+                ),
             )
         project_payloads.append(project_payload)
 
     payload = CollectLogsPayload(
         action="collect_logs",
         workspace=workspace,
-        session_id=session_id if workspace == "session" else None,
+        session_id=session_id if workspace == LogWorkspace.SESSION else None,
         requested_project_names=project_names,
-        next_step_tips=[
-            "Use session_id and project_name for later session follow-up tools.",
-            "Use project_name alone for the newest workflow artifact.",
-            "Use archive_name plus project_name only when you need an archived workflow artifact.",
-        ],
+        next_step_tips=COLLECT_LOGS_NEXT_STEP_TIPS,
         projects=project_payloads,
     )
 

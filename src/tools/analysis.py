@@ -12,6 +12,7 @@ from fastmcp.tools.base import ToolResult
 
 from app import mcp
 from auth.scopes import LOGS_COLLECT_SCOPE
+from core.types import LogWorkspace
 from decorators import project_authorized_tool, workflow_discoverable_tool
 from logging_config import get_logger
 from services.log_analysis import LogAnalysisService
@@ -94,15 +95,15 @@ async def _load_snapshot_for_analysis_tool(
     project_name: str,
     session_id: str | None,
     archive_name: str | None,
-    source_keys: list[str] | None,
-    source_keys_detail: list[JSONValue],
+    requested_source_keys: list[str] | None,
+    requested_source_keys_detail: list[JSONValue],
     max_groups: int,
 ) -> SnapshotContext | ToolResult:
     """Load the snapshot context or build the same MCP error shape used by analysis tools."""
 
     context: SnapshotContext | SnapshotLookupError = await snapshot_service.load_snapshot(
         project_name=project_name,
-        workspace="session" if session_id is not None else "workflow",
+        workspace=LogWorkspace.SESSION if session_id is not None else LogWorkspace.WORKFLOW,
         session_id=session_id,
         archive_name=archive_name,
     )
@@ -117,7 +118,7 @@ async def _load_snapshot_for_analysis_tool(
                 "session_id": session_id,
                 "archive_name": archive_name,
                 "project_name": project_name,
-                "source_keys": source_keys,
+                "source_keys": requested_source_keys,
                 "max_groups": max_groups,
             },
         )
@@ -129,7 +130,7 @@ async def _load_snapshot_for_analysis_tool(
                 "project_name": project_name,
                 "session_id": session_id,
                 "archive_name": archive_name,
-                "source_keys": source_keys_detail,
+                "source_keys": requested_source_keys_detail,
                 "max_groups": max_groups,
             },
         )
@@ -143,8 +144,8 @@ def _build_analysis_source_key_error_result(
     project_name: str,
     session_id: str | None,
     archive_name: str | None,
-    source_keys: list[str] | None,
-    source_keys_detail: list[JSONValue],
+    requested_source_keys: list[str] | None,
+    requested_source_keys_detail: list[JSONValue],
     max_groups: int,
 ) -> ToolResult:
     """Build the shared source-key validation error used by analysis tools."""
@@ -159,7 +160,7 @@ def _build_analysis_source_key_error_result(
             "session_id": session_id,
             "archive_name": archive_name,
             "project_name": project_name,
-            "source_keys": source_keys,
+            "source_keys": requested_source_keys,
             "max_groups": max_groups,
         },
     )
@@ -176,7 +177,7 @@ def _build_analysis_source_key_error_result(
             "project_name": project_name,
             "session_id": session_id,
             "archive_name": archive_name,
-            "source_keys": source_keys_detail,
+            "source_keys": requested_source_keys_detail,
             "max_groups": max_groups,
         },
     )
@@ -210,7 +211,7 @@ async def _load_snapshot_for_filtered_view_tool(
 
     context: SnapshotContext | SnapshotLookupError = await snapshot_service.load_snapshot(
         project_name=project_name,
-        workspace="session" if session_id is not None else "workflow",
+        workspace=LogWorkspace.SESSION if session_id is not None else LogWorkspace.WORKFLOW,
         session_id=session_id,
         archive_name=archive_name,
     )
@@ -315,14 +316,15 @@ async def group_errors(
     if invalid_group_window_result is not None:
         return invalid_group_window_result
 
-    source_keys_detail: list[JSONValue] = list(source_keys or [])
+    requested_source_keys = source_keys
+    requested_source_keys_detail: list[JSONValue] = list(requested_source_keys or [])
     context: SnapshotContext | ToolResult = await _load_snapshot_for_analysis_tool(
         tool_name="group_errors",
         project_name=project_name,
         session_id=session_id,
         archive_name=archive_name,
-        source_keys=source_keys,
-        source_keys_detail=source_keys_detail,
+        requested_source_keys=requested_source_keys,
+        requested_source_keys_detail=requested_source_keys_detail,
         max_groups=max_groups,
     )
     if isinstance(context, ToolResult):
@@ -330,8 +332,8 @@ async def group_errors(
 
     try:
         analysis = analysis_service.group_snapshot_errors(
-            context.metadata,
-            source_keys=source_keys,
+            sources=context.sources,
+            requested_source_keys=requested_source_keys,
             max_groups=max_groups,
         )
     except ValueError as error:
@@ -341,8 +343,8 @@ async def group_errors(
             project_name=project_name,
             session_id=session_id,
             archive_name=archive_name,
-            source_keys=source_keys,
-            source_keys_detail=source_keys_detail,
+            requested_source_keys=requested_source_keys,
+            requested_source_keys_detail=requested_source_keys_detail,
             max_groups=max_groups,
         )
 
@@ -423,14 +425,15 @@ async def build_incident_bundle(
     if invalid_group_window_result is not None:
         return invalid_group_window_result
 
-    source_keys_detail: list[JSONValue] = list(source_keys or [])
+    requested_source_keys = source_keys
+    requested_source_keys_detail: list[JSONValue] = list(requested_source_keys or [])
     context: SnapshotContext | ToolResult = await _load_snapshot_for_analysis_tool(
         tool_name="build_incident_bundle",
         project_name=project_name,
         session_id=session_id,
         archive_name=archive_name,
-        source_keys=source_keys,
-        source_keys_detail=source_keys_detail,
+        requested_source_keys=requested_source_keys,
+        requested_source_keys_detail=requested_source_keys_detail,
         max_groups=max_groups,
     )
     if isinstance(context, ToolResult):
@@ -439,7 +442,8 @@ async def build_incident_bundle(
     try:
         payload = analysis_service.build_incident_bundle(
             context.metadata,
-            source_keys=source_keys,
+            sources=context.sources,
+            requested_source_keys=requested_source_keys,
             max_groups=max_groups,
             requested_project_name=project_name,
             project_name=context.project_name,
@@ -453,8 +457,8 @@ async def build_incident_bundle(
             project_name=project_name,
             session_id=session_id,
             archive_name=archive_name,
-            source_keys=source_keys,
-            source_keys_detail=source_keys_detail,
+            requested_source_keys=requested_source_keys,
+            requested_source_keys_detail=requested_source_keys_detail,
             max_groups=max_groups,
         )
 
@@ -549,6 +553,7 @@ async def create_filtered_view(
     }
     payload = filtering_service.create_filtered_view(
         context.metadata,
+        sources=context.sources,
         source_contexts=source_contexts,
         source_keys=source_keys,
         max_lines=max_lines,

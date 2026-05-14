@@ -11,16 +11,11 @@ from pytest_mock import MockerFixture
 import database.cli as database_cli
 import database.config as database_config
 import database.ensure_test_database as ensure_test_database_module
+from core.types import LogWorkspace
 from database.fields import FileField
 from database.managers import CollectLogsManager
 from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest
-from database.types import (
-    AgentCallEvent,
-    CollectLogsSourceStatus,
-    LogSourceType,
-    LogStream,
-    LogWorkspace,
-)
+from database.types import AgentCallEvent, CollectLogsSourceStatus, LogSourceType, LogStream
 from tests.conftest import override_settings
 
 
@@ -307,7 +302,6 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
         "project_name",
         "collected_at",
         "snapshot_dir",
-        "metadata_file",
         "archive_name",
         "is_latest",
         "requested_source_keys",
@@ -323,7 +317,6 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
         CollectLogs._meta.fields_map["snapshot_dir"].description
         == "Persisted snapshot directory path under the logs root."
     )
-    assert isinstance(CollectLogs._meta.fields_map["metadata_file"], FileField)
     assert (
         CollectLogs._meta.fields_map["archive_name"].description
         == "Workflow archive name when this workflow artifact is archived."

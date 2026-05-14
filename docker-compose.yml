@@ -35,10 +35,10 @@ services:
     volumes:
       - ./src:/app/src
       - ./migrations:/app/migrations
-      - ${LOGS_DIR_HOST:-./logs}:${DOCKER_LOGS_DIR:-/app/logs}
+      - ${LOGS_DIR_HOST:-./logs}:${LOGS_DIR:-/app/logs}
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
-      DOCKER_LOGS_DIR: ${DOCKER_LOGS_DIR:-/app/logs}
+      LOGS_DIR: ${LOGS_DIR:-/app/logs}
       DATABASE_HOST: db
       DATABASE_PORT: 5432
       DATABASE_NAME: ${DATABASE_NAME:-mcp_log_server}
@@ -67,7 +67,7 @@ services:
       - ./migrations:/app/migrations
       - ./logs:/app/logs
     environment:
-      DOCKER_LOGS_DIR: /app/logs
+      LOGS_DIR: /app/logs
       DATABASE_HOST: db
       DATABASE_PORT: 5432
       DATABASE_NAME: mcp_log_server_test

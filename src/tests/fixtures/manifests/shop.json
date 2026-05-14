@@ -5,7 +5,7 @@
     {
       "source_key": "app_file",
       "source_type": "file",
-      "target": "shop/app_file.log",
+      "target": "/app/src/tests/fixtures/logs/shop/app_file.log",
       "description": "Shop application logs.",
       "required": true,
       "parser_type": "json_lines",

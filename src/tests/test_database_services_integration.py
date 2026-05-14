@@ -9,8 +9,7 @@ from uuid import uuid4
 
 import pytest
 
-from conf import settings
-from database.fields import FileReference
+from core.types import LogWorkspace
 from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest
 from database.schemas import (
     AgentCallCreate,
@@ -20,12 +19,13 @@ from database.schemas import (
 )
 from database.services.agent_calls import AgentCallService
 from database.services.project_manifests import ProjectManifestService
-from database.types import CollectLogsSourceStatus, LogSourceType, LogStream, LogWorkspace
+from database.types import CollectLogsSourceStatus, LogSourceType, LogStream
 from manifests.loader import load_project_manifest
 from manifests.models import Manifest, SourceDefinition
 from services.log_collection import BuildLogsError, LogCollectionService
 from services.project_manifest import ProjectManifestService as RuntimeProjectManifestService
-from tests.conftest import override_settings
+from storage import storage
+from tests.conftest import TEST_MANIFESTS_DIR, override_settings
 
 
 @pytest.mark.anyio
@@ -69,7 +69,7 @@ async def test_database_services_round_trip_against_real_postgres() -> None:
     created_call = await agent_calls.create(
         AgentCallCreate(
             session_id=session_id,
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             event="mcp_call_tool",
             client_id="integration-client",
             client_type="agent",
@@ -107,9 +107,9 @@ async def test_collect_logs_models_round_trip_against_real_postgres(
     session_id = uuid4()
     snapshot_dir = tmp_path / "sessions" / str(session_id) / f"integration-{suffix}"
     snapshot_dir.mkdir(parents=True)
-    metadata_file = snapshot_dir / "snapshot_metadata.json"
-    source_file = snapshot_dir / "backend.log"
-    metadata_file.write_text("{}", encoding="utf-8")
+    source_file_name = f"sessions/{session_id}/integration-{suffix}/backend.log"
+    source_file = storage.path(source_file_name)
+    source_file.parent.mkdir(parents=True, exist_ok=True)
     source_file.write_text("line 1\nline 2\n", encoding="utf-8")
 
     collect_logs = await CollectLogs.objects.create(
@@ -118,7 +118,6 @@ async def test_collect_logs_models_round_trip_against_real_postgres(
         project_name=f"integration-{suffix}",
         collected_at=datetime(2026, 5, 9, 12, 30, tzinfo=UTC),
         snapshot_dir=snapshot_dir.as_posix(),
-        metadata_file=metadata_file,
         requested_source_keys=["backend", "nginx"],
         resolved_source_keys=["backend"],
         unknown_requested_source_keys=["nginx"],
@@ -138,7 +137,7 @@ async def test_collect_logs_models_round_trip_against_real_postgres(
         normalization_profile="backend_app",
         default_noise_profile="backend_noise",
         status=CollectLogsSourceStatus.COLLECTED,
-        file=source_file,
+        file=source_file_name,
         line_count=2,
         retry_tips=[],
     )
@@ -166,13 +165,6 @@ async def test_collect_logs_models_round_trip_against_real_postgres(
     assert fetched_snapshot.workspace == LogWorkspace.SESSION
     assert fetched_snapshot.project_name == f"integration-{suffix}"
     assert fetched_snapshot.snapshot_dir == snapshot_dir.as_posix()
-    assert fetched_snapshot.metadata_file == FileReference(
-        name=metadata_file.as_posix(),
-        size_bytes=metadata_file.stat().st_size,
-    )
-    assert fetched_snapshot.metadata_file.name == metadata_file.as_posix()
-    assert fetched_snapshot.metadata_file.path == metadata_file.as_posix()
-    assert fetched_snapshot.metadata_file.size == metadata_file.stat().st_size
     assert fetched_snapshot.requested_source_keys == ["backend", "nginx"]
     assert fetched_snapshot.resolved_source_keys == ["backend"]
     assert fetched_snapshot.unknown_requested_source_keys == ["nginx"]
@@ -187,7 +179,7 @@ async def test_collect_logs_models_round_trip_against_real_postgres(
     assert fetched_sources[0].source_type == LogSourceType.DOCKER
     assert fetched_sources[0].stream == LogStream.STDOUT
     assert fetched_sources[0].status == CollectLogsSourceStatus.COLLECTED
-    assert fetched_sources[0].file.name == source_file.as_posix()
+    assert fetched_sources[0].file.name == source_file_name
     assert fetched_sources[0].file.path == source_file.as_posix()
     assert fetched_sources[0].file.size == source_file.stat().st_size
     assert fetched_sources[0].line_count == 2
@@ -212,7 +204,7 @@ async def test_log_collection_service_persists_collect_logs_metadata(
     """Verify collect_logs orchestration writes artifact and source rows."""
 
     logs_dir = tmp_path / "collected-logs"
-    manifest = load_project_manifest(settings.manifests_dir, "landingpage")
+    manifest = load_project_manifest(TEST_MANIFESTS_DIR, "landingpage")
     manifest_sources = RuntimeProjectManifestService.get_manifest_source_keys(
         manifest,
         ["app_file", "missing"],
@@ -224,7 +216,7 @@ async def test_log_collection_service_persists_collect_logs_metadata(
             sources=manifest_sources.sources,
             missing_source_keys=manifest_sources.missing_source_keys,
             source_keys=manifest_sources.source_keys,
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             session_id=None,
             since="5m",
             until=None,
@@ -244,8 +236,6 @@ async def test_log_collection_service_persists_collect_logs_metadata(
         assert collect_logs.requested_since == "5m"
         assert collect_logs.requested_until is None
         assert collect_logs.snapshot_dir == payload.snapshot_dir
-        assert collect_logs.metadata_file.path == payload.metadata_file
-        assert collect_logs.metadata_file.size > 0
 
         assert len(sources) == 1
         assert sources[0].source_key == "app_file"
@@ -264,7 +254,7 @@ async def test_log_collection_service_persists_session_source_file_path(
 
     logs_dir = tmp_path / "collected-logs"
     session_id = uuid4()
-    manifest = load_project_manifest(settings.manifests_dir, "landingpage")
+    manifest = load_project_manifest(TEST_MANIFESTS_DIR, "landingpage")
     manifest_sources = RuntimeProjectManifestService.get_manifest_source_keys(
         manifest,
         ["app_file"],
@@ -276,7 +266,7 @@ async def test_log_collection_service_persists_session_source_file_path(
             sources=manifest_sources.sources,
             missing_source_keys=manifest_sources.missing_source_keys,
             source_keys=manifest_sources.source_keys,
-            workspace="session",
+            workspace=LogWorkspace.SESSION,
             session_id=str(session_id),
             since="5m",
             until=None,

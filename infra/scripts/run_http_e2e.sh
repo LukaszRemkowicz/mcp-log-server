@@ -116,18 +116,15 @@ export CODEX_AGENT_JWT
 
 (
   cd "$REPO_ROOT/src"
-  MANIFEST_PATH="$MANIFESTS_DIR" \
-  uv run python -m scripts.main upload-project-manifest-internal --all >/dev/null
-  MANIFEST_PATH="$MANIFESTS_DIR" \
-  uv run python -m scripts.main update-project-manifest-internal --project landingpage >/dev/null
+  uv run python -m scripts.main upload-project-manifest-internal --path "$MANIFESTS_DIR" --all >/dev/null
+  uv run python -m scripts.main update-project-manifest-internal --path "$MANIFESTS_DIR" --project landingpage >/dev/null
 )
 
 (
   cd "$REPO_ROOT/src"
   PORT="$PORT" \
   HOST="$HOST" \
-  MANIFEST_PATH="$MANIFESTS_DIR" \
-  DOCKER_LOGS_DIR="$LOGS_DIR" \
+  LOGS_DIR="$LOGS_DIR" \
   uv run python -m main >"$SERVER_LOG" 2>&1
 ) &
 SERVER_PID=$!
@@ -192,11 +189,10 @@ assert_eq \
 
 assert_file_exists "$LOGS_DIR/workflow/landingpage/latest/app_first.log"
 assert_file_exists "$LOGS_DIR/workflow/landingpage/latest/app_second.log"
-assert_file_exists "$LOGS_DIR/workflow/landingpage/workflow_inventory.json"
-assert_eq \
-  "$(jq -r '.latest.files | length' "$LOGS_DIR/workflow/landingpage/workflow_inventory.json")" \
-  "2" \
-  "workflow inventory should describe both latest files"
+if [[ -e "$LOGS_DIR/workflow/landingpage/workflow_inventory.json" ]]; then
+  echo "workflow_inventory.json should not be written; DB rows are the workflow index" >&2
+  exit 1
+fi
 
 assert_eq \
   "$(printf '%s' "$LIST_RESPONSE" | jq -r '.result.structuredContent.files | length')" \

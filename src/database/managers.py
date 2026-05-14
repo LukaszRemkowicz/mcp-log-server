@@ -8,6 +8,8 @@ from typing import Any, ClassVar
 from tortoise.manager import Manager
 from tortoise.models import Model
 
+from core.types import LogWorkspace
+
 
 class ObjectsManager[ModelT: Model](Manager):
     """Small Django-style facade over Tortoise model query methods."""
@@ -43,7 +45,7 @@ class CollectLogsManager[ModelT: Model](ObjectsManager[ModelT]):
 
         return self.filter(
             project_name=project_name,
-            workspace="workflow",
+            workspace=LogWorkspace.WORKFLOW,
             is_latest=True,
         ).first()
 

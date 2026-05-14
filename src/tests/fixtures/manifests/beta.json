@@ -5,7 +5,7 @@
     {
       "source_key": "app_file",
       "source_type": "file",
-      "target": "beta/app_file.log",
+      "target": "/app/src/tests/fixtures/logs/beta/app_file.log",
       "description": "Beta application logs.",
       "required": true,
       "parser_type": "json_lines",

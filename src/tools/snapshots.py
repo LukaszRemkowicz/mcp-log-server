@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from fastmcp.dependencies import CurrentAccessToken
 from fastmcp.server.auth import AccessToken
 from fastmcp.tools.base import ToolResult
 
 from auth.scopes import LOGS_COLLECT_SCOPE
+from core.types import LogWorkspace
 from decorators import project_authorized_tool, workflow_discoverable_tool
 from logging_config import get_logger
 from services.log_snapshots import (
@@ -54,7 +54,7 @@ async def _load_snapshot_context(
 
     return await snapshot_service.load_snapshot(
         project_name=project_name,
-        workspace="session" if session_id is not None else "workflow",
+        workspace=LogWorkspace.SESSION if session_id is not None else LogWorkspace.WORKFLOW,
         session_id=session_id,
         archive_name=archive_name,
     )
@@ -184,7 +184,6 @@ async def list_log_snapshot_files(
         workspace=context.metadata.workspace,
         session_id=context.metadata.session_id,
         snapshot_dir=str(context.snapshot_dir),
-        metadata_file=str(context.metadata_file),
         collected_at=context.metadata.collected_at,
         next_step_tips=LIST_SNAPSHOT_NEXT_STEP_TIPS,
         files=context.metadata.files,
@@ -275,13 +274,13 @@ async def read_log_snapshot_file(
             log_extra={"source_key": source_key},
         )
 
-    file_payload: LogSnapshotFilePayload | SnapshotReadError = snapshot_service.find_snapshot_file(
-        context.metadata,
+    source = snapshot_service.find_snapshot_source(
+        context.sources,
         source_key=source_key,
     )
-    if isinstance(file_payload, SnapshotReadError):
+    if isinstance(source, SnapshotReadError):
         return _build_snapshot_read_error_result(
-            read_error=file_payload,
+            read_error=source,
             project_name=project_name,
             session_id=session_id,
             archive_name=archive_name,
@@ -289,10 +288,10 @@ async def read_log_snapshot_file(
             start_line=start_line,
             line_count=line_count,
         )
-    file_path: Path | SnapshotReadError = snapshot_service.resolve_snapshot_file_path(file_payload)
-    if isinstance(file_path, SnapshotReadError):
+    full_content = snapshot_service.read_snapshot_source(source)
+    if isinstance(full_content, SnapshotReadError):
         return _build_snapshot_read_error_result(
-            read_error=file_path,
+            read_error=full_content,
             project_name=project_name,
             session_id=session_id,
             archive_name=archive_name,
@@ -300,7 +299,6 @@ async def read_log_snapshot_file(
             start_line=start_line,
             line_count=line_count,
         )
-    full_content: str = file_path.read_text(encoding="utf-8", errors="replace")
     read_chunk: SnapshotReadChunk | SnapshotReadError = snapshot_service.select_snapshot_read_chunk(
         full_content,
         start_line=start_line,
@@ -318,6 +316,7 @@ async def read_log_snapshot_file(
         )
     preview_content: str = truncate_log_preview(read_chunk.content, max_bytes)
     truncated: bool = preview_content != read_chunk.content
+    file_payload: LogSnapshotFilePayload = snapshot_service.source_to_file_payload(source)
 
     payload = ReadLogSnapshotFilePayload(
         action="read_log_snapshot_file",
@@ -441,7 +440,7 @@ async def grep_log_snapshot(
 
     grep_result: tuple[list[GrepLogSnapshotMatchPayload], int] | SnapshotGrepError = (
         snapshot_service.grep_snapshot(
-            context.metadata,
+            context,
             grep=grep,
             source_keys=source_keys,
             match_offset=match_offset,

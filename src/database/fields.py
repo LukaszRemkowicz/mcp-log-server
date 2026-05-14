@@ -24,8 +24,10 @@ class FileStorage:
         """Return the filesystem path for a stored file name."""
 
         file_path = Path(name)
-        if file_path.is_absolute() or self.location is None:
+        if self.location is None:
             return file_path.as_posix()
+        if file_path.is_absolute() or ".." in file_path.parts:
+            raise ValueError("Stored file names must be relative to storage location.")
         return (Path(self.location) / file_path).as_posix()
 
     def url(self, name: str) -> str:
@@ -40,10 +42,10 @@ class FileStorage:
 
         return Path(self.path(name)).stat().st_size
 
-    def open(self, name: str, mode: str = "rb"):
+    def open(self, name: str, mode: str = "rb", **kwargs: Any):
         """Open the stored file from the resolved filesystem path."""
 
-        return Path(self.path(name)).open(mode)
+        return Path(self.path(name)).open(mode, **kwargs)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,12 +88,12 @@ class FileReference:
             return self.storage.size(self.name)
         return Path(self.path).stat().st_size
 
-    def open(self, mode: str = "rb"):
+    def open(self, mode: str = "rb", **kwargs: Any):
         """Open the referenced file from the resolved filesystem path."""
 
         if self.storage is not None:
-            return self.storage.open(self.name, mode)
-        return Path(self.path).open(mode)
+            return self.storage.open(self.name, mode, **kwargs)
+        return Path(self.path).open(mode, **kwargs)
 
 
 class FileField(fields.Field[FileReference]):
@@ -141,7 +143,10 @@ class FileField(fields.Field[FileReference]):
                     size_bytes=value.size_bytes,
                 )
             file_reference = FileReference(name=value.name, storage=storage)
-            resolved_path = Path(file_reference.path)
+            try:
+                resolved_path = Path(file_reference.path)
+            except ValueError:
+                return file_reference
             if resolved_path.exists():
                 return FileReference(
                     name=value.name,
@@ -154,7 +159,10 @@ class FileField(fields.Field[FileReference]):
             name=name,
             storage=self.storage,
         )
-        resolved_path = Path(file_reference.path)
+        try:
+            resolved_path = Path(file_reference.path)
+        except ValueError:
+            return file_reference
         size_bytes = resolved_path.stat().st_size if resolved_path.exists() else None
         return FileReference(
             name=name,

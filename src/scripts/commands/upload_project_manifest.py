@@ -6,11 +6,11 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Literal
 
 import typer
 
-from conf import settings
 from database.config import TORTOISE_ORM
 from database.lifecycle import close_database, initialize_database
 from database.models import ProjectManifest
@@ -20,7 +20,6 @@ from decorators import async_
 from manifests.loader import list_project_manifests, load_project_manifest
 from manifests.models import Manifest
 from scripts.docker_commands import DockerCommandService
-from settings import Settings
 
 # Values are injected by docker-compose.yml and docker-compose.prod.yml on the app service.
 # They must match the Compose project name and the `services.app` key.
@@ -59,27 +58,26 @@ async def database_context() -> AsyncIterator[None]:
 
 def _load_manifests(
     *,
-    app_settings: Settings,
+    manifests_dir: Path,
     project_name: str | None,
     all_projects: bool,
 ) -> list[Manifest]:
     """Load manifests selected by command arguments."""
 
+    manifest_root = manifests_dir.expanduser()
     if all_projects:
-        manifests = list_project_manifests(app_settings.manifests_dir)
+        manifests = list_project_manifests(manifest_root)
         if not manifests:
-            raise typer.BadParameter(
-                f"No project manifest files found in {app_settings.manifests_dir}."
-            )
+            raise typer.BadParameter(f"No project manifest files found in {manifest_root}.")
         return manifests
 
     if project_name is None:
         raise typer.BadParameter("Provide PROJECT_NAME or use --all.")
 
-    manifest_path = app_settings.manifests_dir / f"{project_name}.json"
+    manifest_path = manifest_root / f"{project_name}.json"
     if not manifest_path.exists():
         raise typer.BadParameter(f"Project manifest not found: {manifest_path}")
-    return [load_project_manifest(app_settings.manifests_dir, project_name)]
+    return [load_project_manifest(manifest_root, project_name)]
 
 
 def _create_payload(manifest: Manifest) -> ProjectManifestCreate:
@@ -192,12 +190,16 @@ def _echo_upload_results(results: list[ProjectManifestCommandResult]) -> None:
 async def upload_project_manifest_internal(
     project_name: Annotated[
         str | None,
-        typer.Argument(help="Project key to load from MANIFEST_PATH/<project>.json."),
+        typer.Argument(help="Project key to load from <path>/<project>.json."),
     ] = None,
     all_projects: Annotated[
         bool,
-        typer.Option("--all", help="Upload every manifest JSON file from MANIFEST_PATH."),
+        typer.Option("--all", help="Upload every manifest JSON file from --path."),
     ] = False,
+    path: Annotated[
+        Path,
+        typer.Option("--path", help="Directory with project manifest JSON files."),
+    ] = Path("."),
 ) -> None:
     """Upload one or all configured project manifests into the database."""
 
@@ -205,7 +207,7 @@ async def upload_project_manifest_internal(
         raise typer.BadParameter("Use either PROJECT_NAME or --all, not both.")
 
     manifests = _load_manifests(
-        app_settings=settings,
+        manifests_dir=path,
         project_name=project_name,
         all_projects=all_projects,
     )
@@ -220,13 +222,17 @@ async def upload_project_manifest_internal(
 async def update_project_manifest_internal(
     project_name: Annotated[
         str,
-        typer.Option("--project", help="Project key to update from MANIFEST_PATH/<project>.json."),
+        typer.Option("--project", help="Project key to update from <path>/<project>.json."),
     ],
+    path: Annotated[
+        Path,
+        typer.Option("--path", help="Directory with project manifest JSON files."),
+    ] = Path("."),
 ) -> None:
     """Update one configured project manifest in the database."""
 
     manifest = _load_manifests(
-        app_settings=settings,
+        manifests_dir=path,
         project_name=project_name,
         all_projects=False,
     )[0]
@@ -269,12 +275,16 @@ def _run_internal_manifest_command(
 def upload_project_manifest(
     project_name: Annotated[
         str | None,
-        typer.Argument(help="Project key to load from MANIFEST_PATH/<project>.json."),
+        typer.Argument(help="Project key to load from <path>/<project>.json."),
     ] = None,
     all_projects: Annotated[
         bool,
-        typer.Option("--all", help="Upload every manifest JSON file from MANIFEST_PATH."),
+        typer.Option("--all", help="Upload every manifest JSON file from --path."),
     ] = False,
+    path: Annotated[
+        Path,
+        typer.Option("--path", help="Directory with project manifest JSON files."),
+    ] = Path("."),
 ) -> None:
     """Run the manifest upload command inside the Docker Compose app service."""
 
@@ -284,6 +294,7 @@ def upload_project_manifest(
         raise typer.BadParameter("Provide PROJECT_NAME or use --all.")
 
     command = ["uv", "run", "python", "-m", "scripts.main", "upload-project-manifest-internal"]
+    command.extend(["--path", str(path)])
     if all_projects:
         command.append("--all")
     elif project_name is not None:
@@ -294,8 +305,12 @@ def upload_project_manifest(
 def update_project_manifest(
     project_name: Annotated[
         str,
-        typer.Option("--project", help="Project key to update from MANIFEST_PATH/<project>.json."),
+        typer.Option("--project", help="Project key to update from <path>/<project>.json."),
     ],
+    path: Annotated[
+        Path,
+        typer.Option("--path", help="Directory with project manifest JSON files."),
+    ] = Path("."),
 ) -> None:
     """Run the manifest update command inside the Docker Compose app service."""
 
@@ -307,6 +322,8 @@ def update_project_manifest(
             "-m",
             "scripts.main",
             "update-project-manifest-internal",
+            "--path",
+            str(path),
             "--project",
             project_name,
         ]
