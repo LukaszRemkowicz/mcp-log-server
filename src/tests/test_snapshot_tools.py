@@ -144,6 +144,53 @@ async def test_grep_log_snapshot_rejects_unknown_source_keys(
 
 
 @pytest.mark.anyio
+async def test_grep_log_snapshot_accepts_single_source_key_alias(
+    tmp_path: Path,
+    valid_access_token: AccessToken,
+) -> None:
+    logs_dir = tmp_path / "collected-logs"
+
+    with override_settings(LOGS_DIR=logs_dir):
+        await collect_logs(
+            project_names=["landingpage"],
+            source_keys=["snapshot_text"],
+            workspace="workflow",
+            access_token=valid_access_token,
+        )
+
+        grep_result = await grep_log_snapshot(
+            grep="match",
+            project_name="landingpage",
+            source_key="snapshot_text",
+            access_token=valid_access_token,
+        )
+    grep_payload = grep_result.structured_content
+    assert grep_payload is not None
+
+    assert grep_payload["action"] == "grep_log_snapshot"
+    assert grep_payload["searched_source_keys"] == ["snapshot_text"]
+    assert grep_payload["match_count"] == 4
+
+
+@pytest.mark.anyio
+async def test_grep_log_snapshot_rejects_source_key_and_source_keys_together(
+    valid_access_token: AccessToken,
+) -> None:
+    result = await grep_log_snapshot(
+        grep="match",
+        project_name="landingpage",
+        source_key="snapshot_text",
+        source_keys=["snapshot_text"],
+        access_token=valid_access_token,
+    )
+    payload = result.structured_content
+    assert payload is not None
+
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "invalid_source_key_arguments"
+
+
+@pytest.mark.anyio
 async def test_grep_log_snapshot_supports_paged_match_windows(
     tmp_path: Path,
     valid_access_token: AccessToken,

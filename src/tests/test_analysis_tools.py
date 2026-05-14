@@ -252,6 +252,77 @@ async def test_build_incident_bundle_returns_grouped_summary(
 
 
 @pytest.mark.anyio
+async def test_analysis_tools_accept_single_source_key_alias(
+    tmp_path: Path,
+    valid_access_token: AccessToken,
+) -> None:
+    logs_dir = tmp_path / "collected-logs"
+    with override_settings(LOGS_DIR=logs_dir):
+        await collection_tools.collect_logs(
+            project_names=["landingpage"],
+            source_keys=["app_file"],
+            workspace=LogWorkspace.WORKFLOW,
+            access_token=valid_access_token,
+        )
+        group_result = await group_errors(
+            project_name="landingpage",
+            source_key="app_file",
+            access_token=valid_access_token,
+        )
+        bundle_result = await build_incident_bundle(
+            project_name="landingpage",
+            source_key="app_file",
+            access_token=valid_access_token,
+        )
+        filtered_result = await create_filtered_view(
+            project_name="landingpage",
+            source_key="app_file",
+            access_token=valid_access_token,
+        )
+
+    group_payload = group_result.structured_content
+    bundle_payload = bundle_result.structured_content
+    filtered_payload = filtered_result.structured_content
+    assert group_payload is not None
+    assert bundle_payload is not None
+    assert filtered_payload is not None
+
+    assert group_payload["searched_source_keys"] == ["app_file"]
+    assert bundle_payload["searched_source_keys"] == ["app_file"]
+    assert filtered_payload["searched_source_keys"] == ["app_file"]
+
+
+@pytest.mark.anyio
+async def test_analysis_tools_reject_source_key_and_source_keys_together(
+    valid_access_token: AccessToken,
+) -> None:
+    group_result = await group_errors(
+        project_name="landingpage",
+        source_key="app_file",
+        source_keys=["app_file"],
+        access_token=valid_access_token,
+    )
+    bundle_result = await build_incident_bundle(
+        project_name="landingpage",
+        source_key="app_file",
+        source_keys=["app_file"],
+        access_token=valid_access_token,
+    )
+    filtered_result = await create_filtered_view(
+        project_name="landingpage",
+        source_key="app_file",
+        source_keys=["app_file"],
+        access_token=valid_access_token,
+    )
+
+    for result in (group_result, bundle_result, filtered_result):
+        payload = result.structured_content
+        assert payload is not None
+        assert payload["status"] == "error"
+        assert payload["error_code"] == "invalid_source_key_arguments"
+
+
+@pytest.mark.anyio
 async def test_build_incident_bundle_rejects_invalid_max_groups(
     valid_access_token: AccessToken,
 ) -> None:

@@ -115,9 +115,19 @@ Currently implemented tools:
 
 - `analyze_daily_log_bundle`
 - `collect_logs`
+- `close_agent_session`
+- `list_log_snapshot_files`
+- `read_log_snapshot_file`
+- `grep_log_snapshot`
+- `create_filtered_view`
+- `group_errors`
+- `build_incident_bundle`
+- `suggest_followup_window`
 - `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
+- `read_container_file`
+- `list_container_directory`
 
 ### Resources
 
@@ -180,7 +190,9 @@ Important collection response note:
 - session collection payloads include the effective `session_id`; agents reuse
   that value for follow-up collection, read, grep, and analysis calls in the
   same investigation
-- explicit agent-side session closing is not implemented yet
+- explicit agent-side session closing is implemented through
+  `close_agent_session`; it marks audit metadata only and leaves snapshot files
+  readable
 - `tail_lines` is optional; if omitted, agents get a warning that full source
   output may be slow or large
 - `LOGS_DIR` is treated as a logs root, not a flat one-run output path

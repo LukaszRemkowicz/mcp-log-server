@@ -22,9 +22,18 @@ COLLECT_LOGS_TOOL_DESCRIPTION = (
     "or add archive_name when you need one archived workflow artifact."
 )
 
+CLOSE_AGENT_SESSION_TOOL_DESCRIPTION = (
+    "Close one interactive investigation session after the agent is done with "
+    "session-scoped collection and follow-up reads. This marks the session as "
+    "closed in audit metadata without deleting snapshot files. Use the exact "
+    "session_id returned by collect_logs. The fixed workflow-agent cannot close "
+    "interactive sessions."
+)
+
 BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION = (
     "Build one compact incident summary from a persisted snapshot. "
     "Use it as an entry point, not as a substitute for raw log context. "
+    "Use source_key for one source or source_keys for multiple sources; do not pass both. "
     "Before drawing final conclusions about timing, clustering, or severity, "
     "recollect a tighter since/until window or reopen the relevant snapshot files "
     "and grep results."
@@ -34,6 +43,7 @@ CREATE_FILTERED_VIEW_TOOL_DESCRIPTION = (
     "Create a cleaned deterministic view from a persisted raw snapshot. "
     "This keeps the raw snapshot as the source of truth while removing "
     "low-signal lines through manifest-selected noise profiles. "
+    "Use source_key for one source or source_keys for multiple sources; do not pass both. "
     "Use it when you want a smaller analysis view before reading or grepping "
     "raw files directly."
 )
@@ -41,9 +51,17 @@ CREATE_FILTERED_VIEW_TOOL_DESCRIPTION = (
 GROUP_ERRORS_TOOL_DESCRIPTION = (
     "Group repeated error-like lines from one persisted workflow or session "
     "snapshot into compact triage findings. Use it after collect_logs when you "
-    "need recurring failures, timestamps, source keys, and raw line references "
+    "need recurring failures, timestamps, source keys, and raw line references. "
+    "Use source_key for one source or source_keys for multiple sources, but not both, "
     "before deciding whether to grep, read files, or recollect a narrower "
     "since/until window."
+)
+
+GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION = (
+    "Search one persisted workflow or session snapshot with controlled grep "
+    "semantics. Use grep for the text pattern. Omit source filters to search "
+    "all saved files, pass source_key for one source, or pass source_keys for "
+    "multiple sources; do not pass both."
 )
 
 SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION = (
@@ -85,6 +103,7 @@ LOG_ANALYSIS_CAUTIONS = [
 
 COLLECT_LOGS_NEXT_STEP_TIPS = [
     "For session investigations, use session_id plus project_name for later follow-up tools.",
+    "Call close_agent_session with the session_id when the interactive investigation is done.",
     (
         "For workflow investigations, use project_name for the newest workflow artifact, "
         "or add archive_name for one archived workflow artifact."
@@ -95,8 +114,8 @@ COLLECT_LOGS_NEXT_STEP_TIPS = [
 
 LIST_SNAPSHOT_NEXT_STEP_TIPS = [
     (
-        "Choose one source_key from this inventory before calling "
-        "read_log_snapshot_file or grep_log_snapshot."
+        "Choose one source_key for read_log_snapshot_file, or pass it as "
+        "source_key/source_keys to grep and analysis tools."
     ),
     "Omit archive_name when you intentionally want the newest workflow artifact.",
 ]

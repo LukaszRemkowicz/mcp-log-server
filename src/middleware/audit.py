@@ -107,6 +107,34 @@ def _workflow_agent_session_error(token: AccessToken | None) -> AgentToolErrorRe
     )
 
 
+def _client_id_missing_error() -> AgentToolErrorResult:
+    """Return an agent-facing error when a JWT lacks stable caller identity."""
+
+    return build_agent_tool_error_result(
+        error_code="invalid_client_id",
+        message="Authenticated JWT must include a non-empty client_id.",
+        retry_tips=[
+            "Retry with a JWT issued for a concrete MCP client.",
+            "Regenerate local development JWTs if they were created before client_id was required.",
+        ],
+        details={"required_claim": "client_id"},
+    )
+
+
+def _has_valid_client_id(token: AccessToken | None) -> bool:
+    """Return whether the authenticated token has a usable MCP caller id."""
+
+    if token is None:
+        return True
+    claim_client_id = token.claims.get("client_id")
+    return bool(
+        isinstance(claim_client_id, str)
+        and claim_client_id.strip()
+        and token.client_id
+        and token.client_id.strip()
+    )
+
+
 def _prepare_collect_logs_session_id(
     context: MiddlewareContext[mt.CallToolRequestParams],
 ) -> UUID:
@@ -211,6 +239,8 @@ class AccessAuditMiddleware(Middleware):
         started_at = perf_counter()
         tool_name = context.message.name
         arguments: dict[str, Any] = dict(context.message.arguments or {})
+        if not _has_valid_client_id(token):
+            return _client_id_missing_error()
         if (
             tool_name == "collect_logs"
             and arguments.get("workspace") == "session"

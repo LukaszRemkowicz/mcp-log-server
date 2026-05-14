@@ -21,6 +21,7 @@ def register_mcp_components() -> None:
     import tools.analysis  # noqa: F401
     import tools.collection  # noqa: F401
     import tools.container_inspection  # noqa: F401
+    import tools.sessions  # noqa: F401
     import tools.snapshots  # noqa: F401
     import tools.system  # noqa: F401
     import tools.workflow  # noqa: F401

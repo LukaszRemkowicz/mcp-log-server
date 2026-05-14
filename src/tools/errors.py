@@ -28,7 +28,7 @@ from utils.mcp_errors import (
     build_agent_error_payload,
     build_agent_tool_error_result,
 )
-from utils.types import JSONObject
+from utils.types import JSONObject, JSONValue
 
 
 @dataclass(frozen=True)
@@ -222,6 +222,28 @@ def build_snapshot_tool_error_result(
         message=message,
         retry_tips=retry_tips,
         details=details,
+    )
+
+
+def build_invalid_source_key_arguments_result(
+    *,
+    message: str,
+    source_key: str | None,
+    source_keys: list[str] | None,
+) -> ToolResult:
+    """Build the shared tool-boundary error for source_key/source_keys misuse."""
+
+    source_keys_detail: JSONValue = list(source_keys) if source_keys is not None else None
+    return build_snapshot_tool_error_result(
+        error_code="invalid_source_key_arguments",
+        message=message,
+        retry_tips=[
+            "Use source_key for one source, or source_keys for multiple sources, but not both.",
+        ],
+        details={
+            "source_key": source_key,
+            "source_keys": source_keys_detail,
+        },
     )
 
 

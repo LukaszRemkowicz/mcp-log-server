@@ -14,6 +14,7 @@ from auth.scopes import (
     MCP_HEALTH_READ_SCOPE,
     MCP_STATUS_READ_SCOPE,
     PROJECTS_READ_SCOPE,
+    SESSION_CLOSE_SCOPE,
     WORKFLOW_BOOTSTRAP_SCOPE,
     WORKFLOW_SKILLS_READ_SCOPE,
 )
@@ -123,6 +124,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
             {
                 "read_container_file",
                 "list_container_directory",
+                "close_agent_session",
             },
         ),
         (
@@ -131,6 +133,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 PROJECTS_READ_SCOPE,
                 LOGS_COLLECT_SCOPE,
                 CONTAINER_FILES_READ_SCOPE,
+                SESSION_CLOSE_SCOPE,
                 MCP_STATUS_READ_SCOPE,
                 MCP_HEALTH_READ_SCOPE,
             ],
@@ -147,6 +150,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "list_projects",
                 "read_container_file",
                 "list_container_directory",
+                "close_agent_session",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
             },
@@ -1142,3 +1146,36 @@ def test_api_rejects_invalid_bearer_tokens(
 
     assert response.status_code == 401
     assert response.json()["error"] == "invalid_token"
+
+
+def test_tool_call_api_rejects_jwt_without_client_id(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify authenticated tool calls require a stable JWT client_id."""
+
+    token = custom_jwt_token(
+        "codex-agent",
+        [SESSION_CLOSE_SCOPE],
+        "codex-agent",
+        {"client_id": ""},
+    )
+
+    response = jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "missing-client-id",
+            "method": "tools/call",
+            "params": {
+                "name": "close_agent_session",
+                "arguments": {"session_id": "ef5e1daa-d06b-479c-926d-8107639bd467"},
+            },
+        },
+    )
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "invalid_client_id"

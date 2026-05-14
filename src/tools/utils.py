@@ -17,6 +17,10 @@ RETENTION_DURATION_PATTERN = re.compile(
 SNAPSHOT_METADATA_FILE_NAME = "snapshot_metadata.json"
 
 
+class SourceKeyArgumentError(ValueError):
+    """Raised when one tool receives an invalid source_key/source_keys shape."""
+
+
 def parse_snapshot_retention(value: str) -> timedelta:
     """Parse one snapshot retention setting like `30d`, `7days`, `1h`, or `10m`."""
 
@@ -63,3 +67,21 @@ def load_snapshot_metadata_from_json(metadata_json: str) -> LogSnapshotMetadata:
     metadata = json.loads(metadata_json)
     metadata.pop("snapshot_id", None)
     return LogSnapshotMetadata.model_validate(metadata)
+
+
+def resolve_source_keys_alias(
+    source_keys: list[str] | None,
+    source_key: str | None,
+) -> list[str] | None:
+    """Return canonical source_keys from plural input or the single-source alias."""
+
+    if source_keys is not None and source_key is not None:
+        raise SourceKeyArgumentError("Provide either source_key or source_keys, not both.")
+    if source_keys is not None:
+        return source_keys
+    if source_key is None:
+        return None
+    stripped_source_key = source_key.strip()
+    if not stripped_source_key:
+        raise SourceKeyArgumentError("source_key must be a non-empty string.")
+    return [stripped_source_key]

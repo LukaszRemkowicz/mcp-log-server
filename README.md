@@ -32,7 +32,7 @@ under `src/agent_assets/`.
 
 Current MCP workflow surface includes:
 
-- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`, `create_filtered_view`, `group_errors`, `build_incident_bundle`, `suggest_followup_window`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `list_container_directory`
+- tools: `analyze_daily_log_bundle`, `collect_logs`, `close_agent_session`, `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`, `create_filtered_view`, `group_errors`, `build_incident_bundle`, `suggest_followup_window`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `list_container_directory`
 - resources: concrete workflow skill resources such as
   `skill://workflow/project_context`, `skill://workflow/severity_guide`,
   `skill://workflow/bot_detection`
@@ -414,6 +414,7 @@ Current example JWT capabilities:
   - `get_mcp_health_check`
   - `read_container_file`
   - `list_container_directory`
+  - `close_agent_session`
 
 Important:
 
@@ -699,7 +700,7 @@ Command:
 
 ```bash
 curl -sS \
-  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Authorization: Bearer <codex_agent_jwt>' \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json' \
   -d '{
@@ -821,7 +822,7 @@ Example session collection call that starts a new MCP-owned session:
 
 ```bash
 curl -sS \
-  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Authorization: Bearer <codex_agent_jwt>' \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json' \
   -d '{
@@ -845,7 +846,7 @@ project into the same investigation session:
 
 ```bash
 curl -sS \
-  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Authorization: Bearer <codex_agent_jwt>' \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json' \
   -d '{
@@ -858,6 +859,27 @@ curl -sS \
         "project_names":["landingpage","traefik"],
         "source_keys":["backend"],
         "workspace":"session",
+        "session_id":"<returned_session_id>"
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Close the interactive session when the investigation is done:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <codex_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"close-session",
+    "method":"tools/call",
+    "params":{
+      "name":"close_agent_session",
+      "arguments":{
         "session_id":"<returned_session_id>"
       }
     }
@@ -896,6 +918,8 @@ Artifact lookup guidance:
 - use `archive_name` plus `project_name` when you want to keep reading or
   grepping the same archived workflow artifact later
 - use `session_id` plus `project_name` for session workspaces
+- call `close_agent_session` when an interactive session investigation is done;
+  this marks audit metadata only and keeps existing snapshot files readable
 
 List files from the latest workflow artifact:
 
@@ -957,12 +981,15 @@ curl -sS \
       "arguments":{
         "project_name":"landingpage",
         "grep":"/health",
-        "source_keys":["backend"]
+        "source_key":"backend"
       }
     }
   }' \
   http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
 ```
+
+Use exactly one source selector: `source_key` for a single source, or
+`source_keys` for multiple sources such as `["backend","nginx"]`.
 
 Create one deterministic cleaned view from a saved raw artifact:
 
@@ -979,14 +1006,17 @@ curl -sS \
       "name":"create_filtered_view",
       "arguments":{
         "project_name":"landingpage",
-        "source_keys":["backend"],
-        "max_lines":100,
-        "excluded_sample_limit":10
+        "source_key":"backend",
+        "max_lines":100
       }
     }
   }' \
   http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
 ```
+
+`create_filtered_view`, `group_errors`, and `build_incident_bundle` accept
+`source_key` for one source and `source_keys` for multiple sources. Do not pass
+both in the same call.
 
 Group repeated error-like findings from one saved snapshot:
 
@@ -1003,7 +1033,7 @@ curl -sS \
       "name":"group_errors",
       "arguments":{
         "project_name":"landingpage",
-        "source_keys":["backend"],
+        "source_key":"backend",
         "max_groups":20
       }
     }
@@ -1026,7 +1056,7 @@ curl -sS \
       "name":"build_incident_bundle",
       "arguments":{
         "project_name":"landingpage",
-        "source_keys":["backend"],
+        "source_key":"backend",
         "max_groups":20
       }
     }

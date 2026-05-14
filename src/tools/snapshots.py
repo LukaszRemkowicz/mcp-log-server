@@ -22,11 +22,12 @@ from services.log_snapshots import (
     SnapshotReadError,
 )
 from tools.agent_hints import (
+    GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION,
     GREP_SNAPSHOT_NEXT_STEP_TIPS,
     LIST_SNAPSHOT_NEXT_STEP_TIPS,
     READ_SNAPSHOT_NEXT_STEP_TIPS,
 )
-from tools.errors import build_snapshot_tool_error_result
+from tools.errors import build_invalid_source_key_arguments_result, build_snapshot_tool_error_result
 from tools.models import (
     GrepLogSnapshotMatchPayload,
     GrepLogSnapshotPayload,
@@ -34,6 +35,7 @@ from tools.models import (
     LogSnapshotFilePayload,
     ReadLogSnapshotFilePayload,
 )
+from tools.utils import SourceKeyArgumentError, resolve_source_keys_alias
 from utils.log_preview import truncate_log_preview
 from utils.types import JSONObject, JSONValue
 
@@ -351,7 +353,10 @@ async def read_log_snapshot_file(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@workflow_discoverable_tool(LOGS_COLLECT_SCOPE)
+@workflow_discoverable_tool(
+    LOGS_COLLECT_SCOPE,
+    mcp_description=GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION,
+)
 @project_authorized_tool
 async def grep_log_snapshot(
     project_name: str,
@@ -359,6 +364,7 @@ async def grep_log_snapshot(
     session_id: str | None = None,
     archive_name: str | None = None,
     source_keys: list[str] | None = None,
+    source_key: str | None = None,
     match_offset: int = 0,
     match_limit: int = DEFAULT_GREP_MATCH_LIMIT,
     access_token: AccessToken | None = CurrentAccessToken(),
@@ -385,6 +391,9 @@ async def grep_log_snapshot(
       optional file subset inside the snapshot. Omit it to search every saved
       source in the snapshot, or provide it to limit the search to specific
       sources such as only `backend` or only `nginx`.
+    - `source_key`
+      optional single-source alias. `source_key="backend"` is equivalent to
+      `source_keys=["backend"]`.
     - `match_offset` and `match_limit`
       page through larger match sets in smaller windows.
 
@@ -415,6 +424,14 @@ async def grep_log_snapshot(
             retry_tips=[f"Retry with match_limit set between 1 and {MAX_GREP_MATCHES}."],
         )
 
+    try:
+        source_keys = resolve_source_keys_alias(source_keys, source_key)
+    except SourceKeyArgumentError as error:
+        return build_invalid_source_key_arguments_result(
+            message=str(error),
+            source_key=source_key,
+            source_keys=source_keys,
+        )
     source_keys_detail: list[JSONValue] = list(source_keys or [])
     context: SnapshotContext | SnapshotLookupError = await _load_snapshot_context(
         project_name=project_name,

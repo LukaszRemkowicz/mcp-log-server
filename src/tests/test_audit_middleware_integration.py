@@ -27,7 +27,11 @@ async def test_audit_middleware_persists_agent_call_for_collect_logs(
         token="test-token",
         client_id="codex-client",
         scopes=["logs:collect"],
-        claims={"sub": "codex-subject", "client_type": "codex"},
+        claims={
+            "sub": "codex-subject",
+            "client_id": "codex-client",
+            "client_type": "codex",
+        },
     )
     mocker.patch("middleware.audit.get_access_token", return_value=token)
     context = MiddlewareContext(
@@ -103,7 +107,11 @@ async def test_audit_middleware_returns_agent_error_when_agent_call_create_fails
         token="test-token",
         client_id="workflow-client",
         scopes=["logs:collect"],
-        claims={"sub": "workflow-subject", "client_type": "workflow_agent"},
+        claims={
+            "sub": "workflow-subject",
+            "client_id": "workflow-client",
+            "client_type": "workflow_agent",
+        },
     )
     mocker.patch("middleware.audit.get_access_token", return_value=token)
     mocker.patch(
@@ -133,3 +141,37 @@ async def test_audit_middleware_returns_agent_error_when_agent_call_create_fails
     assert mcp_result.structuredContent["error_code"] == "agent_call_unavailable"
     assert mcp_result.structuredContent["message"] == "collect_logs is temporarily unavailable."
     assert mcp_result.structuredContent["retry_tips"] == [AGENT_CALL_UNAVAILABLE_RETRY_TIP]
+
+
+@pytest.mark.anyio
+async def test_audit_middleware_rejects_tool_call_without_client_id(
+    mocker: MockerFixture,
+) -> None:
+    """Verify authenticated tool calls require a stable JWT client_id."""
+
+    token = AccessToken(
+        token="test-token",
+        client_id="",
+        scopes=["logs.collect"],
+        claims={"sub": "codex-subject", "client_type": "codex"},
+    )
+    mocker.patch("middleware.audit.get_access_token", return_value=token)
+    context = MiddlewareContext(
+        message=mt.CallToolRequestParams(
+            name="close_agent_session",
+            arguments={"session_id": "ef5e1daa-d06b-479c-926d-8107639bd467"},
+        )
+    )
+    middleware = AccessAuditMiddleware()
+    call_next = mocker.AsyncMock()
+
+    result = await middleware.on_call_tool(
+        context,
+        cast(CallNext[mt.CallToolRequestParams, ToolResult], call_next),
+    )
+    mcp_result = cast(mt.CallToolResult, result.to_mcp_result())
+
+    call_next.assert_not_called()
+    assert mcp_result.isError is True
+    assert mcp_result.structuredContent is not None
+    assert mcp_result.structuredContent["error_code"] == "invalid_client_id"

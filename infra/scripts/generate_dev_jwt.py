@@ -22,6 +22,7 @@ from auth.scopes import (  # noqa: E402
     MCP_HEALTH_READ_SCOPE,
     MCP_STATUS_READ_SCOPE,
     PROJECTS_READ_SCOPE,
+    SESSION_CLOSE_SCOPE,
     WORKFLOW_BOOTSTRAP_SCOPE,
     WORKFLOW_SKILLS_READ_SCOPE,
 )
@@ -67,6 +68,7 @@ def build_example_token_payloads(settings: Settings) -> dict[str, dict[str, obje
                     CONTAINER_FILES_READ_SCOPE,
                     LOGS_COLLECT_SCOPE,
                     PROJECTS_READ_SCOPE,
+                    SESSION_CLOSE_SCOPE,
                     MCP_STATUS_READ_SCOPE,
                     MCP_HEALTH_READ_SCOPE,
                 )
