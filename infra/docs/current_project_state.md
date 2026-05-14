@@ -249,6 +249,8 @@ Characteristics:
   `landingpage`'s local `5436` binding separate
 - runs the `test` service against the separate `mcp_log_server_test` database,
   not the local app database
+- runs curl-driven HTTP MCP E2E checks through `infra/scripts/run_http_e2e.sh`
+  against `mcp_log_server_test`, not the local app database
 
 ### Production Compose
 

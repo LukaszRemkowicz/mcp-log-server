@@ -217,6 +217,9 @@ location = "./migrations"
 src_folder = "./src"
 ```
 
+Typer command documentation lives in
+[src/scripts/README.md](/Users/lukaszremkowicz/Projects/mcp-log-server/src/scripts/README.md).
+
 Generate new migration files only after the related model structure has been
 reviewed and approved.
 
@@ -360,7 +363,7 @@ calls are evaluated per bearer token, not once at process startup.
 Generate example JWTs locally:
 
 ```bash
-uv run python infra/scripts/generate_dev_jwt.py
+uv run commands generate-dev-jwt
 ```
 
 That prints a JSON payload with:
@@ -373,7 +376,20 @@ That prints a JSON payload with:
 The usual local flow is to save it into `.agent/DEV_JWT_TOKENS.json`:
 
 ```bash
-uv run python infra/scripts/generate_dev_jwt.py > .agent/DEV_JWT_TOKENS.json
+uv run commands generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
+```
+
+When `--output-file` is provided, the command writes the token JSON to that
+path instead of printing tokens to the console. Parent directories are created
+automatically. Without `--output-file`, the JSON is printed to stdout.
+
+The command also accepts explicit identity claim overrides when you need
+tokens for a different local caller:
+
+```bash
+uv run commands generate-dev-jwt \
+  --codex-client-id local-codex \
+  --codex-client-type codex
 ```
 
 Then export the values you want to use with `curl`:
@@ -571,7 +587,7 @@ Important response note:
 For local development, generate fresh example JWTs with:
 
 ```bash
-uv run python infra/scripts/generate_dev_jwt.py > .agent/DEV_JWT_TOKENS.json
+uv run commands generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
 ```
 
 Refresh them when:
@@ -1368,6 +1384,10 @@ Current checks and release flows:
     tests run
   - covers docker-backed collection logic with mocks inside pytest
 - curl-driven MCP HTTP end-to-end checks via `infra/scripts/run_http_e2e.sh`
+  - runs against `mcp_log_server_test` by default and refuses database names
+    that do not end in `_test`
+  - recreates and migrates the test database before uploading temporary
+    fixture manifests
 - Docker Compose validation
 - Docker image build check
 - CodeQL analysis on pull requests and the weekly schedule
