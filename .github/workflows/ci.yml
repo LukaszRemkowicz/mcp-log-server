@@ -45,7 +45,6 @@ jobs:
       postgres_user: mcp_log_server
       postgres_password: mcp-log-server-local-password
       postgres_port: "5432"
-      test_command: uv run migrate && uv run pytest
       test_environment: |
         DATABASE_HOST=localhost
         DATABASE_PORT=5432

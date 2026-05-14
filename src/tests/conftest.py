@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import json
 import shutil
+import subprocess
 import time
 from collections.abc import AsyncIterator, Generator
 from contextlib import contextmanager
@@ -34,6 +35,10 @@ AccessTokenClaims = dict[str, Any] | None
 TEST_FIXTURES_ROOT = Path(__file__).parent / "fixtures"
 TEST_MANIFESTS_DIR = TEST_FIXTURES_ROOT / "manifests"
 TEST_FILE_SOURCE_ROOT = TEST_FIXTURES_ROOT / "logs"
+INIT_DB_REQUIRED_MESSAGES = (
+    "You need to run `aerich init-db` first",
+    "You may need to run `aerich init-db` first",
+)
 
 
 class CustomJwtToken(Protocol):
@@ -130,6 +135,39 @@ def override_settings(
         yield effective_settings
     finally:
         set_settings(previous_settings)
+
+
+def _run_aerich_for_tests(*args: str) -> subprocess.CompletedProcess[str]:
+    """Run one Aerich command against the current test settings database."""
+
+    return subprocess.run(
+        ["aerich", *args],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+
+def _raise_migration_error(result: subprocess.CompletedProcess[str]) -> None:
+    """Raise a readable pytest startup error for failed test migrations."""
+
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    raise RuntimeError(f"Failed to prepare test database migrations:\n{output}")
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:  # noqa: ARG001
+    """Apply database migrations before DB-backed test fixtures touch tables."""
+
+    result = _run_aerich_for_tests("upgrade")
+    output = f"{result.stdout or ''}{result.stderr or ''}"
+    if result.returncode == 0:
+        return
+    if any(message in output for message in INIT_DB_REQUIRED_MESSAGES):
+        init_result = _run_aerich_for_tests("init-db")
+        if init_result.returncode != 0:
+            _raise_migration_error(init_result)
+        return
+    _raise_migration_error(result)
 
 
 async def _flush_database_tables() -> None:

@@ -38,8 +38,8 @@ Current persistence note:
   `CollectLogsSource`; `workflow_inventory.json` is no longer written or read
 - session artifacts also write `CollectLogs` and `CollectLogsSource` rows for
   follow-up tools
-- `snapshot_metadata.json` may still be written beside session files for local
-  artifact readability, but MCP runtime lookup does not depend on it
+- `snapshot_metadata.json` is not a runtime metadata source; MCP tools use DB
+  rows and DB file references for lookup
 
 ## Implementation Status
 
@@ -88,6 +88,13 @@ Completed Phase 4 database-integration subphases:
 - Phase 4d. Database Services
   Database service modules exist for agent call and project manifest metadata,
   with DB-marked service tests running against Compose Postgres.
+- Phase 4e. Service Integration
+  `collect_logs` writes DB metadata for saved artifacts, session ids are
+  resolved by MCP/runtime code, and agent-call audit rows are persisted from
+  middleware.
+- Phase 4f. Remaining Runtime Integration
+  Snapshot read/grep, analysis tools, project listing, API tests, and HTTP E2E
+  paths use DB-backed metadata.
 
 Current Phase 4 boundary:
 
@@ -97,6 +104,8 @@ Current Phase 4 boundary:
 - `collect_logs`, snapshot read/grep, and analysis tools use DB artifact rows
   as their runtime lookup source
 - workflow lookup is DB-only; no workflow inventory JSON is written or read
+- filesystem usage is limited to raw persisted log files referenced by DB file
+  fields; do not add filesystem metadata fallback or bypass paths
 
 ## Current MCP Surface
 
