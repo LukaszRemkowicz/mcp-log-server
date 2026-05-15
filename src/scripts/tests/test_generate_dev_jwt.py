@@ -7,6 +7,7 @@ from base64 import urlsafe_b64decode
 from pathlib import Path
 from typing import Any
 
+from click.utils import strip_ansi
 from typer.testing import CliRunner
 
 from scripts.main import app
@@ -46,14 +47,15 @@ def test_generate_dev_jwt_command_writes_tokens_to_output_file() -> None:
 
 def test_generate_dev_jwt_help_describes_command_purpose() -> None:
     result = runner.invoke(app, ["generate-dev-jwt", "--help"])
+    output = strip_ansi(result.output)
 
     assert result.exit_code == 0
-    assert "Generate signed local development JWTs for MCP clients." in result.output
-    assert "--output-file" in result.output
-    assert "--workflow-client-id" in result.output
-    assert "workflow-agent" in result.output
-    assert "--codex-client-type" in result.output
-    assert "codex" in result.output
+    assert "Generate signed local development JWTs for MCP clients." in output
+    assert "--output-file" in output
+    assert "--workflow-client-id" in output
+    assert "workflow-agent" in output
+    assert "--codex-client-type" in output
+    assert "codex" in output
 
 
 def test_generate_dev_jwt_command_accepts_client_claim_overrides() -> None:
