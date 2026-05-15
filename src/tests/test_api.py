@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -24,7 +25,9 @@ from tests.conftest import (
     FileBackedProjectContext,
     JsonRpcClient,
     MultiProjectCollectContext,
+    _seed_project_manifests,
     build_collect_logs_request,
+    copy_manifest_and_log_fixtures,
     override_settings,
 )
 from tools import collection as collection_tools
@@ -488,6 +491,177 @@ def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     assert project_payload["sources"][0]["line_count"] == 3
 
 
+def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify snapshot grep/read edge cases through the real JSON-RPC path."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["snapshot_text"]),
+        )
+        grep_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "grep-source-key-window",
+                "method": "tools/call",
+                "params": {
+                    "name": "grep_log_snapshot",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "snapshot_text",
+                        "grep": "match",
+                        "match_offset": 1,
+                        "match_limit": 2,
+                    },
+                },
+            },
+        )
+        read_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "read-line-window",
+                "method": "tools/call",
+                "params": {
+                    "name": "read_log_snapshot_file",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "snapshot_text",
+                        "start_line": 2,
+                        "line_count": 2,
+                        "max_bytes": 100,
+                    },
+                },
+            },
+        )
+
+    grep_payload = grep_response.json()["result"]["structuredContent"]
+    read_payload = read_response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert grep_response.status_code == 200
+    assert grep_response.json()["result"]["isError"] is False
+    assert grep_payload["searched_source_keys"] == ["snapshot_text"]
+    assert grep_payload["matched_source_keys"] == ["snapshot_text"]
+    assert grep_payload["match_offset"] == 1
+    assert grep_payload["match_limit"] == 2
+    assert grep_payload["match_count"] == 4
+    assert grep_payload["returned_match_count"] == 2
+    assert grep_payload["truncated"] is True
+    assert [match["line"] for match in grep_payload["matches"]] == ["match two", "match three"]
+    assert [match["line_number"] for match in grep_payload["matches"]] == [3, 4]
+    assert all(match["line_truncated"] is False for match in grep_payload["matches"])
+    assert read_response.status_code == 200
+    assert read_response.json()["result"]["isError"] is False
+    assert read_payload["source_key"] == "snapshot_text"
+    assert read_payload["start_line"] == 2
+    assert read_payload["line_count"] == 2
+    assert read_payload["content"] == "match one\nmatch two\n"
+    assert read_payload["truncated"] is False
+
+
+def test_grep_log_snapshot_api_truncates_large_matching_lines(
+    tmp_path: Path,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify grep line truncation is preserved through FastMCP serialization."""
+
+    fixture_root = copy_manifest_and_log_fixtures(tmp_path)
+    long_line = "match " + ("x" * 4_000)
+    (fixture_root / "logs" / "landingpage" / "app_file.log").write_text(
+        f"{long_line}\n",
+        encoding="utf-8",
+    )
+    assert jsonrpc.api_client.portal is not None
+    jsonrpc.api_client.portal.call(_seed_project_manifests, fixture_root / "manifests")
+    logs_dir = tmp_path / "collected-logs"
+
+    with override_settings(LOGS_DIR=logs_dir):
+        collect_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["app_file"]),
+        )
+        grep_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "grep-long-line",
+                "method": "tools/call",
+                "params": {
+                    "name": "grep_log_snapshot",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "app_file",
+                        "grep": "match",
+                    },
+                },
+            },
+        )
+
+    payload = grep_response.json()["result"]["structuredContent"]
+    match = payload["matches"][0]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert grep_response.status_code == 200
+    assert grep_response.json()["result"]["isError"] is False
+    assert payload["match_count"] == 1
+    assert match["line_truncated"] is True
+    assert len(match["line"].encode("utf-8")) == 2_000
+    assert match["line"] == long_line[:2_000]
+
+
+def test_snapshot_tools_api_reject_conflicting_source_key_arguments(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify source_key/source_keys conflicts are rejected at the MCP boundary."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["snapshot_text"]),
+        )
+        response = jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "grep-conflicting-source-keys",
+                "method": "tools/call",
+                "params": {
+                    "name": "grep_log_snapshot",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "snapshot_text",
+                        "source_keys": ["snapshot_text"],
+                        "grep": "match",
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "invalid_source_key_arguments"
+    assert payload["details"] == {
+        "source_key": "snapshot_text",
+        "source_keys": ["snapshot_text"],
+    }
+
+
 @pytest.mark.parametrize(
     ("tool_name", "expected_action"),
     [
@@ -547,6 +721,96 @@ def test_analysis_tools_api_read_collected_snapshot(
         and group["first_seen"]["output_file"] == "workflow/landingpage/latest/app_file.log"
         for group in groups
     )
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    ["group_errors", "build_incident_bundle", "create_filtered_view"],
+)
+def test_analysis_tools_api_support_single_source_alias(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+    tool_name: str,
+) -> None:
+    """Verify analysis tools accept source_key as the single-source alias."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["app_file"]),
+        )
+        response = jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": f"{tool_name}-source-key-alias",
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "app_file",
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["searched_source_keys"] == ["app_file"]
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    ["group_errors", "build_incident_bundle", "create_filtered_view"],
+)
+def test_analysis_tools_api_reject_conflicting_source_key_arguments(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+    tool_name: str,
+) -> None:
+    """Verify analysis tools reject source_key and source_keys together."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["app_file"]),
+        )
+        response = jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": f"{tool_name}-conflicting-source-keys",
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "app_file",
+                        "source_keys": ["app_file"],
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "invalid_source_key_arguments"
+    assert payload["details"] == {
+        "source_key": "app_file",
+        "source_keys": ["app_file"],
+    }
 
 
 def test_create_filtered_view_api_reads_collected_snapshot(
