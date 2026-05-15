@@ -1,18 +1,15 @@
 from __future__ import annotations
 
-import inspect
 import json
 import shutil
 import subprocess
 import time
 from collections.abc import AsyncIterator, Generator
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol, overload
-from uuid import uuid4
 
-import asyncpg  # type: ignore[import-untyped]
 import httpx
 import pytest
 from fastmcp.server.auth import AccessToken
@@ -21,10 +18,13 @@ from joserfc.jwk import OctKey
 from starlette.testclient import TestClient
 from tortoise import Tortoise, connections
 
-from app import create_application
+from app import create_application, mcp
 from auth.auth_provider import build_auth_provider
 from auth.scopes import LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE
+from cache import clear_cache
 from conf import set_settings, settings
+from core.types import LogWorkspace
+from database.models import Authentication
 from database.schemas import ProjectManifestCreate, ProjectManifestUpdate
 from database.services.project_manifests import ProjectManifestService as ProjectManifestDBService
 from manifests.loader import list_project_manifests
@@ -40,6 +40,20 @@ INIT_DB_REQUIRED_MESSAGES = (
     "You need to run `aerich init-db` first",
     "You may need to run `aerich init-db` first",
 )
+
+
+@asynccontextmanager
+async def _test_lifespan_without_database(_app: object) -> AsyncIterator[None]:
+    """Run FastMCP HTTP lifespan without app-owned database startup/shutdown.
+
+    API tests still need FastMCP's lifespan machinery because the HTTP
+    transport initializes its request/session manager there. The test database
+    fixture owns Tortoise setup, seeding, flushing, and shutdown, so the app's
+    production DB lifespan must not run a second Tortoise lifecycle inside the
+    TestClient portal loop.
+    """
+
+    yield
 
 
 class CustomJwtToken(Protocol):
@@ -76,6 +90,16 @@ class CustomAccessToken(Protocol):
         client_id: str,
         claims: AccessTokenClaims = None,
     ) -> AccessToken: ...
+
+
+def _default_client_type(client_id: str) -> str:
+    """Return the default local JWT client type for one test client id."""
+
+    client_types = {
+        "workflow-agent": "workflow_agent",
+        "codex-agent": "codex",
+    }
+    return client_types.get(client_id, client_id)
 
 
 class FakeDockerExecResult:
@@ -207,117 +231,64 @@ async def _flush_database_tables() -> None:
         await model.all().delete()
 
 
-async def _flush_database_tables_sql() -> None:
-    """Delete all test data without requiring Tortoise to be initialized."""
+async def _clear_project_manifest_cache() -> None:
+    """Clear manifest caches that can otherwise cross pytest event loops."""
 
-    connection = await asyncpg.connect(
-        host=settings.DATABASE_HOST,
-        port=settings.DATABASE_PORT,
-        user=settings.DATABASE_USER,
-        password=settings.DATABASE_PASSWORD,
-        database=settings.DATABASE_NAME,
-    )
-    try:
-        await connection.execute(
-            """
-            TRUNCATE TABLE
-                "agent_calls",
-                "collect_logs_sources",
-                "collect_logs",
-                "project_manifests"
-            RESTART IDENTITY CASCADE
-            """
-        )
-    finally:
-        await connection.close()
+    await clear_cache(ProjectManifestDBService.all)
 
 
-async def _seed_project_manifests_sql() -> None:
-    """Persist current test manifests without requiring Tortoise to be initialized."""
-
-    connection = await asyncpg.connect(
-        host=settings.DATABASE_HOST,
-        port=settings.DATABASE_PORT,
-        user=settings.DATABASE_USER,
-        password=settings.DATABASE_PASSWORD,
-        database=settings.DATABASE_NAME,
-    )
-    try:
-        for manifest in list_project_manifests(TEST_MANIFESTS_DIR):
-            await connection.execute(
-                """
-                INSERT INTO "project_manifests" (
-                    "id",
-                    "created_at",
-                    "updated_at",
-                    "project_key",
-                    "project_summary",
-                    "static_asset_paths",
-                    "static_asset_extensions",
-                    "sources"
-                )
-                VALUES ($1, NOW(), NOW(), $2, $3, $4::jsonb, $5::jsonb, $6::jsonb)
-                """,
-                uuid4(),
-                manifest.project_key,
-                manifest.project_summary,
-                json.dumps(manifest.static_asset_paths),
-                json.dumps(manifest.static_asset_extensions),
-                json.dumps(_test_manifest_sources_payload(manifest)),
-            )
-    finally:
-        await connection.close()
-
-
-@pytest.fixture
-async def database_test_case_async() -> AsyncIterator[None]:
-    """Provide Django-style database setup, manifest seed, and flush for each test."""
+async def _initialize_test_database() -> None:
+    """Initialize Tortoise for a test database fixture."""
 
     await Tortoise.init(
         db_url=settings.db,
         modules={"models": ["database.models"]},
     )
+
+
+async def _close_test_database() -> None:
+    """Close and reset Tortoise after a test database fixture."""
+
+    await connections.close_all(discard=True)
+    connections._clear_storage()  # noqa Access to a protected member of a class
+    await Tortoise._reset_apps()  # noqa Access to a protected member of a class
+
+
+@pytest.fixture(autouse=True)
+async def _async_database_setup(
+    anyio_backend: str,  # noqa: ARG001
+    request: pytest.FixtureRequest,
+) -> AsyncIterator[None]:
+    """Provide Django-style database setup, manifest seed, and flush for each test."""
+
+    if "jsonrpc" in request.fixturenames:
+        jsonrpc: JsonRpcClient = request.getfixturevalue("jsonrpc")
+        assert jsonrpc.api_client.portal is not None
+        portal = jsonrpc.api_client.portal
+        portal.call(_clear_project_manifest_cache)
+        portal.call(_initialize_test_database)
+        portal.call(_flush_database_tables)
+        portal.call(_create_callers)
+        portal.call(_seed_project_manifests)
+        try:
+            yield
+        finally:
+            portal.call(_clear_project_manifest_cache)
+            portal.call(_flush_database_tables)
+            portal.call(_close_test_database)
+        return
+
+    await _clear_project_manifest_cache()
+    await _initialize_test_database()
     await _flush_database_tables()
+    await _create_callers()
     await _seed_project_manifests()
     try:
         yield
     finally:
+        await _clear_project_manifest_cache()
         await _flush_database_tables()
-        await connections.close_all(discard=True)
-        connections._clear_storage()  # noqa Access to a protected member of a class
-        await Tortoise._reset_apps()  # noqa Access to a protected member of a class
-
-
-@pytest.fixture
-def database_test_case_sync() -> Generator[None]:
-    """Provide database setup for sync tests without async fixtures."""
-
-    anyio_backend = "asyncio"
-    import anyio
-
-    anyio.run(_flush_database_tables_sql, backend=anyio_backend)
-    anyio.run(_seed_project_manifests_sql, backend=anyio_backend)
-    try:
-        yield
-    finally:
-        anyio.run(_flush_database_tables_sql, backend=anyio_backend)
-
-
-def pytest_collection_modifyitems(
-    config: pytest.Config,  # noqa: ARG001 - pytest hook signature requires it.
-    items: list[pytest.Item],
-) -> None:
-    """Pytest hook: attach database setup fixtures to every test."""
-
-    for item in items:
-        item_with_fixtures: Any = item
-        test_function = getattr(item, "obj", None)
-        if inspect.iscoroutinefunction(test_function) or item.get_closest_marker("anyio"):
-            if "database_test_case_async" not in item_with_fixtures.fixturenames:
-                item_with_fixtures.fixturenames.append("database_test_case_async")
-        else:
-            if "database_test_case_sync" not in item_with_fixtures.fixturenames:
-                item_with_fixtures.fixturenames.append("database_test_case_sync")
+        await _close_test_database()
 
 
 @dataclass(slots=True)
@@ -333,7 +304,6 @@ class JsonRpcClient:
         token: str | None,
         data: dict[str, Any],
     ) -> httpx.Response:
-        assert self.api_client.portal is not None
         headers = {
             "Accept": "application/json",
         }
@@ -406,6 +376,53 @@ async def _seed_project_manifests(
                 static_asset_extensions=manifest.static_asset_extensions,
                 sources=sources,
             )
+        )
+
+
+async def _create_callers() -> None:
+    """Create default authenticated MCP callers for tests."""
+
+    default_mcp_clients: tuple[tuple[str, str, LogWorkspace, list[str]], ...] = (
+        (
+            "workflow-agent",
+            "workflow_agent",
+            LogWorkspace.WORKFLOW,
+            ["dockerpage", "landingpage", "shop"],
+        ),
+        ("codex-agent", "codex", LogWorkspace.WORKFLOW, ["dockerpage", "landingpage", "shop"]),
+        ("codex-agent", "codex", LogWorkspace.SESSION, ["dockerpage", "landingpage", "shop"]),
+        ("agent", "agent", LogWorkspace.WORKFLOW, ["dockerpage", "landingpage", "shop"]),
+        ("agent", "agent", LogWorkspace.SESSION, ["dockerpage", "landingpage", "shop"]),
+        ("codex-client", "codex", LogWorkspace.SESSION, ["landingpage"]),
+        ("workflow-client", "workflow_agent", LogWorkspace.WORKFLOW, ["landingpage"]),
+        ("status-no-project-client", "codex", LogWorkspace.WORKFLOW, []),
+        ("caller-context-landingpage", "codex", LogWorkspace.WORKFLOW, ["landingpage"]),
+        ("caller-context-dockerpage", "codex", LogWorkspace.WORKFLOW, ["dockerpage"]),
+        ("all-project-workflow-client", "workflow_agent", LogWorkspace.WORKFLOW, ["all"]),
+        (
+            "limited-workflow-client",
+            "workflow_agent",
+            LogWorkspace.WORKFLOW,
+            ["landingpage", "shop"],
+        ),
+    )
+    for client_id, client_type, workspace, allowed_projects in default_mcp_clients:
+        exists = (
+            await Authentication.objects.filter(
+                client_id=client_id,
+                client_type=client_type,
+                workspace=workspace,
+            )
+            .limit(1)
+            .count()
+        )
+        if exists:
+            continue
+        await Authentication.objects.create(
+            client_id=client_id,
+            client_type=client_type,
+            workspace=workspace,
+            allowed_projects=allowed_projects,
         )
 
 
@@ -517,6 +534,7 @@ def custom_jwt_token() -> CustomJwtToken:
             "exp": now + settings.JWT_EXPIRATION_SECONDS,
             "sub": subject,
             "client_id": client_id,
+            "client_type": _default_client_type(client_id),
             "allowed_projects": ["landingpage"],
             "scope": " ".join(scopes),
         }
@@ -539,22 +557,38 @@ def valid_jwt_token(custom_jwt_token: CustomJwtToken) -> str:
         "workflow-agent",
         [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
         "workflow-agent",
+        {"client_type": "workflow_agent"},
     )
 
 
 @pytest.fixture
 def jsonrpc() -> Generator[JsonRpcClient]:
+    """Return a JSON-RPC client that exercises the real FastMCP HTTP path.
+
+    The client is entered with `TestClient` so FastMCP starts the HTTP
+    transport lifespan and its internal session manager. During this test-only
+    lifespan, database startup/shutdown is disabled: `_async_database_setup`
+    already initializes and seeds Tortoise in the same TestClient portal loop
+    for tests that use this fixture. Running the production DB lifespan here
+    would initialize or close asyncpg pools from a second event loop.
+    """
+
     app = create_application(auth_provider=build_auth_provider(settings))
     asgi_app = app.http_app(
         path=settings.MCP_PATH,
         json_response=settings.MCP_JSON_RESPONSE,
         stateless_http=settings.MCP_STATELESS_HTTP,
     )
-    with TestClient(asgi_app) as client:
-        yield JsonRpcClient(
-            api_client=client,
-            mcp_path=settings.MCP_PATH,
-        )
+    previous_lifespan = mcp._lifespan  # noqa: SLF001
+    mcp._lifespan = _test_lifespan_without_database  # noqa: SLF001
+    try:
+        with TestClient(asgi_app) as client:
+            yield JsonRpcClient(
+                api_client=client,
+                mcp_path=settings.MCP_PATH,
+            )
+    finally:
+        mcp._lifespan = previous_lifespan  # noqa: SLF001
 
 
 @pytest.fixture

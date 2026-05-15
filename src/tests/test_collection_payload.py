@@ -14,7 +14,7 @@ from requests import exceptions as requests_exceptions
 from conf import settings
 from core.types import LogWorkspace
 from exception import InvalidTimeFilterError
-from manifests.loader import load_project_manifest
+from manifests.loader import list_project_manifests, load_project_manifest
 from manifests.models import SourceDefinition
 from services.log_collection import (
     BuildLogsError,
@@ -53,9 +53,19 @@ async def build_collect_logs(
 
     project_authorization_service = ProjectAuthorizationService()
     collection_service = LogCollectionService()
-    project_name = project_authorization_service.authorize_caller_for_project(
-        token,
-        requested_project_name,
+    if token.claims.get("projects_access") == "all":
+        allowed_projects = {
+            manifest.project_key for manifest in list_project_manifests(manifests_dir)
+        }
+    else:
+        allowed_projects = {
+            str(project_name).strip()
+            for project_name in token.claims.get("allowed_projects", [])
+            if str(project_name).strip()
+        }
+    project_name = project_authorization_service.authorize_project(
+        allowed_projects=allowed_projects,
+        requested_project_name=requested_project_name,
     )
     if isinstance(project_name, ProjectAuthorizationError):
         raise ValueError(project_name.message)
@@ -338,7 +348,7 @@ async def test_build_collect_logs_rejects_project_mismatch(
     with override_settings(LOGS_DIR=logs_dir):
         with pytest.raises(
             ValueError,
-            match="Requested project is not allowed by the authenticated access token.",
+            match="Requested project is not allowed by the authenticated caller.",
         ):
             await build_collect_logs(
                 valid_access_token,

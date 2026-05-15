@@ -9,19 +9,18 @@ from functools import wraps
 from inspect import Parameter, Signature, iscoroutinefunction, signature
 from typing import Any
 
-from fastmcp.server.auth import AccessToken, require_scopes
-from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.auth import require_scopes
+from fastmcp.server.dependencies import get_http_request
 
 from app import mcp
+from auth.mcp_caller_context import get_request_mcp_caller
 from logging_config import get_logger
 from services.project_authorization import ProjectAuthorizationError, ProjectAuthorizationService
-from services.project_manifest import ProjectManifestService
 from utils.mcp_errors import build_agent_tool_error_result
 from utils.types import JSONObject, JSONValue
 
 logger = get_logger("decorators")
 project_authorization_service = ProjectAuthorizationService()
-project_manifest_service = ProjectManifestService()
 _workflow_discoverable_tools_by_name: dict[str, dict[str, Any]] = {}
 
 
@@ -60,7 +59,7 @@ def _is_internal_tool_parameter(parameter: Parameter) -> bool:
     }:
         return True
 
-    if parameter.name in {"settings", "access_token", "asset_loader"}:
+    if parameter.name in {"settings", "access_token", "asset_loader", "caller"}:
         return True
 
     default = parameter.default
@@ -132,9 +131,11 @@ def workflow_discoverable_tool(
                 default_overrides=argument_default_overrides,
             ),
         }
+        exclude_args = ["caller"] if "caller" in signature(func).parameters else None
         return mcp.tool(
             auth=require_scopes(required_scope),
             description=mcp_description,
+            exclude_args=exclude_args,
         )(func)
 
     return decorator
@@ -156,14 +157,14 @@ def async_[**P, T](func: Callable[P, Coroutine[Any, Any, T]]) -> Callable[P, T]:
     return wrapper
 
 
-def _get_bound_access_token(bound_arguments: dict[str, Any]) -> AccessToken | None:
-    """Return the authenticated MCP token, falling back to direct test calls."""
+def _get_allowed_projects() -> frozenset[str] | None:
+    """Return project access from the request caller context."""
 
-    access_token = get_access_token()
-    if isinstance(access_token, AccessToken):
-        return access_token
-    explicit_access_token = bound_arguments.get("access_token")
-    return explicit_access_token if isinstance(explicit_access_token, AccessToken) else None
+    try:
+        caller = get_request_mcp_caller(get_http_request())
+    except RuntimeError:
+        return None
+    return caller.allowed_projects if caller is not None else None
 
 
 def _project_authorization_retry_tips(
@@ -175,7 +176,7 @@ def _project_authorization_retry_tips(
     if project_argument_name == ProjectArgumentName.PROJECT_NAME:
         return retry_tips
     return [
-        "Retry with project_names allowed by the current JWT project access rules.",
+        "Retry with project_names allowed by the current MCP caller project access rules.",
         "Use get_mcp_service_status to confirm the current project access before retrying.",
     ]
 
@@ -196,7 +197,8 @@ def _project_authorization_details(
     else:
         requested_value = None
 
-    return {project_argument_name.value: requested_value}
+    details: JSONObject = {str(project_argument_name): requested_value}
+    return details
 
 
 def project_authorized_tool(
@@ -212,50 +214,31 @@ def project_authorized_tool(
 
     async def _authorize_and_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
         bargs = func_signature.bind_partial(*args, **kwargs)
-        access_token = _get_bound_access_token(bargs.arguments)
         project_argument_name = (
             ProjectArgumentName.PROJECT_NAMES
             if ProjectArgumentName.PROJECT_NAMES in bargs.arguments
             else ProjectArgumentName.PROJECT_NAME
         )
         requested_project = bargs.arguments.get(project_argument_name)
-        if not isinstance(access_token, AccessToken):
-            logger.info(
-                "project authorization decorator rejected missing token",
-                extra={
-                    "event": "project_authorized_tool_missing_token",
-                    "tool_name": func.__name__,
-                    "project_argument_name": project_argument_name.value,
-                    "requested_project": requested_project,
-                },
-            )
-            return build_agent_tool_error_result(
-                error_code="missing_access_token",
-                message="access_token is required for project authorization.",
-                retry_tips=["Retry through the authenticated MCP HTTP path."],
-                details=_project_authorization_details(
-                    project_argument_name,
-                    requested_project,
-                ),
-            )
-
         authorized_project: str | list[str] | ProjectAuthorizationError
+        allowed_projects = _get_allowed_projects()
+        if allowed_projects is None:
+            raise AssertionError(
+                "project_authorized_tool expects middleware-attached MCP caller context"
+            )
         if project_argument_name == ProjectArgumentName.PROJECT_NAMES:
-            available_project_names = [
-                project_summary.project_name
-                for project_summary in (await project_manifest_service.all()).root
-            ]
-            authorized_project = project_authorization_service.authorize_caller_for_projects(
-                access_token,
+            authorized_project = project_authorization_service.authorize_projects(
+                allowed_projects=allowed_projects,
                 requested_project_names=(
                     requested_project if isinstance(requested_project, list) else None
                 ),
-                available_project_names=available_project_names,
             )
         else:
-            authorized_project = project_authorization_service.authorize_caller_for_project(
-                access_token,
-                requested_project if isinstance(requested_project, str) else None,
+            authorized_project = project_authorization_service.authorize_project(
+                allowed_projects=allowed_projects,
+                requested_project_name=(
+                    requested_project if isinstance(requested_project, str) else None
+                ),
             )
 
         if isinstance(authorized_project, ProjectAuthorizationError):

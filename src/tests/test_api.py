@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -14,6 +15,7 @@ from auth.scopes import (
     MCP_HEALTH_READ_SCOPE,
     MCP_STATUS_READ_SCOPE,
     PROJECTS_READ_SCOPE,
+    SESSION_CLOSE_SCOPE,
     WORKFLOW_BOOTSTRAP_SCOPE,
     WORKFLOW_SKILLS_READ_SCOPE,
 )
@@ -23,13 +25,16 @@ from tests.conftest import (
     FileBackedProjectContext,
     JsonRpcClient,
     MultiProjectCollectContext,
+    _seed_project_manifests,
     build_collect_logs_request,
+    copy_manifest_and_log_fixtures,
     override_settings,
 )
 from tools import collection as collection_tools
 
 ToolCall = tuple[str, dict[str, object]]
 ProtectedToolCall = tuple[str, dict[str, object], list[str]]
+CallerContextToolCall = tuple[str, dict[str, object], list[str], list[str], bool]
 ProjectProtectedInvalidTokenFactory = Callable[["CustomJwtToken", list[str]], str]
 InvalidTokenFactory = Callable[["CustomJwtToken"], str]
 
@@ -69,6 +74,70 @@ COLLECT_LOGS_TOOL_CALLS: tuple[ToolCall, ...] = (
 )
 PROJECT_PROTECTED_TOOL_CALL_ARGUMENTS: tuple[ToolCall, ...] = (
     COLLECT_LOGS_TOOL_CALLS + SNAPSHOT_TOOL_CALLS + ANALYSIS_TOOL_CALLS + CONTAINER_TOOL_CALLS
+)
+CALLER_CONTEXT_LOG_TOOL_NAMES = {
+    "collect_logs",
+    *(tool_name for tool_name, _arguments in SNAPSHOT_TOOL_CALLS + ANALYSIS_TOOL_CALLS),
+}
+CALLER_CONTEXT_TOOL_CALLS: tuple[CallerContextToolCall, ...] = (
+    ("list_projects", {}, [PROJECTS_READ_SCOPE], ["landingpage"], False),
+    (
+        "collect_logs",
+        {"project_names": ["landingpage"], "source_keys": ["app_file"], "workspace": "workflow"},
+        [LOGS_COLLECT_SCOPE],
+        ["landingpage"],
+        False,
+    ),
+    (
+        "list_log_snapshot_files",
+        {"project_name": "landingpage"},
+        [LOGS_COLLECT_SCOPE],
+        ["landingpage"],
+        True,
+    ),
+    (
+        "read_log_snapshot_file",
+        {"project_name": "landingpage", "source_key": "app_file"},
+        [LOGS_COLLECT_SCOPE],
+        ["landingpage"],
+        True,
+    ),
+    (
+        "grep_log_snapshot",
+        {"project_name": "landingpage", "grep": "line"},
+        [LOGS_COLLECT_SCOPE],
+        ["landingpage"],
+        True,
+    ),
+    ("group_errors", {"project_name": "landingpage"}, [LOGS_COLLECT_SCOPE], ["landingpage"], True),
+    (
+        "build_incident_bundle",
+        {"project_name": "landingpage"},
+        [LOGS_COLLECT_SCOPE],
+        ["landingpage"],
+        True,
+    ),
+    (
+        "create_filtered_view",
+        {"project_name": "landingpage"},
+        [LOGS_COLLECT_SCOPE],
+        ["landingpage"],
+        True,
+    ),
+    (
+        "read_container_file",
+        {"project_name": "dockerpage", "source_key": "backend", "path": "/app/VERSION"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["dockerpage"],
+        False,
+    ),
+    (
+        "list_container_directory",
+        {"project_name": "dockerpage", "source_key": "backend", "path": "/app"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["dockerpage"],
+        False,
+    ),
 )
 PROJECT_PROTECTED_LOG_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [LOGS_COLLECT_SCOPE]) for tool_name, arguments in COLLECT_LOGS_TOOL_CALLS
@@ -123,6 +192,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
             {
                 "read_container_file",
                 "list_container_directory",
+                "close_agent_session",
             },
         ),
         (
@@ -131,6 +201,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 PROJECTS_READ_SCOPE,
                 LOGS_COLLECT_SCOPE,
                 CONTAINER_FILES_READ_SCOPE,
+                SESSION_CLOSE_SCOPE,
                 MCP_STATUS_READ_SCOPE,
                 MCP_HEALTH_READ_SCOPE,
             ],
@@ -147,6 +218,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "list_projects",
                 "read_container_file",
                 "list_container_directory",
+                "close_agent_session",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
             },
@@ -247,6 +319,132 @@ def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
     assert any(argument["name"] == "session_id" for argument in collect_logs_tool["arguments"])
 
 
+def test_service_status_api_does_not_report_project_access(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify service status only reports identity/config, not project permissions."""
+
+    token = custom_jwt_token(
+        "codex-agent",
+        [MCP_STATUS_READ_SCOPE],
+        "status-no-project-client",
+        {
+            "allowed_projects": ["shop"],
+            "client_type": "codex",
+            "projects_access": "all",
+        },
+    )
+
+    response = jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "service-status-caller-context",
+            "method": "tools/call",
+            "params": {"name": "get_mcp_service_status", "arguments": {}},
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["client_id"] == "status-no-project-client"
+    assert payload["client_type"] == "codex"
+    assert "allowed_projects" not in payload
+    assert "projects_access" not in payload
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "scopes", "allowed_projects", "needs_snapshot"),
+    CALLER_CONTEXT_TOOL_CALLS,
+)
+def test_mcp_tools_api_use_database_caller_context_for_project_access(
+    file_backed_project_context: FileBackedProjectContext,
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+    tool_name: str,
+    arguments: dict[str, object],
+    scopes: list[str],
+    allowed_projects: list[str],
+    needs_snapshot: bool,
+) -> None:
+    """Verify real MCP tool calls use request-state DB caller projects over JWT claims."""
+
+    client_id = f"caller-context-{allowed_projects[0]}"
+    wrong_projects = ["shop"] if allowed_projects != ["shop"] else ["landingpage"]
+    token = custom_jwt_token(
+        "codex-agent",
+        scopes,
+        client_id,
+        {"allowed_projects": wrong_projects, "client_type": "codex"},
+    )
+
+    if tool_name == "read_container_file":
+        mocker.patch(
+            "tools.container_inspection.docker_service.stat_container_path",
+            return_value=ContainerPathStat(
+                path="/app/VERSION",
+                is_dir=False,
+                size=12,
+                mode=0o100644,
+                modified_at="2026-04-26T10:00:00+00:00",
+            ),
+        )
+        mocker.patch(
+            "tools.container_inspection.docker_service.read_container_file",
+            return_value=("release-123\n", False),
+        )
+    if tool_name == "list_container_directory":
+        mocker.patch(
+            "tools.container_inspection.docker_service.list_container_directory",
+            return_value=(
+                [
+                    ContainerPathStat(
+                        path="/app/VERSION",
+                        is_dir=False,
+                        size=12,
+                        mode=0o100644,
+                        modified_at="2026-04-26T10:00:00+00:00",
+                    ),
+                ],
+                False,
+            ),
+        )
+
+    request_data = {
+        "jsonrpc": "2.0",
+        "id": f"{tool_name}-caller-context",
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": arguments},
+    }
+    if tool_name in CALLER_CONTEXT_LOG_TOOL_NAMES:
+        with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+            if needs_snapshot:
+                collect_response = jsonrpc.post(
+                    token=token,
+                    data=build_collect_logs_request(source_keys=["app_file"]),
+                )
+                assert collect_response.status_code == 200
+                assert collect_response.json()["result"]["isError"] is False
+            response = jsonrpc.post(token=token, data=request_data)
+    else:
+        response = jsonrpc.post(token=token, data=request_data)
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    payload = response.json()["result"]["structuredContent"]
+    if tool_name == "list_projects":
+        assert [project["project_name"] for project in payload["result"]] == allowed_projects
+        return
+    if tool_name == "collect_logs":
+        assert [project["project_name"] for project in payload["projects"]] == allowed_projects
+        return
+    assert payload["project_name"] == allowed_projects[0]
+
+
 def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
@@ -291,6 +489,177 @@ def test_collect_logs_api_returns_requested_and_resolved_file_sources(
         "workflow/landingpage/latest/app_file.log"
     )
     assert project_payload["sources"][0]["line_count"] == 3
+
+
+def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify snapshot grep/read edge cases through the real JSON-RPC path."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["snapshot_text"]),
+        )
+        grep_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "grep-source-key-window",
+                "method": "tools/call",
+                "params": {
+                    "name": "grep_log_snapshot",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "snapshot_text",
+                        "grep": "match",
+                        "match_offset": 1,
+                        "match_limit": 2,
+                    },
+                },
+            },
+        )
+        read_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "read-line-window",
+                "method": "tools/call",
+                "params": {
+                    "name": "read_log_snapshot_file",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "snapshot_text",
+                        "start_line": 2,
+                        "line_count": 2,
+                        "max_bytes": 100,
+                    },
+                },
+            },
+        )
+
+    grep_payload = grep_response.json()["result"]["structuredContent"]
+    read_payload = read_response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert grep_response.status_code == 200
+    assert grep_response.json()["result"]["isError"] is False
+    assert grep_payload["searched_source_keys"] == ["snapshot_text"]
+    assert grep_payload["matched_source_keys"] == ["snapshot_text"]
+    assert grep_payload["match_offset"] == 1
+    assert grep_payload["match_limit"] == 2
+    assert grep_payload["match_count"] == 4
+    assert grep_payload["returned_match_count"] == 2
+    assert grep_payload["truncated"] is True
+    assert [match["line"] for match in grep_payload["matches"]] == ["match two", "match three"]
+    assert [match["line_number"] for match in grep_payload["matches"]] == [3, 4]
+    assert all(match["line_truncated"] is False for match in grep_payload["matches"])
+    assert read_response.status_code == 200
+    assert read_response.json()["result"]["isError"] is False
+    assert read_payload["source_key"] == "snapshot_text"
+    assert read_payload["start_line"] == 2
+    assert read_payload["line_count"] == 2
+    assert read_payload["content"] == "match one\nmatch two\n"
+    assert read_payload["truncated"] is False
+
+
+def test_grep_log_snapshot_api_truncates_large_matching_lines(
+    tmp_path: Path,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify grep line truncation is preserved through FastMCP serialization."""
+
+    fixture_root = copy_manifest_and_log_fixtures(tmp_path)
+    long_line = "match " + ("x" * 4_000)
+    (fixture_root / "logs" / "landingpage" / "app_file.log").write_text(
+        f"{long_line}\n",
+        encoding="utf-8",
+    )
+    assert jsonrpc.api_client.portal is not None
+    jsonrpc.api_client.portal.call(_seed_project_manifests, fixture_root / "manifests")
+    logs_dir = tmp_path / "collected-logs"
+
+    with override_settings(LOGS_DIR=logs_dir):
+        collect_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["app_file"]),
+        )
+        grep_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "grep-long-line",
+                "method": "tools/call",
+                "params": {
+                    "name": "grep_log_snapshot",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "app_file",
+                        "grep": "match",
+                    },
+                },
+            },
+        )
+
+    payload = grep_response.json()["result"]["structuredContent"]
+    match = payload["matches"][0]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert grep_response.status_code == 200
+    assert grep_response.json()["result"]["isError"] is False
+    assert payload["match_count"] == 1
+    assert match["line_truncated"] is True
+    assert len(match["line"].encode("utf-8")) == 2_000
+    assert match["line"] == long_line[:2_000]
+
+
+def test_snapshot_tools_api_reject_conflicting_source_key_arguments(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify source_key/source_keys conflicts are rejected at the MCP boundary."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["snapshot_text"]),
+        )
+        response = jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "grep-conflicting-source-keys",
+                "method": "tools/call",
+                "params": {
+                    "name": "grep_log_snapshot",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "snapshot_text",
+                        "source_keys": ["snapshot_text"],
+                        "grep": "match",
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "invalid_source_key_arguments"
+    assert payload["details"] == {
+        "source_key": "snapshot_text",
+        "source_keys": ["snapshot_text"],
+    }
 
 
 @pytest.mark.parametrize(
@@ -352,6 +721,96 @@ def test_analysis_tools_api_read_collected_snapshot(
         and group["first_seen"]["output_file"] == "workflow/landingpage/latest/app_file.log"
         for group in groups
     )
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    ["group_errors", "build_incident_bundle", "create_filtered_view"],
+)
+def test_analysis_tools_api_support_single_source_alias(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+    tool_name: str,
+) -> None:
+    """Verify analysis tools accept source_key as the single-source alias."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["app_file"]),
+        )
+        response = jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": f"{tool_name}-source-key-alias",
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "app_file",
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["searched_source_keys"] == ["app_file"]
+
+
+@pytest.mark.parametrize(
+    "tool_name",
+    ["group_errors", "build_incident_bundle", "create_filtered_view"],
+)
+def test_analysis_tools_api_reject_conflicting_source_key_arguments(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+    tool_name: str,
+) -> None:
+    """Verify analysis tools reject source_key and source_keys together."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["app_file"]),
+        )
+        response = jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": f"{tool_name}-conflicting-source-keys",
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "app_file",
+                        "source_keys": ["app_file"],
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "invalid_source_key_arguments"
+    assert payload["details"] == {
+        "source_key": "app_file",
+        "source_keys": ["app_file"],
+    }
 
 
 def test_create_filtered_view_api_reads_collected_snapshot(
@@ -695,8 +1154,8 @@ def test_list_projects_api_returns_multiple_manifest_backed_projects(
     token: str = custom_jwt_token(
         "workflow-agent",
         [PROJECTS_READ_SCOPE],
-        "workflow-agent",
-        {"projects_access": "all"},
+        "all-project-workflow-client",
+        {"client_type": "workflow_agent", "projects_access": "all"},
     )
     response = jsonrpc.post(
         token=token,
@@ -742,7 +1201,7 @@ def test_collect_logs_api_returns_agent_error_for_project_mismatch(
     assert payload["status"] == "error"
     assert payload["error_code"] == "project_access_mismatch"
     assert payload["retry_tips"] == [
-        "Retry with project_names allowed by the current JWT project access rules.",
+        "Retry with project_names allowed by the current MCP caller project access rules.",
         "Use get_mcp_service_status to confirm the current project access before retrying.",
     ]
 
@@ -760,8 +1219,8 @@ def test_collect_logs_api_uses_all_accessible_projects_when_project_names_not_pr
     token: str = custom_jwt_token(
         "workflow-agent",
         [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
-        "workflow-agent",
-        {"allowed_projects": ["landingpage", "shop"]},
+        "limited-workflow-client",
+        {"allowed_projects": ["landingpage", "shop"], "client_type": "workflow_agent"},
     )
     request_data: dict[str, Any] = build_collect_logs_request(project_names=project_names)
     if project_names is None:
@@ -881,7 +1340,7 @@ def test_collect_logs_api_blocks_workflow_agent_session_workspace(
     assert payload["error_code"] == "workspace_not_allowed"
     assert payload["details"] == {
         "client_id": "workflow-agent",
-        "client_type": None,
+        "client_type": "workflow_agent",
         "workspace": "session",
     }
     create_spy.assert_not_called()
@@ -1142,3 +1601,74 @@ def test_api_rejects_invalid_bearer_tokens(
 
     assert response.status_code == 401
     assert response.json()["error"] == "invalid_token"
+
+
+def test_tool_call_api_rejects_jwt_without_client_id(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify authenticated tool calls require a stable JWT client_id."""
+
+    token = custom_jwt_token(
+        "codex-agent",
+        [SESSION_CLOSE_SCOPE],
+        "codex-agent",
+        {"client_id": ""},
+    )
+
+    response = jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "missing-client-id",
+            "method": "tools/call",
+            "params": {
+                "name": "close_agent_session",
+                "arguments": {"session_id": "ef5e1daa-d06b-479c-926d-8107639bd467"},
+            },
+        },
+    )
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "invalid_client_id"
+
+
+def test_tool_call_api_rejects_jwt_for_unregistered_client(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify tool calls require a matching Authentication row."""
+
+    token = custom_jwt_token(
+        "unregistered-agent",
+        [SESSION_CLOSE_SCOPE],
+        "unregistered-agent",
+        {"client_type": "codex"},
+    )
+
+    response = jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "unregistered-client",
+            "method": "tools/call",
+            "params": {
+                "name": "close_agent_session",
+                "arguments": {"session_id": "ef5e1daa-d06b-479c-926d-8107639bd467"},
+            },
+        },
+    )
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "mcp_client_not_authorized"
+    assert payload["details"] == {
+        "client_id": "unregistered-agent",
+        "client_type": "codex",
+        "workspace": "session",
+    }

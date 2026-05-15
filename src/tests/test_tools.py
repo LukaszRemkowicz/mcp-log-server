@@ -16,8 +16,10 @@ from middleware.audit import AccessAuditMiddleware
 from tests.conftest import CustomAccessToken
 from tools.agent_hints import (
     BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION,
+    CLOSE_AGENT_SESSION_TOOL_DESCRIPTION,
     COLLECT_LOGS_TOOL_DESCRIPTION,
     CREATE_FILTERED_VIEW_TOOL_DESCRIPTION,
+    GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION,
     GROUP_ERRORS_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
     READ_CONTAINER_FILE_TOOL_DESCRIPTION,
@@ -49,6 +51,7 @@ def test_application_registers_expected_mcp_components(
         assert "list_projects" in tool_names
         assert "read_container_file" in tool_names
         assert "list_container_directory" in tool_names
+        assert "close_agent_session" in tool_names
         assert "get_mcp_service_status" in tool_names
         assert "get_mcp_health_check" in tool_names
         assert "list_workflow_skills" not in tool_names
@@ -139,6 +142,8 @@ def test_application_registers_expected_mcp_components(
         assert app_group_errors_tool.description == GROUP_ERRORS_TOOL_DESCRIPTION
         app_followup_tool = next(tool for tool in tools if tool.name == "suggest_followup_window")
         assert app_followup_tool.description == SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION
+        app_close_session_tool = next(tool for tool in tools if tool.name == "close_agent_session")
+        assert app_close_session_tool.description == CLOSE_AGENT_SESSION_TOOL_DESCRIPTION
         app_read_container_tool = next(tool for tool in tools if tool.name == "read_container_file")
         assert app_read_container_tool.description == READ_CONTAINER_FILE_TOOL_DESCRIPTION
         app_list_container_tool = next(
@@ -155,8 +160,27 @@ def test_application_registers_expected_mcp_components(
         since_property = app_collect_tool.parameters["properties"]["since"]
         assert since_property["default"] == "24h"
         app_grep_tool = next(tool for tool in tools if tool.name == "grep_log_snapshot")
+        assert app_grep_tool.description == GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION
+        assert "source_key" in app_grep_tool.parameters["properties"]
+        assert "source_keys" in app_grep_tool.parameters["properties"]
         match_limit_property = app_grep_tool.parameters["properties"]["match_limit"]
         assert match_limit_property["default"] == 100
+        request_caller_tool_names = {
+            "get_mcp_service_status",
+            "list_projects",
+            "collect_logs",
+            "list_log_snapshot_files",
+            "read_log_snapshot_file",
+            "grep_log_snapshot",
+            "group_errors",
+            "build_incident_bundle",
+            "create_filtered_view",
+            "read_container_file",
+            "list_container_directory",
+        }
+        tools_by_name = {tool.name: tool for tool in tools}
+        for tool_name in request_caller_tool_names:
+            assert "caller" not in tools_by_name[tool_name].parameters["properties"]
         list_projects_tool = next(
             item for item in bootstrap_text["tools"] if item["tool_name"] == "list_projects"
         )
@@ -184,6 +208,7 @@ def test_tool_metadata_filters_tools_by_token_scopes(
 
     assert "get_mcp_health_check" in allowed_tool_names
     assert "read_container_file" not in allowed_tool_names
+    assert "close_agent_session" not in allowed_tool_names
     assert "analyze_daily_log_bundle" not in allowed_tool_names
     assert "get_mcp_service_status" not in allowed_tool_names
 

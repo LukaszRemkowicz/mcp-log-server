@@ -115,9 +115,19 @@ Currently implemented tools:
 
 - `analyze_daily_log_bundle`
 - `collect_logs`
+- `close_agent_session`
+- `list_log_snapshot_files`
+- `read_log_snapshot_file`
+- `grep_log_snapshot`
+- `create_filtered_view`
+- `group_errors`
+- `build_incident_bundle`
+- `suggest_followup_window`
 - `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
+- `read_container_file`
+- `list_container_directory`
 
 ### Resources
 
@@ -180,7 +190,9 @@ Important collection response note:
 - session collection payloads include the effective `session_id`; agents reuse
   that value for follow-up collection, read, grep, and analysis calls in the
   same investigation
-- explicit agent-side session closing is not implemented yet
+- explicit agent-side session closing is implemented through
+  `close_agent_session`; it marks audit metadata only and leaves snapshot files
+  readable
 - `tail_lines` is optional; if omitted, agents get a warning that full source
   output may be slow or large
 - `LOGS_DIR` is treated as a logs root, not a flat one-run output path
@@ -205,6 +217,10 @@ Current implemented shape:
 
 - `JWTVerifier` validates incoming bearer tokens
 - tool/resource visibility is enforced with per-component `auth=` checks
+- tool calls require one manual `authentications` database row matching
+  `client_id`, `client_type`, and `workspace`
+- `authentications.allowed_projects` is a JSON list and becomes the effective
+  project allowlist for the tool call
 - local development uses example JWTs signed with the local shared secret
 
 This is a development-ready JWT flow, not a final Keycloak production rollout.
@@ -237,6 +253,8 @@ Characteristics:
   `landingpage`'s local `5436` binding separate
 - runs the `test` service against the separate `mcp_log_server_test` database,
   not the local app database
+- runs curl-driven HTTP MCP E2E checks through `infra/scripts/run_http_e2e.sh`
+  against `mcp_log_server_test`, not the local app database
 
 ### Production Compose
 

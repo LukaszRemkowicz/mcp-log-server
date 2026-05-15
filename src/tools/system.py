@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 from fastmcp.dependencies import CurrentAccessToken
 from fastmcp.server.auth import AccessToken
 
+from auth.mcp_caller_context import AuthenticatedMcpCaller, get_request_mcp_caller
 from auth.scopes import MCP_HEALTH_READ_SCOPE, MCP_STATUS_READ_SCOPE
 from conf import settings
 from decorators import workflow_discoverable_tool
@@ -24,14 +26,15 @@ def get_mcp_service_status(
 
     This tool is mainly intended for development and debugging clients that
     need a quick sanity check of the running server and the authenticated
-    caller context. The returned payload includes:
+    caller identity attached by middleware. The returned payload includes:
 
     - static service identity
     - basic process configuration such as environment, host, port, and log level
-    - selected JWT-derived caller fields like subject, client type, and project access
+    - selected identity fields such as subject, client id, and client type
 
     It is intentionally lightweight and should not be treated as a full
-    operational health or metrics endpoint.
+    operational health or metrics endpoint. Project access is intentionally not
+    reported or checked here; middleware already authenticated the caller.
     """
 
     logger.info(
@@ -42,13 +45,13 @@ def get_mcp_service_status(
         },
     )
     claims = access_token.claims if access_token is not None else {}
+    caller = cast(AuthenticatedMcpCaller, get_request_mcp_caller())
     payload: JSONObject = {
         "name": "mcp-log-server",
         "status": "ok",
         "subject": claims.get("sub", access_token.client_id if access_token is not None else None),
-        "client_type": claims.get("client_type"),
-        "allowed_projects": claims.get("allowed_projects"),
-        "projects_access": claims.get("projects_access"),
+        "client_id": caller.client_id,
+        "client_type": caller.client_type,
         "environment": settings.ENVIRONMENT,
         "host": settings.HOST,
         "port": settings.PORT,
@@ -60,8 +63,6 @@ def get_mcp_service_status(
             "event": "tool_result",
             "tool_name": "get_mcp_service_status",
             "client_type": payload["client_type"],
-            "allowed_projects": payload["allowed_projects"],
-            "projects_access": payload["projects_access"],
             "environment": payload["environment"],
         },
     )

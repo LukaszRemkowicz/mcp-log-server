@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from cache import cached_for_6_hours, clear_cache
 from database.models import ProjectManifest
 from database.schemas import ProjectManifestCreate, ProjectManifestUpdate
 
@@ -27,13 +28,16 @@ class ProjectManifestService:
         """Create one project manifest row."""
 
         context = payload.model_dump(exclude={"pk"}, exclude_none=True)
-        return await self.model.objects.create(id=payload.pk, **context)
+        obj = await self.model.objects.create(id=payload.pk, **context)
+        await clear_cache(self.all)
+        return obj
 
     async def get(self, project_key: str) -> ProjectManifest:
         """Return one persisted project manifest by project key."""
 
         return await self.model.objects.get(project_key=project_key)
 
+    @cached_for_6_hours
     async def all(self) -> list[ProjectManifest]:
         """Return all persisted project manifests ordered by project key."""
 
@@ -42,9 +46,10 @@ class ProjectManifestService:
     async def update(self, payload: ProjectManifestUpdate) -> ProjectManifest:
         """Update one project manifest row with the provided metadata fields."""
 
-        row = await self.model.objects.get(id=payload.pk)
+        obj = await self.model.objects.get(id=payload.pk)
         context = payload.model_dump(exclude={"pk"}, exclude_none=True)
         for field_name, field_value in context.items():
-            setattr(row, field_name, field_value)
-        await row.save(update_fields=[*context, "updated_at"])
-        return row
+            setattr(obj, field_name, field_value)
+        await obj.save(update_fields=[*context, "updated_at"])
+        await clear_cache(self.all)
+        return obj

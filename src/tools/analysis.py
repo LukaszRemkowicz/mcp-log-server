@@ -30,8 +30,9 @@ from tools.agent_hints import (
     LOG_ANALYSIS_CAUTIONS,
     SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION,
 )
-from tools.errors import build_snapshot_tool_error_result
+from tools.errors import build_invalid_source_key_arguments_result, build_snapshot_tool_error_result
 from tools.models import GroupedErrorPayload, GroupErrorsPayload, SuggestFollowupWindowPayload
+from tools.utils import SourceKeyArgumentError, resolve_source_keys_alias
 from utils.log_snapshots import format_followup_timestamp, parse_followup_timestamp
 from utils.types import JSONValue
 
@@ -293,6 +294,7 @@ async def group_errors(
     session_id: str | None = None,
     archive_name: str | None = None,
     source_keys: list[str] | None = None,
+    source_key: str | None = None,
     max_groups: int = DEFAULT_MAX_ERROR_GROUPS,
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
@@ -316,15 +318,22 @@ async def group_errors(
     if invalid_group_window_result is not None:
         return invalid_group_window_result
 
-    requested_source_keys = source_keys
-    requested_source_keys_detail: list[JSONValue] = list(requested_source_keys or [])
+    try:
+        source_keys = resolve_source_keys_alias(source_keys, source_key)
+    except SourceKeyArgumentError as error:
+        return build_invalid_source_key_arguments_result(
+            message=str(error),
+            source_key=source_key,
+            source_keys=source_keys,
+        )
+    source_keys_detail: list[JSONValue] = list(source_keys or [])
     context: SnapshotContext | ToolResult = await _load_snapshot_for_analysis_tool(
         tool_name="group_errors",
         project_name=project_name,
         session_id=session_id,
         archive_name=archive_name,
-        requested_source_keys=requested_source_keys,
-        requested_source_keys_detail=requested_source_keys_detail,
+        requested_source_keys=source_keys,
+        requested_source_keys_detail=source_keys_detail,
         max_groups=max_groups,
     )
     if isinstance(context, ToolResult):
@@ -333,7 +342,7 @@ async def group_errors(
     try:
         analysis = analysis_service.group_snapshot_errors(
             sources=context.sources,
-            requested_source_keys=requested_source_keys,
+            requested_source_keys=source_keys,
             max_groups=max_groups,
         )
     except ValueError as error:
@@ -343,8 +352,8 @@ async def group_errors(
             project_name=project_name,
             session_id=session_id,
             archive_name=archive_name,
-            requested_source_keys=requested_source_keys,
-            requested_source_keys_detail=requested_source_keys_detail,
+            requested_source_keys=source_keys,
+            requested_source_keys_detail=source_keys_detail,
             max_groups=max_groups,
         )
 
@@ -400,6 +409,7 @@ async def build_incident_bundle(
     session_id: str | None = None,
     archive_name: str | None = None,
     source_keys: list[str] | None = None,
+    source_key: str | None = None,
     max_groups: int = DEFAULT_MAX_ERROR_GROUPS,
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
@@ -425,15 +435,22 @@ async def build_incident_bundle(
     if invalid_group_window_result is not None:
         return invalid_group_window_result
 
-    requested_source_keys = source_keys
-    requested_source_keys_detail: list[JSONValue] = list(requested_source_keys or [])
+    try:
+        source_keys = resolve_source_keys_alias(source_keys, source_key)
+    except SourceKeyArgumentError as error:
+        return build_invalid_source_key_arguments_result(
+            message=str(error),
+            source_key=source_key,
+            source_keys=source_keys,
+        )
+    source_keys_detail: list[JSONValue] = list(source_keys or [])
     context: SnapshotContext | ToolResult = await _load_snapshot_for_analysis_tool(
         tool_name="build_incident_bundle",
         project_name=project_name,
         session_id=session_id,
         archive_name=archive_name,
-        requested_source_keys=requested_source_keys,
-        requested_source_keys_detail=requested_source_keys_detail,
+        requested_source_keys=source_keys,
+        requested_source_keys_detail=source_keys_detail,
         max_groups=max_groups,
     )
     if isinstance(context, ToolResult):
@@ -443,7 +460,7 @@ async def build_incident_bundle(
         payload = analysis_service.build_incident_bundle(
             context.metadata,
             sources=context.sources,
-            requested_source_keys=requested_source_keys,
+            requested_source_keys=source_keys,
             max_groups=max_groups,
             requested_project_name=project_name,
             project_name=context.project_name,
@@ -457,8 +474,8 @@ async def build_incident_bundle(
             project_name=project_name,
             session_id=session_id,
             archive_name=archive_name,
-            requested_source_keys=requested_source_keys,
-            requested_source_keys_detail=requested_source_keys_detail,
+            requested_source_keys=source_keys,
+            requested_source_keys_detail=source_keys_detail,
             max_groups=max_groups,
         )
 
@@ -491,6 +508,7 @@ async def create_filtered_view(
     session_id: str | None = None,
     archive_name: str | None = None,
     source_keys: list[str] | None = None,
+    source_key: str | None = None,
     max_lines: int = DEFAULT_FILTERED_VIEW_MAX_LINES,
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
@@ -509,6 +527,14 @@ async def create_filtered_view(
     if invalid_limit_result is not None:
         return invalid_limit_result
 
+    try:
+        source_keys = resolve_source_keys_alias(source_keys, source_key)
+    except SourceKeyArgumentError as error:
+        return build_invalid_source_key_arguments_result(
+            message=str(error),
+            source_key=source_key,
+            source_keys=source_keys,
+        )
     source_keys_detail: list[JSONValue] = list(source_keys or [])
     context: SnapshotContext | ToolResult = await _load_snapshot_for_filtered_view_tool(
         project_name=project_name,

@@ -25,7 +25,7 @@ from tools.errors import (
             "Requested project is not authorized by the access token.",
             "project_access_mismatch",
             [
-                "Retry with project_name allowed by the current JWT project access rules.",
+                "Retry with project_name allowed by the current MCP caller project access rules.",
             ],
         ),
         (

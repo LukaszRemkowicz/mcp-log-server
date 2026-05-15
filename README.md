@@ -32,7 +32,7 @@ under `src/agent_assets/`.
 
 Current MCP workflow surface includes:
 
-- tools: `analyze_daily_log_bundle`, `collect_logs`, `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`, `create_filtered_view`, `group_errors`, `build_incident_bundle`, `suggest_followup_window`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `list_container_directory`
+- tools: `analyze_daily_log_bundle`, `collect_logs`, `close_agent_session`, `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`, `create_filtered_view`, `group_errors`, `build_incident_bundle`, `suggest_followup_window`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `list_container_directory`
 - resources: concrete workflow skill resources such as
   `skill://workflow/project_context`, `skill://workflow/severity_guide`,
   `skill://workflow/bot_detection`
@@ -217,6 +217,9 @@ location = "./migrations"
 src_folder = "./src"
 ```
 
+Typer command documentation lives in
+[src/scripts/README.md](/Users/lukaszremkowicz/Projects/mcp-log-server/src/scripts/README.md).
+
 Generate new migration files only after the related model structure has been
 reviewed and approved.
 
@@ -337,6 +340,36 @@ operator-controlled run.
 The server now uses FastMCP's HTTP auth layer, so tool visibility and tool
 calls are evaluated per bearer token, not once at process startup.
 
+Tool calls also pass through the `authentications` database allowlist. FastMCP
+still validates the JWT signature, issuer, audience, expiration, and scopes
+first. After that, middleware checks for one manual row matching:
+
+- `client_id`
+- `client_type`
+- `workspace` (`workflow` or `session`)
+
+The row also stores `allowed_projects` as a JSON list of project names. That
+database list becomes the effective project allowlist for the tool call, so a
+valid JWT is not enough by itself; the caller must also have a matching
+`authentications` row for the requested workspace and projects.
+
+Example manual row:
+
+```sql
+INSERT INTO authentications (
+    client_id,
+    client_type,
+    workspace,
+    allowed_projects
+)
+VALUES (
+    'codex-agent',
+    'codex',
+    'session',
+    '["landingpage"]'::jsonb
+);
+```
+
 - `JWT_ALGORITHM`
   Signing algorithm for local example JWTs.
   Default: `HS256`
@@ -360,7 +393,7 @@ calls are evaluated per bearer token, not once at process startup.
 Generate example JWTs locally:
 
 ```bash
-uv run python infra/scripts/generate_dev_jwt.py
+uv run commands generate-dev-jwt
 ```
 
 That prints a JSON payload with:
@@ -373,7 +406,20 @@ That prints a JSON payload with:
 The usual local flow is to save it into `.agent/DEV_JWT_TOKENS.json`:
 
 ```bash
-uv run python infra/scripts/generate_dev_jwt.py > .agent/DEV_JWT_TOKENS.json
+uv run commands generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
+```
+
+When `--output-file` is provided, the command writes the token JSON to that
+path instead of printing tokens to the console. Parent directories are created
+automatically. Without `--output-file`, the JSON is printed to stdout.
+
+The command also accepts explicit identity claim overrides when you need
+tokens for a different local caller:
+
+```bash
+uv run commands generate-dev-jwt \
+  --codex-client-id local-codex \
+  --codex-client-type codex
 ```
 
 Then export the values you want to use with `curl`:
@@ -414,6 +460,7 @@ Current example JWT capabilities:
   - `get_mcp_health_check`
   - `read_container_file`
   - `list_container_directory`
+  - `close_agent_session`
 
 Important:
 
@@ -570,7 +617,7 @@ Important response note:
 For local development, generate fresh example JWTs with:
 
 ```bash
-uv run python infra/scripts/generate_dev_jwt.py > .agent/DEV_JWT_TOKENS.json
+uv run commands generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
 ```
 
 Refresh them when:
@@ -699,7 +746,7 @@ Command:
 
 ```bash
 curl -sS \
-  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Authorization: Bearer <codex_agent_jwt>' \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json' \
   -d '{
@@ -821,7 +868,7 @@ Example session collection call that starts a new MCP-owned session:
 
 ```bash
 curl -sS \
-  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Authorization: Bearer <codex_agent_jwt>' \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json' \
   -d '{
@@ -845,7 +892,7 @@ project into the same investigation session:
 
 ```bash
 curl -sS \
-  -H 'Authorization: Bearer <workflow_agent_jwt>' \
+  -H 'Authorization: Bearer <codex_agent_jwt>' \
   -H 'Content-Type: application/json' \
   -H 'Accept: application/json' \
   -d '{
@@ -858,6 +905,27 @@ curl -sS \
         "project_names":["landingpage","traefik"],
         "source_keys":["backend"],
         "workspace":"session",
+        "session_id":"<returned_session_id>"
+      }
+    }
+  }' \
+  http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
+```
+
+Close the interactive session when the investigation is done:
+
+```bash
+curl -sS \
+  -H 'Authorization: Bearer <codex_agent_jwt>' \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json' \
+  -d '{
+    "jsonrpc":"2.0",
+    "id":"close-session",
+    "method":"tools/call",
+    "params":{
+      "name":"close_agent_session",
+      "arguments":{
         "session_id":"<returned_session_id>"
       }
     }
@@ -896,6 +964,8 @@ Artifact lookup guidance:
 - use `archive_name` plus `project_name` when you want to keep reading or
   grepping the same archived workflow artifact later
 - use `session_id` plus `project_name` for session workspaces
+- call `close_agent_session` when an interactive session investigation is done;
+  this marks audit metadata only and keeps existing snapshot files readable
 
 List files from the latest workflow artifact:
 
@@ -957,12 +1027,15 @@ curl -sS \
       "arguments":{
         "project_name":"landingpage",
         "grep":"/health",
-        "source_keys":["backend"]
+        "source_key":"backend"
       }
     }
   }' \
   http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
 ```
+
+Use exactly one source selector: `source_key` for a single source, or
+`source_keys` for multiple sources such as `["backend","nginx"]`.
 
 Create one deterministic cleaned view from a saved raw artifact:
 
@@ -979,14 +1052,17 @@ curl -sS \
       "name":"create_filtered_view",
       "arguments":{
         "project_name":"landingpage",
-        "source_keys":["backend"],
-        "max_lines":100,
-        "excluded_sample_limit":10
+        "source_key":"backend",
+        "max_lines":100
       }
     }
   }' \
   http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
 ```
+
+`create_filtered_view`, `group_errors`, and `build_incident_bundle` accept
+`source_key` for one source and `source_keys` for multiple sources. Do not pass
+both in the same call.
 
 Group repeated error-like findings from one saved snapshot:
 
@@ -1003,7 +1079,7 @@ curl -sS \
       "name":"group_errors",
       "arguments":{
         "project_name":"landingpage",
-        "source_keys":["backend"],
+        "source_key":"backend",
         "max_groups":20
       }
     }
@@ -1026,7 +1102,7 @@ curl -sS \
       "name":"build_incident_bundle",
       "arguments":{
         "project_name":"landingpage",
-        "source_keys":["backend"],
+        "source_key":"backend",
         "max_groups":20
       }
     }
@@ -1338,6 +1414,10 @@ Current checks and release flows:
     tests run
   - covers docker-backed collection logic with mocks inside pytest
 - curl-driven MCP HTTP end-to-end checks via `infra/scripts/run_http_e2e.sh`
+  - runs against `mcp_log_server_test` by default and refuses database names
+    that do not end in `_test`
+  - recreates and migrates the test database before uploading temporary
+    fixture manifests
 - Docker Compose validation
 - Docker image build check
 - CodeQL analysis on pull requests and the weekly schedule

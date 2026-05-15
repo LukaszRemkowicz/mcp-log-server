@@ -14,7 +14,13 @@ import database.ensure_test_database as ensure_test_database_module
 from core.types import LogWorkspace
 from database.fields import FileField
 from database.managers import CollectLogsManager
-from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest
+from database.models import (
+    AgentCall,
+    Authentication,
+    CollectLogs,
+    CollectLogsSource,
+    ProjectManifest,
+)
 from database.types import AgentCallEvent, CollectLogsSourceStatus, LogSourceType, LogStream
 from tests.conftest import override_settings
 
@@ -387,6 +393,34 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
     assert ProjectManifest.objects._model is ProjectManifest
     assert AgentCall.objects is not ProjectManifest.objects
     assert CollectLogs.objects is not CollectLogsSource.objects
+
+    assert Authentication.Meta.table == "authentications"
+    assert set(Authentication._meta.fields_map) == {
+        "id",
+        "created_at",
+        "updated_at",
+        "client_id",
+        "client_type",
+        "workspace",
+        "allowed_projects",
+    }
+    assert (
+        Authentication._meta.fields_map["client_id"].description
+        == "Stable client_id claim allowed to call MCP tools."
+    )
+    assert (
+        Authentication._meta.fields_map["client_type"].description
+        == "Stable client_type claim allowed for this MCP client id."
+    )
+    assert (
+        Authentication._meta.fields_map["workspace"].description
+        == "MCP workspace this caller is allowed to use."
+    )
+    assert (
+        Authentication._meta.fields_map["allowed_projects"].description
+        == "Project names this MCP caller row is allowed to access."
+    )
+    assert Authentication.objects is not AgentCall.objects
 
 
 @pytest.mark.anyio

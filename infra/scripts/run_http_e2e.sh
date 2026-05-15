@@ -7,10 +7,22 @@ FIXTURES_DIR="$TMP_ROOT/fixtures"
 MANIFESTS_DIR="$TMP_ROOT/manifests"
 LOGS_DIR="$TMP_ROOT/logs"
 SERVER_LOG="$TMP_ROOT/server.log"
+TOKENS_FILE="$TMP_ROOT/dev_jwt_tokens.json"
 PORT="${PORT:-18081}"
 HOST="${HOST:-127.0.0.1}"
 BASE_URL="http://${HOST}:${PORT}/mcp"
 SESSION_ID="11111111-1111-4111-8111-111111111111"
+
+export DATABASE_HOST="${DATABASE_HOST:-127.0.0.1}"
+export DATABASE_PORT="${DATABASE_PORT:-${DATABASE_PORT_HOST:-5437}}"
+export DATABASE_NAME="${E2E_DATABASE_NAME:-mcp_log_server_test}"
+export DATABASE_USER="${DATABASE_USER:-mcp_log_server}"
+export DATABASE_PASSWORD="${DATABASE_PASSWORD:-mcp-log-server-local-password}"
+
+if [[ "$DATABASE_NAME" != *_test ]]; then
+  echo "Refusing to run HTTP E2E against non-test database: $DATABASE_NAME" >&2
+  exit 1
+fi
 
 cleanup() {
   if [[ -n "${SERVER_PID:-}" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
@@ -103,21 +115,71 @@ assert_file_exists() {
   fi
 }
 
-WORKFLOW_AGENT_JWT="$(
-  cd "$REPO_ROOT" &&
-    uv run python infra/scripts/generate_dev_jwt.py | jq -r '.workflow_agent'
-)"
-CODEX_AGENT_JWT="$(
-  cd "$REPO_ROOT" &&
-    uv run python infra/scripts/generate_dev_jwt.py | jq -r '.codex_agent'
-)"
+(
+  cd "$REPO_ROOT"
+  uv run commands generate-dev-jwt --output-file "$TOKENS_FILE"
+  uv run python -m database.ensure_test_database
+  uv run migrate >/dev/null
+  uv run python - <<'PY'
+import asyncio
+import json
+
+import asyncpg
+
+from conf import settings
+
+
+async def main() -> None:
+    connection = await asyncpg.connect(
+        host=settings.DATABASE_HOST,
+        port=settings.DATABASE_PORT,
+        user=settings.DATABASE_USER,
+        password=settings.DATABASE_PASSWORD,
+        database=settings.DATABASE_NAME,
+    )
+    try:
+        for client_id, client_type, workspace in (
+            ("workflow-agent", "workflow_agent", "workflow"),
+            ("codex-agent", "codex", "session"),
+        ):
+            await connection.execute(
+                """
+                INSERT INTO "authentications" (
+                    "client_id",
+                    "client_type",
+                    "workspace",
+                    "allowed_projects"
+                )
+                VALUES ($1, $2, $3, $4::jsonb)
+                ON CONFLICT ("client_id", "client_type", "workspace") DO UPDATE
+                SET "allowed_projects" = EXCLUDED."allowed_projects",
+                    "updated_at" = NOW()
+                """,
+                client_id,
+                client_type,
+                workspace,
+                json.dumps(["landingpage"]),
+            )
+    finally:
+        await connection.close()
+
+
+asyncio.run(main())
+PY
+)
+WORKFLOW_AGENT_JWT="$(jq -r '.workflow_agent' "$TOKENS_FILE")"
+CODEX_AGENT_JWT="$(jq -r '.codex_agent' "$TOKENS_FILE")"
 export WORKFLOW_AGENT_JWT
 export CODEX_AGENT_JWT
 
 (
   cd "$REPO_ROOT/src"
-  uv run python -m scripts.main upload-project-manifest-internal --path "$MANIFESTS_DIR" --all >/dev/null
-  uv run python -m scripts.main update-project-manifest-internal --path "$MANIFESTS_DIR" --project landingpage >/dev/null
+  uv run python -m scripts.main upload-project-manifest-internal \
+    --path "$MANIFESTS_DIR" \
+    --all >/dev/null
+  uv run python -m scripts.main update-project-manifest-internal \
+    --path "$MANIFESTS_DIR" \
+    --project landingpage >/dev/null
 )
 
 (

@@ -19,6 +19,9 @@ truth. For broader direction, also read:
 - `infra/docs/repository_foundation.md`
 - `infra/docs/analysis/mcp_log_server_architecture.md`
 - `infra/scripts/README.md`
+  Repository infra and deployment script runbook.
+- `src/scripts/README.md`
+  Typer command discovery and local developer command reference.
 
 
 ## Short Project Summary
@@ -64,7 +67,7 @@ Important current Python files:
   Environment-backed runtime settings.
 - `src/auth/`
   JWT auth provider wiring and scope constants.
-- `infra/scripts/generate_dev_jwt.py`
+- `src/scripts/commands/generate_dev_jwt.py`
   Local development JWT generator.
 - `src/manifests/`
   Manifest schema, loader, and bundled manifest data.
@@ -296,13 +299,18 @@ Current auth state:
 
 - FastMCP verifies JWTs per request
 - component access is enforced with per-component `auth=` checks
+- MCP tool calls additionally require a manual `authentications` database row
+  matching `client_id`, `client_type`, and `workspace` (`workflow` or
+  `session`)
+- each `authentications.allowed_projects` value is a JSON list of project names
+  and becomes the effective project allowlist for the tool call
 - local development uses real example JWTs signed with the local shared secret
 - local development JWTs are valid for 24 hours only
 - before using local saved tokens, first check `updated_at` in a private local
   file such as `.agent/DEV_JWT_TOKENS.json`
 - if `updated_at` is older than one day, treat the saved tokens as not valid
   and generate fresh ones with:
-  `uv run python infra/scripts/generate_dev_jwt.py`
+  `uv run commands generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json`
 - if the expected token structure changes, for example a new required scope is
   added for MCP checks, treat previously saved tokens as outdated and generate
   fresh ones even if they are still within the 24-hour window
@@ -377,7 +385,9 @@ Current collector test caveat:
 
 - collector and snapshot tools have strong unit and API-level coverage
 - docker-backed collection inside pytest is covered with mocks
-- the curl-driven MCP HTTP path is covered by `infra/scripts/run_http_e2e.sh`
+- the curl-driven MCP HTTP path is covered by `infra/scripts/run_http_e2e.sh`,
+  which recreates and migrates `mcp_log_server_test` before uploading temporary
+  fixture manifests
 - real live-container log collection is not yet exercised inside pytest
 
 Common run path:

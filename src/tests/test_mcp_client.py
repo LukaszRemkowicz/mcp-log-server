@@ -21,7 +21,7 @@ async def test_in_memory_client_hides_protected_components_without_auth() -> Non
         assert resources == []
         assert prompts == []
         assert tool_result.isError is True
-        assert "Unknown tool" in tool_result.content[0].text
+        assert "Authenticated access token is required" in tool_result.content[0].text
 
         with pytest.raises(McpError, match="Unknown resource"):
             await client.read_resource("skill://workflow/severity_guide")

@@ -27,10 +27,15 @@ from uuid import UUID
 import mcp.types as mt
 from fastmcp.resources.base import ResourceResult
 from fastmcp.server.auth import AccessToken
-from fastmcp.server.dependencies import get_access_token
+from fastmcp.server.dependencies import get_access_token, get_http_request
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import Tool, ToolResult
+from tortoise.exceptions import BaseORMException
 
+from auth.mcp_caller_context import AuthenticatedMcpCaller, set_request_mcp_caller
+from core.types import LogWorkspace
+from database.services.authentications import AuthenticationService
+from database.services.project_manifests import ProjectManifestService as ProjectManifestDBService
 from logging_config import get_logger
 from services.agent_calls import AgentCallAuditService, AgentCallCreateError
 from services.log_collection import LogCollectionService
@@ -39,6 +44,9 @@ from utils.types import JSONObject
 
 logger: logging.Logger = get_logger("middleware.audit")
 agent_call_audit_service = AgentCallAuditService()
+authentication_service = AuthenticationService()
+project_manifest_db_service = ProjectManifestDBService()
+
 WORKFLOW_AGENT_CLIENT_ID = "workflow-agent"
 WORKFLOW_AGENT_CLIENT_TYPE = "workflow_agent"
 
@@ -78,18 +86,16 @@ def _tool_result_is_error(result: ToolResult) -> bool:
         return False
 
 
-def _is_workflow_agent(token: AccessToken | None) -> bool:
+def _is_workflow_agent(token: AccessToken) -> bool:
     """Return whether the authenticated caller is the fixed workflow agent."""
 
-    if token is None:
-        return False
     return (
         token.client_id == WORKFLOW_AGENT_CLIENT_ID
         or token.claims.get("client_type") == WORKFLOW_AGENT_CLIENT_TYPE
     )
 
 
-def _workflow_agent_session_error(token: AccessToken | None) -> AgentToolErrorResult:
+def _workflow_agent_session_error(token: AccessToken) -> AgentToolErrorResult:
     """Return an agent-facing error for workflow agents requesting session workspace."""
 
     return build_agent_tool_error_result(
@@ -100,10 +106,189 @@ def _workflow_agent_session_error(token: AccessToken | None) -> AgentToolErrorRe
             "Use a non-workflow agent token for interactive session investigations.",
         ],
         details={
-            "client_id": token.client_id if token is not None else None,
-            "client_type": (token.claims.get("client_type") if token is not None else None),
+            "client_id": token.client_id,
+            "client_type": token.claims.get("client_type"),
             "workspace": "session",
         },
+    )
+
+
+def _client_id_missing_error() -> AgentToolErrorResult:
+    """Return an agent-facing error when a JWT lacks stable caller identity."""
+
+    return build_agent_tool_error_result(
+        error_code="invalid_client_id",
+        message="Authenticated JWT must include a non-empty client_id.",
+        retry_tips=[
+            "Retry with a JWT issued for a concrete MCP client.",
+            "Regenerate local development JWTs if they were created before client_id was required.",
+        ],
+        details={"required_claim": "client_id"},
+    )
+
+
+def _access_token_missing_error() -> AgentToolErrorResult:
+    """Return an agent-facing error when no authenticated token is available."""
+
+    return build_agent_tool_error_result(
+        error_code="missing_access_token",
+        message="Authenticated access token is required for MCP tool calls.",
+        retry_tips=[
+            "Retry through the authenticated MCP HTTP path.",
+            "Regenerate local development JWTs if the Authorization header is missing.",
+        ],
+        details={"required_header": "Authorization"},
+    )
+
+
+def _client_type_missing_error() -> AgentToolErrorResult:
+    """Return an agent-facing error when a JWT lacks stable caller type."""
+
+    return build_agent_tool_error_result(
+        error_code="invalid_client_type",
+        message="Authenticated JWT must include a non-empty client_type.",
+        retry_tips=[
+            "Retry with a JWT issued for a concrete MCP client type.",
+            (
+                "Regenerate local development JWTs if they were created before "
+                "client_type was required."
+            ),
+        ],
+        details={"required_claim": "client_type"},
+    )
+
+
+def _client_not_authorized_error(
+    *,
+    client_id: str,
+    client_type: str,
+    workspace: LogWorkspace,
+) -> AgentToolErrorResult:
+    """Return an agent-facing error when the caller is not allowlisted."""
+
+    return build_agent_tool_error_result(
+        error_code="mcp_client_not_authorized",
+        message="Authenticated MCP client is not allowed to call tools.",
+        retry_tips=[
+            "Ask an administrator to add this client_id and client_type to authentications.",
+            "Retry with a JWT for an allowed MCP client.",
+        ],
+        details={
+            "client_id": client_id,
+            "client_type": client_type,
+            "workspace": workspace,
+        },
+    )
+
+
+def _client_has_no_allowed_projects_error(
+    *,
+    client_id: str,
+    client_type: str,
+    workspace: LogWorkspace,
+) -> AgentToolErrorResult:
+    """Return an agent-facing error when an allowlisted caller has no projects."""
+
+    return build_agent_tool_error_result(
+        error_code="mcp_client_has_no_allowed_projects",
+        message="Authenticated MCP client is not allowed to access any project.",
+        retry_tips=[
+            "Ask an administrator to add at least one project to authentications.allowed_projects.",
+        ],
+        details={
+            "client_id": client_id,
+            "client_type": client_type,
+            "workspace": workspace,
+        },
+    )
+
+
+def _authentication_unavailable_error() -> AgentToolErrorResult:
+    """Return an agent-facing error when the allowlist cannot be checked."""
+
+    return build_agent_tool_error_result(
+        error_code="authentication_unavailable",
+        message="MCP client authentication allowlist is temporarily unavailable.",
+        retry_tips=[
+            "Retry later or ask administrator to check database connectivity and migrations.",
+        ],
+        details={},
+    )
+
+
+def _get_valid_client_id(token: AccessToken) -> str | None:
+    """Return the authenticated MCP caller id when it is present and non-empty."""
+
+    claim_client_id = token.claims.get("client_id")
+    if not isinstance(claim_client_id, str) or not claim_client_id.strip():
+        return None
+    if not token.client_id or not token.client_id.strip():
+        return None
+    return token.client_id.strip()
+
+
+def _get_valid_client_type(token: AccessToken) -> str | None:
+    """Return the authenticated MCP caller type when it is present and non-empty."""
+
+    claim_client_type = token.claims.get("client_type")
+    if not isinstance(claim_client_type, str) or not claim_client_type.strip():
+        return None
+    return claim_client_type.strip()
+
+
+def _resolve_tool_workspace(
+    *,
+    tool_name: str,
+    arguments: dict[str, Any],
+) -> LogWorkspace:
+    """Return the workspace context implied by one tool call."""
+
+    if tool_name == "close_agent_session":
+        return LogWorkspace.SESSION
+    if tool_name == "collect_logs":
+        try:
+            return LogWorkspace(str(arguments.get("workspace", LogWorkspace.WORKFLOW)))
+        except ValueError:
+            return LogWorkspace.WORKFLOW
+    if arguments.get("session_id") is not None:
+        return LogWorkspace.SESSION
+    return LogWorkspace.WORKFLOW
+
+
+async def _authorize_mcp_client(
+    *,
+    client_id: str,
+    client_type: str,
+    workspace: LogWorkspace,
+    allow_empty_projects: bool = False,
+) -> AuthenticatedMcpCaller | AgentToolErrorResult | None:
+    """Return the DB-backed caller when a matching allowlist row exists."""
+
+    authentication = await authentication_service.get_allowed(
+        client_id=client_id,
+        client_type=client_type,
+        workspace=workspace,
+    )
+    if authentication is None:
+        return None
+
+    allowed_project_names = frozenset(authentication.allowed_projects)
+    if "all" in allowed_project_names:
+        allowed_project_names = frozenset(
+            project_manifest.project_key
+            for project_manifest in await project_manifest_db_service.all()
+        )
+    if not allowed_project_names and not allow_empty_projects:
+        return _client_has_no_allowed_projects_error(
+            client_id=client_id,
+            client_type=client_type,
+            workspace=workspace,
+        )
+    return AuthenticatedMcpCaller(
+        client_id=client_id,
+        client_type=client_type,
+        workspace=workspace,
+        allowed_projects=allowed_project_names,
     )
 
 
@@ -118,6 +303,59 @@ def _prepare_collect_logs_session_id(
     arguments["session_id"] = str(session_id)
     context.message.arguments = arguments
     return session_id
+
+
+def _attach_request_caller(caller: AuthenticatedMcpCaller) -> None:
+    """Attach the DB-backed caller to the active HTTP request when available."""
+
+    try:
+        request = get_http_request()
+    except RuntimeError:
+        return
+    set_request_mcp_caller(caller, request=request)
+
+
+async def _authenticate_mcp_caller(
+    *,
+    token: AccessToken,
+    workspace: LogWorkspace,
+    tool_name: str,
+) -> AuthenticatedMcpCaller | AgentToolErrorResult:
+    """Authorize the JWT caller against DB allowlist and attach request state."""
+
+    client_id = _get_valid_client_id(token)
+    if client_id is None:
+        return _client_id_missing_error()
+    client_type = _get_valid_client_type(token)
+    if client_type is None:
+        return _client_type_missing_error()
+    try:
+        caller = await _authorize_mcp_client(
+            client_id=client_id,
+            client_type=client_type,
+            workspace=workspace,
+            allow_empty_projects=tool_name == "get_mcp_service_status",
+        )
+    except BaseORMException:
+        logger.exception(
+            "failed to check mcp client authentication allowlist",
+            extra={
+                "event": "mcp_client_authentication_check_failed",
+                "client_id": client_id,
+                "client_type": client_type,
+            },
+        )
+        return _authentication_unavailable_error()
+    if isinstance(caller, AgentToolErrorResult):
+        return caller
+    if caller is None:
+        return _client_not_authorized_error(
+            client_id=client_id,
+            client_type=client_type,
+            workspace=workspace,
+        )
+    _attach_request_caller(caller)
+    return caller
 
 
 async def _create_agent_call(
@@ -208,15 +446,25 @@ class AccessAuditMiddleware(Middleware):
         """
 
         token = get_access_token()
+        if token is None:
+            return _access_token_missing_error()
         started_at = perf_counter()
         tool_name = context.message.name
         arguments: dict[str, Any] = dict(context.message.arguments or {})
+        workspace = _resolve_tool_workspace(tool_name=tool_name, arguments=arguments)
         if (
             tool_name == "collect_logs"
-            and arguments.get("workspace") == "session"
+            and workspace == LogWorkspace.SESSION
             and _is_workflow_agent(token)
         ):
             return _workflow_agent_session_error(token)
+        caller_result = await _authenticate_mcp_caller(
+            token=token,
+            workspace=workspace,
+            tool_name=tool_name,
+        )
+        if isinstance(caller_result, AgentToolErrorResult):
+            return caller_result
 
         session_id = (
             _prepare_collect_logs_session_id(context) if tool_name == "collect_logs" else None
