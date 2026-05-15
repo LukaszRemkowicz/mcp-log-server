@@ -13,6 +13,45 @@ from database.types import AgentCallEvent, CollectLogsSourceStatus, LogSourceTyp
 from storage import storage as log_storage
 
 
+class Authentication(DatabaseModel):
+    """Manually managed MCP caller allowlist entry."""
+
+    objects: ClassVar[ObjectsManager[Authentication]]
+
+    id = fields.BigIntField(
+        primary_key=True,
+        description="Database-generated integer id for this allowed MCP caller.",
+    )
+    created_at = fields.DatetimeField(
+        auto_now_add=True,
+        description="UTC timestamp when this allowed MCP caller row was created.",
+    )
+    updated_at = fields.DatetimeField(
+        auto_now=True,
+        description="UTC timestamp when this allowed MCP caller row was last updated.",
+    )
+    client_id = fields.CharField(
+        max_length=255,
+        description="Stable client_id claim allowed to call MCP tools.",
+    )
+    client_type = fields.CharField(
+        max_length=128,
+        description="Stable client_type claim allowed for this MCP client id.",
+    )
+    workspace = fields.CharEnumField(
+        LogWorkspace,
+        description="MCP workspace this caller is allowed to use.",
+    )
+    allowed_projects: fields.Field[list[str]] = fields.JSONField(
+        default=list,
+        description="Project names this MCP caller row is allowed to access.",
+    )
+
+    class Meta:
+        table = "authentications"
+        unique_together = (("client_id", "client_type", "workspace"),)
+
+
 class AgentCall(DatabaseModel):
     """One persisted MCP agent call or move within a session."""
 

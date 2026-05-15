@@ -340,6 +340,36 @@ operator-controlled run.
 The server now uses FastMCP's HTTP auth layer, so tool visibility and tool
 calls are evaluated per bearer token, not once at process startup.
 
+Tool calls also pass through the `authentications` database allowlist. FastMCP
+still validates the JWT signature, issuer, audience, expiration, and scopes
+first. After that, middleware checks for one manual row matching:
+
+- `client_id`
+- `client_type`
+- `workspace` (`workflow` or `session`)
+
+The row also stores `allowed_projects` as a JSON list of project names. That
+database list becomes the effective project allowlist for the tool call, so a
+valid JWT is not enough by itself; the caller must also have a matching
+`authentications` row for the requested workspace and projects.
+
+Example manual row:
+
+```sql
+INSERT INTO authentications (
+    client_id,
+    client_type,
+    workspace,
+    allowed_projects
+)
+VALUES (
+    'codex-agent',
+    'codex',
+    'session',
+    '["landingpage"]'::jsonb
+);
+```
+
 - `JWT_ALGORITHM`
   Signing algorithm for local example JWTs.
   Default: `HS256`

@@ -165,6 +165,22 @@ def test_application_registers_expected_mcp_components(
         assert "source_keys" in app_grep_tool.parameters["properties"]
         match_limit_property = app_grep_tool.parameters["properties"]["match_limit"]
         assert match_limit_property["default"] == 100
+        request_caller_tool_names = {
+            "get_mcp_service_status",
+            "list_projects",
+            "collect_logs",
+            "list_log_snapshot_files",
+            "read_log_snapshot_file",
+            "grep_log_snapshot",
+            "group_errors",
+            "build_incident_bundle",
+            "create_filtered_view",
+            "read_container_file",
+            "list_container_directory",
+        }
+        tools_by_name = {tool.name: tool for tool in tools}
+        for tool_name in request_caller_tool_names:
+            assert "caller" not in tools_by_name[tool_name].parameters["properties"]
         list_projects_tool = next(
             item for item in bootstrap_text["tools"] if item["tool_name"] == "list_projects"
         )

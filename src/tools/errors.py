@@ -16,7 +16,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from fastmcp.server.auth import AccessToken
 from fastmcp.tools.base import ToolResult
 from mcp.types import TextContent
 
@@ -83,7 +82,7 @@ def build_collect_logs_error_retry_tips(error_code: str) -> list[str]:
         ]
     if error_code == "project_access_mismatch":
         return [
-            "Retry with project_names allowed by the current JWT project access rules.",
+            "Retry with project_names allowed by the current MCP caller project access rules.",
             "Use get_mcp_service_status to confirm the current project access before retrying.",
         ]
     if error_code == "invalid_project_names":
@@ -128,7 +127,6 @@ def build_collect_logs_error_details(
     error_code: str,
     *,
     settings: Settings,
-    access_token: AccessToken,
     project_names: list[str] | None,
     workspace: SnapshotWorkspace,
     session_id: str | None,
@@ -138,7 +136,6 @@ def build_collect_logs_error_details(
     if error_code == "project_access_mismatch":
         return {
             "requested_project_names": list(project_names) if project_names is not None else None,
-            "allowed_projects": access_token.claims.get("allowed_projects"),
         }
     if error_code in {"unknown_project", "manifest_project_mismatch"}:
         return {
@@ -179,7 +176,6 @@ def build_collect_logs_error_result(
     message: str,
     *,
     settings: Settings,
-    access_token: AccessToken,
     project_names: list[str] | None,
     workspace: SnapshotWorkspace,
     session_id: str | None,
@@ -194,7 +190,6 @@ def build_collect_logs_error_result(
         details=build_collect_logs_error_details(
             error_code,
             settings=settings,
-            access_token=access_token,
             project_names=project_names,
             workspace=workspace,
             session_id=session_id,
@@ -275,14 +270,14 @@ CONTAINER_INSPECTION_ERROR_RULES: tuple[ContainerInspectionErrorRule, ...] = (
         message_fragment="authorized by the access token",
         error_code="project_access_mismatch",
         retry_tips=[
-            "Retry with project_name allowed by the current JWT project access rules.",
+            "Retry with project_name allowed by the current MCP caller project access rules.",
         ],
     ),
     ContainerInspectionErrorRule(
         message_fragment="not allowed by the authenticated access token",
         error_code="project_access_mismatch",
         retry_tips=[
-            "Retry with project_name allowed by the current JWT project access rules.",
+            "Retry with project_name allowed by the current MCP caller project access rules.",
         ],
     ),
     ContainerInspectionErrorRule(

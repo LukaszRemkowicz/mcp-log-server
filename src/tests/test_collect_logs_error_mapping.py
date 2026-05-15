@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from fastmcp.server.auth import AccessToken
 
 from conf import settings
 from core.types import LogWorkspace
@@ -56,13 +55,10 @@ def test_classify_collect_logs_error_returns_expected_codes(
     assert classify_collect_logs_error(message) == expected_error_code
 
 
-def test_build_collect_logs_error_details_returns_project_access_context(
-    valid_access_token: AccessToken,
-) -> None:
+def test_build_collect_logs_error_details_returns_project_access_context() -> None:
     details = build_collect_logs_error_details(
         "project_access_mismatch",
         settings=settings,
-        access_token=valid_access_token,
         project_names=["landingpage"],
         workspace=LogWorkspace.WORKFLOW,
         session_id=None,
@@ -70,17 +66,13 @@ def test_build_collect_logs_error_details_returns_project_access_context(
 
     assert details == {
         "requested_project_names": ["landingpage"],
-        "allowed_projects": ["landingpage"],
     }
 
 
-def test_build_collect_logs_error_details_returns_unknown_project_context(
-    valid_access_token: AccessToken,
-) -> None:
+def test_build_collect_logs_error_details_returns_unknown_project_context() -> None:
     details = build_collect_logs_error_details(
         "unknown_project",
         settings=settings,
-        access_token=valid_access_token,
         project_names=["other-project"],
         workspace=LogWorkspace.WORKFLOW,
         session_id=None,
@@ -91,13 +83,10 @@ def test_build_collect_logs_error_details_returns_unknown_project_context(
     }
 
 
-def test_build_collect_logs_error_details_returns_session_context(
-    valid_access_token: AccessToken,
-) -> None:
+def test_build_collect_logs_error_details_returns_session_context() -> None:
     details = build_collect_logs_error_details(
         "missing_session_id",
         settings=settings,
-        access_token=valid_access_token,
         project_names=["landingpage"],
         workspace=LogWorkspace.SESSION,
         session_id=None,
@@ -117,13 +106,10 @@ def test_render_collect_logs_error_message_sanitizes_snapshot_metadata_errors() 
     assert "Persisted workflow snapshot metadata is incompatible" in rendered
 
 
-def test_build_collect_logs_error_result_returns_normalized_tool_error(
-    valid_access_token: AccessToken,
-) -> None:
+def test_build_collect_logs_error_result_returns_normalized_tool_error() -> None:
     result = build_collect_logs_error_result(
         "Unknown project 'other'. No persisted manifest was found for that project.",
         settings=settings,
-        access_token=valid_access_token,
         project_names=["other"],
         workspace=LogWorkspace.WORKFLOW,
         session_id=None,

@@ -217,6 +217,10 @@ Current implemented shape:
 
 - `JWTVerifier` validates incoming bearer tokens
 - tool/resource visibility is enforced with per-component `auth=` checks
+- tool calls require one manual `authentications` database row matching
+  `client_id`, `client_type`, and `workspace`
+- `authentications.allowed_projects` is a JSON list and becomes the effective
+  project allowlist for the tool call
 - local development uses example JWTs signed with the local shared secret
 
 This is a development-ready JWT flow, not a final Keycloak production rollout.

@@ -31,6 +31,7 @@ from tools import collection as collection_tools
 
 ToolCall = tuple[str, dict[str, object]]
 ProtectedToolCall = tuple[str, dict[str, object], list[str]]
+CallerContextToolCall = tuple[str, dict[str, object], list[str], list[str], bool]
 ProjectProtectedInvalidTokenFactory = Callable[["CustomJwtToken", list[str]], str]
 InvalidTokenFactory = Callable[["CustomJwtToken"], str]
 
@@ -70,6 +71,70 @@ COLLECT_LOGS_TOOL_CALLS: tuple[ToolCall, ...] = (
 )
 PROJECT_PROTECTED_TOOL_CALL_ARGUMENTS: tuple[ToolCall, ...] = (
     COLLECT_LOGS_TOOL_CALLS + SNAPSHOT_TOOL_CALLS + ANALYSIS_TOOL_CALLS + CONTAINER_TOOL_CALLS
+)
+CALLER_CONTEXT_LOG_TOOL_NAMES = {
+    "collect_logs",
+    *(tool_name for tool_name, _arguments in SNAPSHOT_TOOL_CALLS + ANALYSIS_TOOL_CALLS),
+}
+CALLER_CONTEXT_TOOL_CALLS: tuple[CallerContextToolCall, ...] = (
+    ("list_projects", {}, [PROJECTS_READ_SCOPE], ["landingpage"], False),
+    (
+        "collect_logs",
+        {"project_names": ["landingpage"], "source_keys": ["app_file"], "workspace": "workflow"},
+        [LOGS_COLLECT_SCOPE],
+        ["landingpage"],
+        False,
+    ),
+    (
+        "list_log_snapshot_files",
+        {"project_name": "landingpage"},
+        [LOGS_COLLECT_SCOPE],
+        ["landingpage"],
+        True,
+    ),
+    (
+        "read_log_snapshot_file",
+        {"project_name": "landingpage", "source_key": "app_file"},
+        [LOGS_COLLECT_SCOPE],
+        ["landingpage"],
+        True,
+    ),
+    (
+        "grep_log_snapshot",
+        {"project_name": "landingpage", "grep": "line"},
+        [LOGS_COLLECT_SCOPE],
+        ["landingpage"],
+        True,
+    ),
+    ("group_errors", {"project_name": "landingpage"}, [LOGS_COLLECT_SCOPE], ["landingpage"], True),
+    (
+        "build_incident_bundle",
+        {"project_name": "landingpage"},
+        [LOGS_COLLECT_SCOPE],
+        ["landingpage"],
+        True,
+    ),
+    (
+        "create_filtered_view",
+        {"project_name": "landingpage"},
+        [LOGS_COLLECT_SCOPE],
+        ["landingpage"],
+        True,
+    ),
+    (
+        "read_container_file",
+        {"project_name": "dockerpage", "source_key": "backend", "path": "/app/VERSION"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["dockerpage"],
+        False,
+    ),
+    (
+        "list_container_directory",
+        {"project_name": "dockerpage", "source_key": "backend", "path": "/app"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["dockerpage"],
+        False,
+    ),
 )
 PROJECT_PROTECTED_LOG_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [LOGS_COLLECT_SCOPE]) for tool_name, arguments in COLLECT_LOGS_TOOL_CALLS
@@ -249,6 +314,132 @@ def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
     assert any(argument["name"] == "project_names" for argument in collect_logs_tool["arguments"])
     assert any(argument["name"] == "source_keys" for argument in collect_logs_tool["arguments"])
     assert any(argument["name"] == "session_id" for argument in collect_logs_tool["arguments"])
+
+
+def test_service_status_api_does_not_report_project_access(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify service status only reports identity/config, not project permissions."""
+
+    token = custom_jwt_token(
+        "codex-agent",
+        [MCP_STATUS_READ_SCOPE],
+        "status-no-project-client",
+        {
+            "allowed_projects": ["shop"],
+            "client_type": "codex",
+            "projects_access": "all",
+        },
+    )
+
+    response = jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "service-status-caller-context",
+            "method": "tools/call",
+            "params": {"name": "get_mcp_service_status", "arguments": {}},
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["client_id"] == "status-no-project-client"
+    assert payload["client_type"] == "codex"
+    assert "allowed_projects" not in payload
+    assert "projects_access" not in payload
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments", "scopes", "allowed_projects", "needs_snapshot"),
+    CALLER_CONTEXT_TOOL_CALLS,
+)
+def test_mcp_tools_api_use_database_caller_context_for_project_access(
+    file_backed_project_context: FileBackedProjectContext,
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+    tool_name: str,
+    arguments: dict[str, object],
+    scopes: list[str],
+    allowed_projects: list[str],
+    needs_snapshot: bool,
+) -> None:
+    """Verify real MCP tool calls use request-state DB caller projects over JWT claims."""
+
+    client_id = f"caller-context-{allowed_projects[0]}"
+    wrong_projects = ["shop"] if allowed_projects != ["shop"] else ["landingpage"]
+    token = custom_jwt_token(
+        "codex-agent",
+        scopes,
+        client_id,
+        {"allowed_projects": wrong_projects, "client_type": "codex"},
+    )
+
+    if tool_name == "read_container_file":
+        mocker.patch(
+            "tools.container_inspection.docker_service.stat_container_path",
+            return_value=ContainerPathStat(
+                path="/app/VERSION",
+                is_dir=False,
+                size=12,
+                mode=0o100644,
+                modified_at="2026-04-26T10:00:00+00:00",
+            ),
+        )
+        mocker.patch(
+            "tools.container_inspection.docker_service.read_container_file",
+            return_value=("release-123\n", False),
+        )
+    if tool_name == "list_container_directory":
+        mocker.patch(
+            "tools.container_inspection.docker_service.list_container_directory",
+            return_value=(
+                [
+                    ContainerPathStat(
+                        path="/app/VERSION",
+                        is_dir=False,
+                        size=12,
+                        mode=0o100644,
+                        modified_at="2026-04-26T10:00:00+00:00",
+                    ),
+                ],
+                False,
+            ),
+        )
+
+    request_data = {
+        "jsonrpc": "2.0",
+        "id": f"{tool_name}-caller-context",
+        "method": "tools/call",
+        "params": {"name": tool_name, "arguments": arguments},
+    }
+    if tool_name in CALLER_CONTEXT_LOG_TOOL_NAMES:
+        with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+            if needs_snapshot:
+                collect_response = jsonrpc.post(
+                    token=token,
+                    data=build_collect_logs_request(source_keys=["app_file"]),
+                )
+                assert collect_response.status_code == 200
+                assert collect_response.json()["result"]["isError"] is False
+            response = jsonrpc.post(token=token, data=request_data)
+    else:
+        response = jsonrpc.post(token=token, data=request_data)
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    payload = response.json()["result"]["structuredContent"]
+    if tool_name == "list_projects":
+        assert [project["project_name"] for project in payload["result"]] == allowed_projects
+        return
+    if tool_name == "collect_logs":
+        assert [project["project_name"] for project in payload["projects"]] == allowed_projects
+        return
+    assert payload["project_name"] == allowed_projects[0]
 
 
 def test_collect_logs_api_returns_requested_and_resolved_file_sources(
@@ -699,8 +890,8 @@ def test_list_projects_api_returns_multiple_manifest_backed_projects(
     token: str = custom_jwt_token(
         "workflow-agent",
         [PROJECTS_READ_SCOPE],
-        "workflow-agent",
-        {"projects_access": "all"},
+        "all-project-workflow-client",
+        {"client_type": "workflow_agent", "projects_access": "all"},
     )
     response = jsonrpc.post(
         token=token,
@@ -746,7 +937,7 @@ def test_collect_logs_api_returns_agent_error_for_project_mismatch(
     assert payload["status"] == "error"
     assert payload["error_code"] == "project_access_mismatch"
     assert payload["retry_tips"] == [
-        "Retry with project_names allowed by the current JWT project access rules.",
+        "Retry with project_names allowed by the current MCP caller project access rules.",
         "Use get_mcp_service_status to confirm the current project access before retrying.",
     ]
 
@@ -764,8 +955,8 @@ def test_collect_logs_api_uses_all_accessible_projects_when_project_names_not_pr
     token: str = custom_jwt_token(
         "workflow-agent",
         [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
-        "workflow-agent",
-        {"allowed_projects": ["landingpage", "shop"]},
+        "limited-workflow-client",
+        {"allowed_projects": ["landingpage", "shop"], "client_type": "workflow_agent"},
     )
     request_data: dict[str, Any] = build_collect_logs_request(project_names=project_names)
     if project_names is None:
@@ -885,7 +1076,7 @@ def test_collect_logs_api_blocks_workflow_agent_session_workspace(
     assert payload["error_code"] == "workspace_not_allowed"
     assert payload["details"] == {
         "client_id": "workflow-agent",
-        "client_type": None,
+        "client_type": "workflow_agent",
         "workspace": "session",
     }
     create_spy.assert_not_called()
@@ -1179,3 +1370,41 @@ def test_tool_call_api_rejects_jwt_without_client_id(
     assert response.json()["result"]["isError"] is True
     assert payload["status"] == "error"
     assert payload["error_code"] == "invalid_client_id"
+
+
+def test_tool_call_api_rejects_jwt_for_unregistered_client(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify tool calls require a matching Authentication row."""
+
+    token = custom_jwt_token(
+        "unregistered-agent",
+        [SESSION_CLOSE_SCOPE],
+        "unregistered-agent",
+        {"client_type": "codex"},
+    )
+
+    response = jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "unregistered-client",
+            "method": "tools/call",
+            "params": {
+                "name": "close_agent_session",
+                "arguments": {"session_id": "ef5e1daa-d06b-479c-926d-8107639bd467"},
+            },
+        },
+    )
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "mcp_client_not_authorized"
+    assert payload["details"] == {
+        "client_id": "unregistered-agent",
+        "client_type": "codex",
+        "workspace": "session",
+    }

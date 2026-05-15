@@ -120,6 +120,52 @@ assert_file_exists() {
   uv run commands generate-dev-jwt --output-file "$TOKENS_FILE"
   uv run python -m database.ensure_test_database
   uv run migrate >/dev/null
+  uv run python - <<'PY'
+import asyncio
+import json
+
+import asyncpg
+
+from conf import settings
+
+
+async def main() -> None:
+    connection = await asyncpg.connect(
+        host=settings.DATABASE_HOST,
+        port=settings.DATABASE_PORT,
+        user=settings.DATABASE_USER,
+        password=settings.DATABASE_PASSWORD,
+        database=settings.DATABASE_NAME,
+    )
+    try:
+        for client_id, client_type, workspace in (
+            ("workflow-agent", "workflow_agent", "workflow"),
+            ("codex-agent", "codex", "session"),
+        ):
+            await connection.execute(
+                """
+                INSERT INTO "authentications" (
+                    "client_id",
+                    "client_type",
+                    "workspace",
+                    "allowed_projects"
+                )
+                VALUES ($1, $2, $3, $4::jsonb)
+                ON CONFLICT ("client_id", "client_type", "workspace") DO UPDATE
+                SET "allowed_projects" = EXCLUDED."allowed_projects",
+                    "updated_at" = NOW()
+                """,
+                client_id,
+                client_type,
+                workspace,
+                json.dumps(["landingpage"]),
+            )
+    finally:
+        await connection.close()
+
+
+asyncio.run(main())
+PY
 )
 WORKFLOW_AGENT_JWT="$(jq -r '.workflow_agent' "$TOKENS_FILE")"
 CODEX_AGENT_JWT="$(jq -r '.codex_agent' "$TOKENS_FILE")"

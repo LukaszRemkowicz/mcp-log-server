@@ -299,6 +299,11 @@ Current auth state:
 
 - FastMCP verifies JWTs per request
 - component access is enforced with per-component `auth=` checks
+- MCP tool calls additionally require a manual `authentications` database row
+  matching `client_id`, `client_type`, and `workspace` (`workflow` or
+  `session`)
+- each `authentications.allowed_projects` value is a JSON list of project names
+  and becomes the effective project allowlist for the tool call
 - local development uses real example JWTs signed with the local shared secret
 - local development JWTs are valid for 24 hours only
 - before using local saved tokens, first check `updated_at` in a private local

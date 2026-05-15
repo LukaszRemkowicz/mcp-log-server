@@ -3,23 +3,16 @@
 from __future__ import annotations
 
 import logging
-from typing import cast
 
-from fastmcp.dependencies import CurrentAccessToken
-from fastmcp.server.auth import AccessToken
 from fastmcp.tools.base import ToolResult
 
+from auth.mcp_caller_context import get_request_mcp_caller
 from auth.scopes import LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE
 from conf import settings
 from core.types import LogWorkspace
 from decorators import project_authorized_tool, workflow_discoverable_tool
 from logging_config import get_logger
 from services.log_collection import BuildLogsError, LogCollectionService
-from services.project_authorization import (
-    ProjectAccessScope,
-    ProjectAuthorizationError,
-    ProjectAuthorizationService,
-)
 from services.project_manifest import ProjectManifestError, ProjectManifestService
 from tools.agent_hints import COLLECT_LOGS_NEXT_STEP_TIPS, COLLECT_LOGS_TOOL_DESCRIPTION
 from tools.errors import build_collect_logs_error_details, build_collect_logs_error_result
@@ -30,13 +23,10 @@ logger: logging.Logger = get_logger("tools.collection")
 
 collection_service = LogCollectionService()
 manifest_service = ProjectManifestService()
-project_authorization_service = ProjectAuthorizationService()
 
 
 @workflow_discoverable_tool(PROJECTS_READ_SCOPE)
-async def list_projects(
-    access_token: AccessToken | None = CurrentAccessToken(),
-) -> list[ProjectManifestSummary]:
+async def list_projects() -> list[ProjectManifestSummary]:
     """List projects currently available through persisted manifest rows.
 
     This is the lightweight discovery entrypoint for project-scoped log tools.
@@ -49,42 +39,11 @@ async def list_projects(
     manifest contents.
     """
 
-    assert access_token is not None
-    project_access_scope: ProjectAccessScope | ProjectAuthorizationError = (
-        project_authorization_service.get_required_project_access_scope_or_error(access_token)
-    )
-    if isinstance(project_access_scope, ProjectAuthorizationError):
-        logger.info(
-            "tool error",
-            extra={
-                "event": "tool_error",
-                "tool_name": "list_projects",
-                "error_message": project_access_scope.message,
-            },
-        )
-        return cast(
-            list[ProjectManifestSummary],
-            build_agent_tool_error_result(
-                error_code=project_access_scope.error_code,
-                message=project_access_scope.message,
-                retry_tips=project_access_scope.retry_tips,
-            ),
-        )
-
-    if project_access_scope.all_projects:
-        all_project_summaries: list[ProjectManifestSummary] = (await manifest_service.all()).root
-        logger.info(
-            "tool result",
-            extra={
-                "event": "tool_result",
-                "tool_name": "list_projects",
-                "project_count": len(all_project_summaries),
-            },
-        )
-        return all_project_summaries
+    caller = get_request_mcp_caller()
+    assert caller is not None, "list_projects expects middleware-attached MCP caller context"
 
     project_summaries: list[ProjectManifestSummary] = []
-    for project_name in sorted(project_access_scope.allowed_projects):
+    for project_name in sorted(caller.allowed_projects):
         manifest_context = await manifest_service.get(project_name)
         if manifest_context is not None:
             project_summaries.append(
@@ -119,7 +78,6 @@ async def collect_logs(
     session_id: str | None = None,
     since: str | None = settings.DEFAULT_LOG_WINDOW,
     until: str | None = None,
-    access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
     """Collect logs into workflow or session artifacts for one or more projects.
 
@@ -143,14 +101,13 @@ async def collect_logs(
       `project_names` before this tool runs
     - for real MCP/API `collect_logs` calls, middleware also injects a generated
       `session_id` when `workspace="session"` and the request omitted it
-    - when `project_names` is omitted or empty in the HTTP path, middleware may
-      inject all projects accessible to the current JWT
+    - when `project_names` is omitted or empty in the HTTP path, project
+      authorization may use all projects accessible to the request-state caller
     - direct Python calls to `collect_logs(...)` do not go through middleware,
       so missing or empty `project_names` is treated as programming error and
       this function will fail instead of returning a tool error
     """
 
-    assert access_token is not None
     defaults = collection_service.normalize_params(
         source_keys=source_keys,
         since=since,
@@ -177,7 +134,6 @@ async def collect_logs(
             return build_collect_logs_error_result(
                 manifest_result.message,
                 settings=settings,
-                access_token=access_token,
                 project_names=project_names,
                 workspace=workspace,
                 session_id=session_id,
@@ -219,7 +175,6 @@ async def collect_logs(
                 details=build_collect_logs_error_details(
                     project_payload.error_code,
                     settings=settings,
-                    access_token=access_token,
                     project_names=project_names,
                     workspace=workspace,
                     session_id=session_id,
