@@ -19,7 +19,15 @@ from auth.scopes import (
     WORKFLOW_BOOTSTRAP_SCOPE,
     WORKFLOW_SKILLS_READ_SCOPE,
 )
-from services.docker_service import ContainerPathStat
+from services.docker_service import (
+    ContainerDetail,
+    ContainerDetailMount,
+    ContainerDetailNetwork,
+    ContainerDetailPort,
+    ContainerHealth,
+    ContainerPathStat,
+    ContainerRestartPolicy,
+)
 from tests.conftest import (
     CustomJwtToken,
     FileBackedProjectContext,
@@ -48,6 +56,14 @@ SNAPSHOT_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("grep_log_snapshot", {"project_name": "landingpage", "grep": "line"}),
 )
 CONTAINER_TOOL_CALLS: tuple[ToolCall, ...] = (
+    (
+        "inspect_containers_health",
+        {"project_name": "dockerpage"},
+    ),
+    (
+        "inspect_container_detail",
+        {"project_name": "dockerpage", "source_key": "backend"},
+    ),
     (
         "stat_container_path",
         {"project_name": "dockerpage", "source_key": "backend", "path": "/app/VERSION"},
@@ -130,6 +146,20 @@ CALLER_CONTEXT_TOOL_CALLS: tuple[CallerContextToolCall, ...] = (
         True,
     ),
     (
+        "inspect_containers_health",
+        {"project_name": "dockerpage"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["dockerpage"],
+        False,
+    ),
+    (
+        "inspect_container_detail",
+        {"project_name": "dockerpage", "source_key": "backend"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["dockerpage"],
+        False,
+    ),
+    (
         "stat_container_path",
         {"project_name": "dockerpage", "source_key": "backend", "path": "/app/VERSION"},
         [CONTAINER_FILES_READ_SCOPE],
@@ -203,6 +233,8 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "get_mcp_health_check",
             },
             {
+                "inspect_containers_health",
+                "inspect_container_detail",
                 "stat_container_path",
                 "read_container_file",
                 "list_container_directory",
@@ -231,6 +263,8 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "inspect_proxy_activity",
                 "suggest_followup_window",
                 "list_projects",
+                "inspect_containers_health",
+                "inspect_container_detail",
                 "stat_container_path",
                 "read_container_file",
                 "list_container_directory",
@@ -412,6 +446,64 @@ def test_mcp_tools_api_use_database_caller_context_for_project_access(
         mocker.patch(
             "tools.container_inspection.docker_service.read_container_file",
             return_value=("release-123\n", False),
+        )
+    if tool_name == "inspect_containers_health":
+        mocker.patch(
+            "tools.container_inspection.docker_service.inspect_container_health",
+            return_value=ContainerHealth(
+                container_id="abc123def456",
+                container_name="app-container",
+                image="portfolio/backend:2026-05-16",
+                docker_status="running",
+                health_status="healthy",
+                running=True,
+                restarting=False,
+                paused=False,
+                dead=False,
+                exit_code=0,
+                error="",
+                restart_count=2,
+                started_at="2026-05-16T10:00:00.000000000Z",
+                finished_at="0001-01-01T00:00:00Z",
+            ),
+        )
+    if tool_name == "inspect_container_detail":
+        mocker.patch(
+            "tools.container_inspection.docker_service.inspect_container_detail",
+            return_value=ContainerDetail(
+                health=ContainerHealth(
+                    container_id="abc123def456",
+                    container_name="app-container",
+                    image="portfolio/backend:2026-05-16",
+                    docker_status="running",
+                    health_status="healthy",
+                    running=True,
+                    restarting=False,
+                    paused=False,
+                    dead=False,
+                    exit_code=0,
+                    error="",
+                    restart_count=2,
+                    started_at="2026-05-16T10:00:00.000000000Z",
+                    finished_at=None,
+                ),
+                created_at="2026-05-16T09:55:00.000000000Z",
+                env_var_names=[],
+                label_keys=[],
+                compose_labels={},
+                restart_policy=ContainerRestartPolicy(
+                    name=None,
+                    maximum_retry_count=None,
+                ),
+                command=[],
+                entrypoint=[],
+                working_dir=None,
+                user=None,
+                ports=[],
+                mounts=[],
+                networks=[],
+                health_log=[],
+            ),
         )
     if tool_name == "list_container_directory":
         mocker.patch(
@@ -1319,6 +1411,197 @@ def test_read_container_file_api_returns_file_contents(
     assert payload["action"] == "read_container_file"
     assert payload["content"] == "release-123\n"
     assert payload["file"]["name"] == "VERSION"
+
+
+def test_inspect_containers_health_api_returns_container_status(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify inspect_containers_health returns all project docker source states."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+
+    mocker.patch(
+        "tools.container_inspection.docker_service.inspect_container_health",
+        return_value=ContainerHealth(
+            container_id="abc123def456",
+            container_name="app-container",
+            image="portfolio/backend:2026-05-16",
+            docker_status="running",
+            health_status="healthy",
+            running=True,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=2,
+            started_at="2026-05-16T10:00:00.000000000Z",
+            finished_at="0001-01-01T00:00:00Z",
+        ),
+    )
+
+    response = jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-container-health",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_containers_health",
+                "arguments": {
+                    "project_name": "dockerpage",
+                },
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_containers_health"
+    assert payload["project_name"] == "dockerpage"
+    assert payload["resolved_source_keys"] == ["backend", "frontend", "nginx"]
+    assert len(payload["containers"]) == 3
+    backend_payload = payload["containers"][0]
+    assert backend_payload["source_key"] == "backend"
+    assert backend_payload["container_name"] == "app-container"
+    assert backend_payload["docker_status"] == "running"
+    assert backend_payload["health_status"] == "healthy"
+    assert backend_payload["running"] is True
+    assert backend_payload["restart_count"] == 2
+    assert backend_payload["image"] == "portfolio/backend:2026-05-16"
+
+
+def test_inspect_container_detail_api_returns_curated_container_metadata(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify inspect_container_detail returns one bounded docker-inspect view."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+
+    mocker.patch(
+        "tools.container_inspection.docker_service.inspect_container_detail",
+        return_value=ContainerDetail(
+            health=ContainerHealth(
+                container_id="abc123def456",
+                container_name="app-container",
+                image="portfolio/backend:2026-05-16",
+                docker_status="running",
+                health_status="healthy",
+                running=True,
+                restarting=False,
+                paused=False,
+                dead=False,
+                exit_code=0,
+                error="",
+                restart_count=2,
+                started_at="2026-05-16T10:00:00.000000000Z",
+                finished_at=None,
+            ),
+            created_at="2026-05-16T09:55:00.000000000Z",
+            env_var_names=["SECRET_KEY", "DJANGO_SETTINGS_MODULE"],
+            label_keys=["com.docker.compose.service"],
+            compose_labels={"com.docker.compose.service": "backend"},
+            restart_policy=ContainerRestartPolicy(
+                name="unless-stopped",
+                maximum_retry_count=3,
+            ),
+            command=["gunicorn", "app.wsgi:application"],
+            entrypoint=["/entrypoint.sh"],
+            working_dir="/app",
+            user="app",
+            ports=[
+                ContainerDetailPort(
+                    private_port="8000/tcp",
+                    host_ip="127.0.0.1",
+                    host_port="18080",
+                )
+            ],
+            mounts=[
+                ContainerDetailMount(
+                    type="bind",
+                    destination="/app",
+                    mode="rw",
+                    rw=True,
+                )
+            ],
+            networks=[
+                ContainerDetailNetwork(
+                    name="web",
+                    ip_address="172.20.0.10",
+                    aliases=["backend", "api"],
+                )
+            ],
+            health_log=[
+                {
+                    "start": "2026-05-16T10:01:00.000000000Z",
+                    "end": "2026-05-16T10:01:01.000000000Z",
+                    "exit_code": 0,
+                    "output": "ok\n",
+                }
+            ],
+        ),
+    )
+
+    response = jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-container-detail",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_container_detail",
+                "arguments": {
+                    "project_name": "dockerpage",
+                    "source_key": "backend",
+                },
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_container_detail"
+    assert payload["project_name"] == "dockerpage"
+    assert payload["source_key"] == "backend"
+    assert payload["container"]["container_name"] == "app-container"
+    assert payload["created_at"] == "2026-05-16T09:55:00.000000000Z"
+    assert payload["env_var_names"] == ["SECRET_KEY", "DJANGO_SETTINGS_MODULE"]
+    assert payload["label_keys"] == ["com.docker.compose.service"]
+    assert payload["compose_labels"] == {"com.docker.compose.service": "backend"}
+    assert payload["restart_policy"] == {
+        "name": "unless-stopped",
+        "maximum_retry_count": 3,
+    }
+    assert payload["command"] == ["gunicorn", "app.wsgi:application"]
+    assert payload["entrypoint"] == ["/entrypoint.sh"]
+    assert payload["working_dir"] == "/app"
+    assert payload["user"] == "app"
+    assert payload["ports"] == [
+        {"private_port": "8000/tcp", "host_ip": "127.0.0.1", "host_port": "18080"}
+    ]
+    assert payload["mounts"] == [{"type": "bind", "destination": "/app", "mode": "rw", "rw": True}]
+    assert payload["networks"] == [
+        {"name": "web", "ip_address": "172.20.0.10", "aliases": ["backend", "api"]}
+    ]
+    assert payload["health_log"][0]["output"] == "ok\n"
 
 
 def test_stat_container_path_api_returns_file_metadata(

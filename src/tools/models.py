@@ -525,6 +525,105 @@ class ContainerPathMetadataPayload(BaseModel):
         return getattr(self, key)
 
 
+class ContainerHealthPayload(BaseModel):
+    """One container health item returned by container diagnostics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_key: str
+    inspection_status: Literal["ok", "error"]
+    inspection_error: str | None
+    container_name: str
+    container_id: str
+    image: str | None
+    docker_status: str | None
+    health_status: str | None
+    running: bool
+    restarting: bool
+    paused: bool
+    dead: bool
+    exit_code: int | None
+    error: str | None
+    restart_count: int | None
+    started_at: str | None
+    finished_at: str | None
+
+
+class InspectContainersHealthPayload(BaseModel):
+    """Structured project-level success payload returned by `inspect_containers_health`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_containers_health"]
+    project_name: str
+    resolved_source_keys: list[str]
+    containers: list[ContainerHealthPayload]
+
+
+class ContainerDetailMountPayload(BaseModel):
+    """Curated mount metadata returned by `inspect_container_detail`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str | None
+    destination: str | None
+    mode: str | None
+    rw: bool | None
+
+
+class ContainerDetailNetworkPayload(BaseModel):
+    """Curated network metadata returned by `inspect_container_detail`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    ip_address: str | None
+    aliases: list[str]
+
+
+class ContainerDetailPortPayload(BaseModel):
+    """Curated port metadata returned by `inspect_container_detail`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    private_port: str
+    host_ip: str | None
+    host_port: str | None
+
+
+class ContainerRestartPolicyPayload(BaseModel):
+    """Curated restart-policy metadata returned by `inspect_container_detail`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None
+    maximum_retry_count: int | None
+
+
+class InspectContainerDetailPayload(BaseModel):
+    """Structured success payload returned by `inspect_container_detail`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_container_detail"]
+    project_name: str
+    source_key: str
+    container: ContainerHealthPayload
+    created_at: str | None
+    env_var_names: list[str]
+    label_keys: list[str]
+    compose_labels: dict[str, str]
+    restart_policy: ContainerRestartPolicyPayload
+    command: list[str]
+    entrypoint: list[str]
+    working_dir: str | None
+    user: str | None
+    ports: list[ContainerDetailPortPayload]
+    mounts: list[ContainerDetailMountPayload]
+    networks: list[ContainerDetailNetworkPayload]
+    health_log: list[dict[str, object]]
+
+
 class ReadContainerFilePayload(BaseModel):
     """Structured success payload returned by `read_container_file`.
 

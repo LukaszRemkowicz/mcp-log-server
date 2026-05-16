@@ -21,6 +21,8 @@ from tools.agent_hints import (
     CREATE_FILTERED_VIEW_TOOL_DESCRIPTION,
     GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION,
     GROUP_ERRORS_TOOL_DESCRIPTION,
+    INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
+    INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
     INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
     READ_CONTAINER_FILE_TOOL_DESCRIPTION,
@@ -52,6 +54,8 @@ def test_application_registers_expected_mcp_components(
         assert "inspect_proxy_activity" in tool_names
         assert "suggest_followup_window" in tool_names
         assert "list_projects" in tool_names
+        assert "inspect_containers_health" in tool_names
+        assert "inspect_container_detail" in tool_names
         assert "stat_container_path" in tool_names
         assert "read_container_file" in tool_names
         assert "list_container_directory" in tool_names
@@ -146,6 +150,14 @@ def test_application_registers_expected_mcp_components(
             tool for tool in tools if tool.name == "inspect_proxy_activity"
         )
         assert app_proxy_activity_tool.description == INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION
+        app_container_health_tool = next(
+            tool for tool in tools if tool.name == "inspect_containers_health"
+        )
+        assert app_container_health_tool.description == INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION
+        app_container_detail_tool = next(
+            tool for tool in tools if tool.name == "inspect_container_detail"
+        )
+        assert app_container_detail_tool.description == INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION
         app_group_errors_tool = next(tool for tool in tools if tool.name == "group_errors")
         assert app_group_errors_tool.description == GROUP_ERRORS_TOOL_DESCRIPTION
         app_followup_tool = next(tool for tool in tools if tool.name == "suggest_followup_window")
@@ -186,6 +198,7 @@ def test_application_registers_expected_mcp_components(
             "build_incident_bundle",
             "create_filtered_view",
             "inspect_proxy_activity",
+            "inspect_containers_health",
             "stat_container_path",
             "read_container_file",
             "list_container_directory",

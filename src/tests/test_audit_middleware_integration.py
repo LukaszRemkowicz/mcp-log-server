@@ -17,6 +17,7 @@ from auth.mcp_caller_context import AuthenticatedMcpCaller
 from cache import clear_cache
 from core.types import LogWorkspace
 from database.models import AgentCall, Authentication, ProjectManifest
+from database.schemas import ProjectManifestUpdate
 from database.services.project_manifests import ProjectManifestService
 from middleware.audit import AccessAuditMiddleware, _prepare_collect_logs_session_id
 from services.agent_calls import AGENT_CALL_UNAVAILABLE_RETRY_TIP, AgentCallCreateError
@@ -408,6 +409,49 @@ async def test_audit_middleware_rejects_tool_call_when_workspace_mismatches(
 
 
 @pytest.mark.anyio
+async def test_audit_middleware_authorizes_container_health_as_session_tool(
+    mocker: MockerFixture,
+) -> None:
+    """Verify container health diagnostics use the session caller allowlist."""
+
+    await Authentication.objects.create(
+        client_id="session-container-client",
+        client_type="codex",
+        workspace=LogWorkspace.SESSION,
+        allowed_projects=["dockerpage"],
+    )
+    token = AccessToken(
+        token="test-token",
+        client_id="session-container-client",
+        scopes=["container.files.read"],
+        claims={
+            "sub": "codex-subject",
+            "client_id": "session-container-client",
+            "client_type": "codex",
+        },
+    )
+    mocker.patch("middleware.audit.get_access_token", return_value=token)
+    context = MiddlewareContext(
+        message=mt.CallToolRequestParams(
+            name="inspect_containers_health",
+            arguments={"project_name": "dockerpage", "source_key": "backend"},
+        )
+    )
+    middleware = AccessAuditMiddleware()
+    call_next = mocker.AsyncMock(
+        return_value=ToolResult(content=[], structured_content={"ok": True})
+    )
+
+    result = await middleware.on_call_tool(
+        context,
+        cast(CallNext[mt.CallToolRequestParams, ToolResult], call_next),
+    )
+
+    call_next.assert_awaited_once()
+    assert result.structured_content == {"ok": True}
+
+
+@pytest.mark.anyio
 async def test_audit_middleware_sets_database_caller_on_request_state(
     mocker: MockerFixture,
 ) -> None:
@@ -547,6 +591,34 @@ async def test_project_manifest_service_caches_all_manifest_rows() -> None:
 
 
 @pytest.mark.anyio
+async def test_project_manifest_service_caches_one_manifest_row() -> None:
+    """Verify single manifest lookups reuse cached rows."""
+
+    await clear_cache(ProjectManifestService.get)
+    project_manifest_service = ProjectManifestService()
+    row = await ProjectManifest.objects.create(
+        project_key="cache-one",
+        project_summary="Original summary.",
+        static_asset_paths=[],
+        static_asset_extensions=[],
+        sources=[],
+    )
+
+    try:
+        first_result = await project_manifest_service.get("cache-one")
+        row.project_summary = "Changed summary."
+        await row.save(update_fields=["project_summary", "updated_at"])
+
+        second_result = await project_manifest_service.get("cache-one")
+
+        assert first_result.project_summary == "Original summary."
+        assert second_result.project_summary == "Original summary."
+        assert second_result == first_result
+    finally:
+        await clear_cache(ProjectManifestService.get)
+
+
+@pytest.mark.anyio
 async def test_project_manifest_service_cache_is_clearable() -> None:
     """Verify manifest writes can clear the cached manifest listing."""
 
@@ -584,3 +656,37 @@ async def test_project_manifest_service_cache_is_clearable() -> None:
         assert "clear-cache-beta" in refreshed_project_keys
     finally:
         await clear_cache(ProjectManifestService.all)
+
+
+@pytest.mark.anyio
+async def test_project_manifest_service_update_clears_single_manifest_cache() -> None:
+    """Verify service updates refresh cached single-manifest lookups."""
+
+    await clear_cache(ProjectManifestService.get)
+    project_manifest_service = ProjectManifestService()
+    row = await ProjectManifest.objects.create(
+        project_key="clear-one",
+        project_summary="Original summary.",
+        static_asset_paths=[],
+        static_asset_extensions=[],
+        sources=[],
+    )
+
+    try:
+        first_result = await project_manifest_service.get("clear-one")
+
+        await project_manifest_service.update(
+            ProjectManifestUpdate(
+                pk=row.id,
+                project_summary="Updated summary.",
+                static_asset_paths=[],
+                static_asset_extensions=[],
+                sources=[],
+            )
+        )
+        second_result = await project_manifest_service.get("clear-one")
+
+        assert first_result.project_summary == "Original summary."
+        assert second_result.project_summary == "Updated summary."
+    finally:
+        await clear_cache(ProjectManifestService.get)

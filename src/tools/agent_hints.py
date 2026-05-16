@@ -64,6 +64,23 @@ INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION = (
     "snapshot files only; it does not run live proxy or shell commands."
 )
 
+INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION = (
+    "Inspect Docker runtime status for all docker-backed sources in one project. "
+    "Returns a compact per-source overview with container status, healthcheck "
+    "status when available, restart count, image, and lifecycle timestamps "
+    "without exposing raw docker ps output."
+)
+
+INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION = (
+    "Inspect curated Docker metadata for one manifest-approved source container. "
+    "Use this after inspect_containers_health points to a suspicious container. "
+    "Returns bounded docker-inspect-style details such as status, image, restart "
+    "policy, ports, command, entrypoint, working directory, runtime user, env var "
+    "names without values, label keys without values, selected safe Compose label "
+    "values, mounts without host source paths, networks and aliases, and recent "
+    "healthcheck log entries."
+)
+
 GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION = (
     "Search one persisted workflow or session snapshot with controlled grep "
     "semantics. Use grep for the text pattern. Omit source filters to search "

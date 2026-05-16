@@ -51,6 +51,13 @@ project_manifest_db_service = ProjectManifestDBService()
 
 WORKFLOW_AGENT_CLIENT_ID = "workflow-agent"
 WORKFLOW_AGENT_CLIENT_TYPE = "workflow_agent"
+SESSION_WORKSPACE_TOOLS = frozenset(
+    {
+        "close_agent_session",
+        "inspect_container_detail",
+        "inspect_containers_health",
+    }
+)
 
 
 def _build_auth_fields(token: AccessToken | None) -> dict[str, Any]:
@@ -290,7 +297,7 @@ def _resolve_tool_workspace(
 ) -> LogWorkspace:
     """Return the workspace context implied by one tool call."""
 
-    if tool_name == "close_agent_session":
+    if tool_name in SESSION_WORKSPACE_TOOLS:
         return LogWorkspace.SESSION
     if tool_name == "collect_logs":
         try:

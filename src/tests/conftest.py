@@ -121,6 +121,7 @@ class FakeDockerClient:
         self.commands: list[list[str]] = []
         self.captured_logs_kwargs: dict[str, object] = {}
         self.logs_exception: Exception | None = None
+        self.attrs: dict[str, object] = {}
 
     def get(self, container_name: str) -> FakeDockerClient:
         assert container_name == "backend-container"
@@ -235,6 +236,7 @@ async def _clear_project_manifest_cache() -> None:
     """Clear manifest caches that can otherwise cross pytest event loops."""
 
     await clear_cache(ProjectManifestDBService.all)
+    await clear_cache(ProjectManifestDBService.get)
 
 
 async def _initialize_test_database() -> None:
@@ -398,6 +400,7 @@ async def _create_callers() -> None:
         ("status-no-project-client", "codex", LogWorkspace.WORKFLOW, []),
         ("caller-context-landingpage", "codex", LogWorkspace.WORKFLOW, ["landingpage"]),
         ("caller-context-dockerpage", "codex", LogWorkspace.WORKFLOW, ["dockerpage"]),
+        ("caller-context-dockerpage", "codex", LogWorkspace.SESSION, ["dockerpage"]),
         ("all-project-workflow-client", "workflow_agent", LogWorkspace.WORKFLOW, ["all"]),
         (
             "limited-workflow-client",

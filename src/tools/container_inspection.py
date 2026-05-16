@@ -1,7 +1,8 @@
-"""Read-only MCP tools for manifest-whitelisted container file inspection.
+"""Read-only MCP tools for manifest-whitelisted container inspection.
 
 These tools are the specialist container-inspection surface for agents that
-need to verify deployed project files inside approved containers.
+need to verify deployed project files or container runtime status inside
+approved containers.
 
 Important boundary:
 
@@ -9,13 +10,15 @@ Important boundary:
 - agents do not get broad filesystem browsing
 - agents choose a high-level inspection operation
 - server code maps that operation to a fixed internal command set
-- requested paths must stay inside manifest-approved prefixes
+- requested paths must stay inside manifest-approved prefixes for file tools
 
 So this module is intentionally narrower than "run a command in a container".
-It exposes only deterministic, read-only file inspection primitives:
+It exposes only deterministic, read-only inspection primitives:
 
 - `read_container_file`
 - `list_container_directory`
+- `inspect_containers_health`
+- `inspect_container_detail`
 """
 
 from __future__ import annotations
@@ -35,19 +38,30 @@ from logging_config import get_logger
 from manifests.models import SourceDefinition
 from services.docker_service import (
     MAX_CONTAINER_FILE_BYTES,
+    ContainerDetail,
+    ContainerHealth,
     ContainerPathStat,
     DockerService,
     DockerServiceError,
 )
 from services.project_manifest import ProjectManifestError, ProjectManifestService
 from tools.agent_hints import (
+    INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
+    INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
     READ_CONTAINER_FILE_TOOL_DESCRIPTION,
     STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
 )
 from tools.errors import build_container_inspection_error_result
 from tools.models import (
+    ContainerDetailMountPayload,
+    ContainerDetailNetworkPayload,
+    ContainerDetailPortPayload,
+    ContainerHealthPayload,
     ContainerPathMetadataPayload,
+    ContainerRestartPolicyPayload,
+    InspectContainerDetailPayload,
+    InspectContainersHealthPayload,
     ListContainerDirectoryPayload,
     ReadContainerFilePayload,
     StatContainerPathPayload,
@@ -65,6 +79,63 @@ class ContainerInspectionContext:
     project_name: str
     definition: SourceDefinition
     normalized_path: str
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerSourceContext:
+    """Resolved project/source context for container-level inspection tools."""
+
+    project_name: str
+    definition: SourceDefinition
+
+
+async def _prepare_container_source_context(
+    *,
+    action: str,
+    project_name: str,
+    source_key: str,
+) -> ContainerSourceContext | ToolResult:
+    """Resolve manifest and docker source for one container-level tool."""
+
+    manifest_result = await manifest_service.get_or_error(project_name)
+    if isinstance(manifest_result, ProjectManifestError):
+        logger.info(
+            "tool error",
+            extra={
+                "event": "tool_error",
+                "tool_name": action,
+                "error_message": manifest_result.message,
+                "source_key": source_key,
+                "project_name": project_name,
+            },
+        )
+        return build_container_inspection_error_result(
+            action=action,
+            message=manifest_result.message,
+            requested_project_name=project_name,
+            source_key=source_key,
+            path=None,
+            settings=settings,
+        )
+
+    definition = manifest_service.get_container_source_or_error(
+        manifest_result.manifest,
+        source_key,
+    )
+    if isinstance(definition, ProjectManifestError):
+        return build_container_inspection_error_result(
+            action=action,
+            message=definition.message,
+            requested_project_name=project_name,
+            source_key=source_key,
+            path=None,
+            settings=settings,
+        )
+
+    return ContainerSourceContext(
+        project_name=manifest_result.project_name,
+        definition=definition,
+    )
 
 
 async def _prepare_container_inspection_context(
@@ -163,6 +234,231 @@ def create_container_payload(
             str(stat_payload.modified_at) if stat_payload.modified_at is not None else None
         ),
     )
+
+
+def create_container_health_item_payload(
+    health: ContainerHealth,
+    *,
+    source_key: str,
+) -> ContainerHealthPayload:
+    """Convert Docker runtime state into one MCP health item."""
+
+    return ContainerHealthPayload(
+        source_key=source_key,
+        inspection_status="ok",
+        inspection_error=None,
+        container_name=health.container_name,
+        container_id=health.container_id,
+        image=health.image,
+        docker_status=health.docker_status,
+        health_status=health.health_status,
+        running=health.running,
+        restarting=health.restarting,
+        paused=health.paused,
+        dead=health.dead,
+        exit_code=health.exit_code,
+        error=health.error,
+        restart_count=health.restart_count,
+        started_at=health.started_at,
+        finished_at=health.finished_at,
+    )
+
+
+def create_container_health_error_item_payload(
+    error: DockerServiceError,
+    *,
+    source_key: str,
+    container_name: str,
+) -> ContainerHealthPayload:
+    """Represent one failed container health lookup without failing the whole overview."""
+
+    return ContainerHealthPayload(
+        source_key=source_key,
+        inspection_status="error",
+        inspection_error=error.message,
+        container_name=container_name,
+        container_id="",
+        image=None,
+        docker_status=None,
+        health_status=None,
+        running=False,
+        restarting=False,
+        paused=False,
+        dead=False,
+        exit_code=None,
+        error=None,
+        restart_count=None,
+        started_at=None,
+        finished_at=None,
+    )
+
+
+def create_container_detail_payload(
+    detail: ContainerDetail,
+    *,
+    project_name: str,
+    source_key: str,
+) -> InspectContainerDetailPayload:
+    """Convert curated Docker inspect metadata into the MCP detail response."""
+
+    return InspectContainerDetailPayload(
+        action="inspect_container_detail",
+        project_name=project_name,
+        source_key=source_key,
+        container=create_container_health_item_payload(
+            detail.health,
+            source_key=source_key,
+        ),
+        created_at=detail.created_at,
+        env_var_names=detail.env_var_names,
+        label_keys=detail.label_keys,
+        compose_labels=detail.compose_labels,
+        restart_policy=ContainerRestartPolicyPayload(
+            name=detail.restart_policy.name,
+            maximum_retry_count=detail.restart_policy.maximum_retry_count,
+        ),
+        command=detail.command,
+        entrypoint=detail.entrypoint,
+        working_dir=detail.working_dir,
+        user=detail.user,
+        ports=[
+            ContainerDetailPortPayload(
+                private_port=item.private_port,
+                host_ip=item.host_ip,
+                host_port=item.host_port,
+            )
+            for item in detail.ports
+        ],
+        mounts=[
+            ContainerDetailMountPayload(
+                type=item.type,
+                destination=item.destination,
+                mode=item.mode,
+                rw=item.rw,
+            )
+            for item in detail.mounts
+        ],
+        networks=[
+            ContainerDetailNetworkPayload(
+                name=item.name,
+                ip_address=item.ip_address,
+                aliases=item.aliases,
+            )
+            for item in detail.networks
+        ],
+        health_log=detail.health_log,
+    )
+
+
+@mcp.tool(
+    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
+    description=INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
+)
+@project_authorized_tool
+async def inspect_containers_health(
+    project_name: str | None = None,
+) -> ToolResult:
+    """Return Docker runtime status for all manifest-approved source containers."""
+
+    assert project_name is not None
+    manifest_result = await manifest_service.get_or_error(project_name)
+    if isinstance(manifest_result, ProjectManifestError):
+        return build_container_inspection_error_result(
+            action="inspect_containers_health",
+            message=manifest_result.message,
+            requested_project_name=project_name,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    docker_sources = [
+        source for source in manifest_result.manifest.sources if source.source_type == "docker"
+    ]
+    container_payloads: list[ContainerHealthPayload] = []
+    for source in docker_sources:
+        health = docker_service.inspect_container_health(source.target)
+        if isinstance(health, DockerServiceError):
+            container_payloads.append(
+                create_container_health_error_item_payload(
+                    health,
+                    source_key=source.source_key,
+                    container_name=source.target,
+                )
+            )
+            continue
+        container_payloads.append(
+            create_container_health_item_payload(
+                health,
+                source_key=source.source_key,
+            )
+        )
+
+    payload = InspectContainersHealthPayload(
+        action="inspect_containers_health",
+        project_name=manifest_result.project_name,
+        resolved_source_keys=[source.source_key for source in docker_sources],
+        containers=container_payloads,
+    )
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_containers_health",
+            "project_name": payload.project_name,
+            "container_count": len(payload.containers),
+        },
+    )
+    return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
+
+
+@mcp.tool(
+    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
+    description=INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
+)
+@project_authorized_tool
+async def inspect_container_detail(
+    source_key: str,
+    project_name: str | None = None,
+) -> ToolResult:
+    """Return curated Docker inspect metadata for one manifest-approved container."""
+
+    assert project_name is not None
+    context = await _prepare_container_source_context(
+        action="inspect_container_detail",
+        project_name=project_name,
+        source_key=source_key,
+    )
+    if isinstance(context, ToolResult):
+        return context
+
+    detail = docker_service.inspect_container_detail(context.definition.target)
+    if isinstance(detail, DockerServiceError):
+        return build_container_inspection_error_result(
+            action="inspect_container_detail",
+            message=detail.message,
+            requested_project_name=project_name,
+            source_key=source_key,
+            path=None,
+            settings=settings,
+        )
+
+    payload = create_container_detail_payload(
+        detail,
+        project_name=context.project_name,
+        source_key=context.definition.source_key,
+    )
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_container_detail",
+            "source_key": payload.source_key,
+            "container_name": payload.container.container_name,
+            "docker_status": payload.container.docker_status,
+        },
+    )
+    return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
 @mcp.tool(

@@ -30,8 +30,10 @@ class ProjectManifestService:
         context = payload.model_dump(exclude={"pk"}, exclude_none=True)
         obj = await self.model.objects.create(id=payload.pk, **context)
         await clear_cache(self.all)
+        await clear_cache(self.get)
         return obj
 
+    @cached_for_6_hours
     async def get(self, project_key: str) -> ProjectManifest:
         """Return one persisted project manifest by project key."""
 
@@ -52,4 +54,5 @@ class ProjectManifestService:
             setattr(obj, field_name, field_value)
         await obj.save(update_fields=[*context, "updated_at"])
         await clear_cache(self.all)
+        await clear_cache(self.get)
         return obj
