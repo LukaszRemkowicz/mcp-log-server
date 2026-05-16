@@ -65,6 +65,7 @@ ANALYSIS_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("group_errors", {"project_name": "landingpage"}),
     ("build_incident_bundle", {"project_name": "landingpage"}),
     ("create_filtered_view", {"project_name": "landingpage"}),
+    ("inspect_proxy_activity", {"project_name": "landingpage"}),
 )
 COLLECT_LOGS_TOOL_CALLS: tuple[ToolCall, ...] = (
     (
@@ -195,6 +196,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "group_errors",
                 "build_incident_bundle",
                 "create_filtered_view",
+                "inspect_proxy_activity",
                 "suggest_followup_window",
                 "list_projects",
                 "get_mcp_service_status",
@@ -226,6 +228,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "group_errors",
                 "build_incident_bundle",
                 "create_filtered_view",
+                "inspect_proxy_activity",
                 "suggest_followup_window",
                 "list_projects",
                 "stat_container_path",
@@ -894,9 +897,67 @@ def test_analysis_tools_api_read_collected_snapshot(
     )
 
 
+def test_inspect_proxy_activity_api_groups_proxy_status_signals(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify proxy diagnostics summarize collected ingress/proxy snapshot sources."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["nginx", "traefik"]),
+        )
+        response = jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "inspect-proxy-activity",
+                "method": "tools/call",
+                "params": {
+                    "name": "inspect_proxy_activity",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_keys": ["all"],
+                        "max_groups": 10,
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_proxy_activity"
+    assert payload["project_name"] == "landingpage"
+    assert payload["workspace"] == "workflow"
+    assert payload["snapshot_dir"] == "workflow/landingpage/latest"
+    assert payload["searched_source_keys"] == ["nginx", "traefik"]
+    assert payload["total_line_count"] == 8
+    assert payload["parsed_proxy_line_count"] == 8
+    assert payload["http_status_line_count"] == 6
+    assert payload["upstream_error_count"] == 1
+    assert payload["status_class_counts"] == [
+        {"status_class": "2xx", "count": 1},
+        {"status_class": "3xx", "count": 2},
+        {"status_class": "4xx", "count": 2},
+        {"status_class": "5xx", "count": 1},
+    ]
+    assert payload["top_routes"][0]["path"] == "/admin"
+    assert payload["top_routes"][0]["status_code"] == 404
+    assert payload["top_routes"][0]["count"] == 2
+    assert payload["top_routes"][1]["path"] == "/api/orders"
+    assert payload["top_routes"][1]["status_code"] == 502
+    assert payload["top_routes"][1]["is_upstream_error"] is True
+
+
 @pytest.mark.parametrize(
     "tool_name",
-    ["group_errors", "build_incident_bundle", "create_filtered_view"],
+    ["group_errors", "build_incident_bundle", "create_filtered_view", "inspect_proxy_activity"],
 )
 def test_analysis_tools_api_support_single_source_alias(
     file_backed_project_context: FileBackedProjectContext,
@@ -938,7 +999,7 @@ def test_analysis_tools_api_support_single_source_alias(
 
 @pytest.mark.parametrize(
     "tool_name",
-    ["group_errors", "build_incident_bundle", "create_filtered_view"],
+    ["group_errors", "build_incident_bundle", "create_filtered_view", "inspect_proxy_activity"],
 )
 def test_analysis_tools_api_reject_conflicting_source_key_arguments(
     file_backed_project_context: FileBackedProjectContext,

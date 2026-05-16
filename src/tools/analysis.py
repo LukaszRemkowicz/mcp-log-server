@@ -27,7 +27,9 @@ from tools.agent_hints import (
     GROUP_ERRORS_NEXT_STEP_TIPS,
     GROUP_ERRORS_TOOL_DESCRIPTION,
     INCIDENT_BUNDLE_NEXT_STEP_TIPS,
+    INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
     LOG_ANALYSIS_CAUTIONS,
+    PROXY_ACTIVITY_NEXT_STEP_TIPS,
     SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION,
 )
 from tools.errors import build_invalid_source_key_arguments_result, build_snapshot_tool_error_result
@@ -43,6 +45,7 @@ snapshot_service = LogSnapshotService()
 manifest_service = ProjectManifestService()
 
 DEFAULT_MAX_ERROR_GROUPS = 50
+DEFAULT_MAX_PROXY_GROUPS = 50
 DEFAULT_FILTERED_VIEW_MAX_LINES = 200
 GROUP_ERRORS_SUMMARY_LIMIT = 5
 
@@ -90,6 +93,18 @@ def _build_invalid_group_window_result(max_groups: int) -> ToolResult | None:
     return None
 
 
+def _build_invalid_proxy_group_window_result(max_groups: int) -> ToolResult | None:
+    """Return a tool error when proxy group limits are outside the supported window."""
+
+    if max_groups < 1 or max_groups > 200:
+        return build_snapshot_tool_error_result(
+            error_code="invalid_proxy_group_window",
+            message="max_groups must be between 1 and 200.",
+            retry_tips=["Retry with max_groups set to a value between 1 and 200."],
+        )
+    return None
+
+
 async def _load_snapshot_for_analysis_tool(
     *,
     tool_name: str,
@@ -97,7 +112,6 @@ async def _load_snapshot_for_analysis_tool(
     session_id: str | None,
     archive_name: str | None,
     requested_source_keys: list[str] | None,
-    requested_source_keys_detail: list[JSONValue],
     max_groups: int,
 ) -> SnapshotContext | ToolResult:
     """Load the snapshot context or build the same MCP error shape used by analysis tools."""
@@ -123,6 +137,7 @@ async def _load_snapshot_for_analysis_tool(
                 "max_groups": max_groups,
             },
         )
+        source_keys_detail: list[JSONValue] = list(requested_source_keys or [])
         return build_snapshot_tool_error_result(
             error_code=context.error_code,
             message=message,
@@ -131,7 +146,7 @@ async def _load_snapshot_for_analysis_tool(
                 "project_name": project_name,
                 "session_id": session_id,
                 "archive_name": archive_name,
-                "source_keys": requested_source_keys_detail,
+                "source_keys": source_keys_detail,
                 "max_groups": max_groups,
             },
         )
@@ -146,7 +161,6 @@ def _build_analysis_source_key_error_result(
     session_id: str | None,
     archive_name: str | None,
     requested_source_keys: list[str] | None,
-    requested_source_keys_detail: list[JSONValue],
     max_groups: int,
 ) -> ToolResult:
     """Build the shared source-key validation error used by analysis tools."""
@@ -165,6 +179,7 @@ def _build_analysis_source_key_error_result(
             "max_groups": max_groups,
         },
     )
+    source_keys_detail: list[JSONValue] = list(requested_source_keys or [])
     return build_snapshot_tool_error_result(
         error_code="snapshot_source_key_not_found",
         message=message,
@@ -178,7 +193,7 @@ def _build_analysis_source_key_error_result(
             "project_name": project_name,
             "session_id": session_id,
             "archive_name": archive_name,
-            "source_keys": requested_source_keys_detail,
+            "source_keys": source_keys_detail,
             "max_groups": max_groups,
         },
     )
@@ -326,14 +341,12 @@ async def group_errors(
             source_key=source_key,
             source_keys=source_keys,
         )
-    source_keys_detail: list[JSONValue] = list(source_keys or [])
     context: SnapshotContext | ToolResult = await _load_snapshot_for_analysis_tool(
         tool_name="group_errors",
         project_name=project_name,
         session_id=session_id,
         archive_name=archive_name,
         requested_source_keys=source_keys,
-        requested_source_keys_detail=source_keys_detail,
         max_groups=max_groups,
     )
     if isinstance(context, ToolResult):
@@ -353,7 +366,6 @@ async def group_errors(
             session_id=session_id,
             archive_name=archive_name,
             requested_source_keys=source_keys,
-            requested_source_keys_detail=source_keys_detail,
             max_groups=max_groups,
         )
 
@@ -397,6 +409,87 @@ async def group_errors(
         },
     )
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
+
+
+@mcp.tool(
+    auth=require_scopes(LOGS_COLLECT_SCOPE),
+    description=INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
+)
+@project_authorized_tool
+async def inspect_proxy_activity(
+    project_name: str,
+    session_id: str | None = None,
+    archive_name: str | None = None,
+    source_keys: list[str] | None = None,
+    source_key: str | None = None,
+    max_groups: int = DEFAULT_MAX_PROXY_GROUPS,
+) -> ToolResult:
+    """Summarize deterministic ingress/proxy signals from one persisted snapshot."""
+
+    invalid_group_window_result = _build_invalid_proxy_group_window_result(max_groups)
+    if invalid_group_window_result is not None:
+        return invalid_group_window_result
+
+    try:
+        source_keys = resolve_source_keys_for_snapshot(source_keys, source_key)
+    except SourceKeyArgumentError as error:
+        return build_invalid_source_key_arguments_result(
+            message=str(error),
+            source_key=source_key,
+            source_keys=source_keys,
+        )
+    context: SnapshotContext | ToolResult = await _load_snapshot_for_analysis_tool(
+        tool_name="inspect_proxy_activity",
+        project_name=project_name,
+        session_id=session_id,
+        archive_name=archive_name,
+        requested_source_keys=source_keys,
+        max_groups=max_groups,
+    )
+    if isinstance(context, ToolResult):
+        return context
+
+    try:
+        payload = analysis_service.inspect_proxy_activity(
+            context.metadata,
+            sources=context.sources,
+            requested_source_keys=source_keys,
+            max_groups=max_groups,
+            requested_project_name=project_name,
+            project_name=context.project_name,
+        )
+    except ValueError as error:
+        return _build_analysis_source_key_error_result(
+            tool_name="inspect_proxy_activity",
+            error=error,
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
+            requested_source_keys=source_keys,
+            max_groups=max_groups,
+        )
+
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_proxy_activity",
+            "session_id": payload.session_id,
+            "archive_name": archive_name,
+            "workspace": payload.workspace,
+            "searched_source_count": len(payload.searched_source_keys),
+            "http_status_line_count": payload.http_status_line_count,
+            "upstream_error_count": payload.upstream_error_count,
+            "top_route_count": len(payload.top_routes),
+            "truncated": payload.truncated,
+        },
+    )
+    response = dict(
+        analysis_cautions=LOG_ANALYSIS_CAUTIONS,
+        next_step_tips=PROXY_ACTIVITY_NEXT_STEP_TIPS,
+        **payload.model_dump(mode="json"),
+    )
+    return ToolResult(content=[], structured_content=response)
 
 
 @mcp.tool(
@@ -450,14 +543,12 @@ async def build_incident_bundle(
             source_key=source_key,
             source_keys=source_keys,
         )
-    source_keys_detail: list[JSONValue] = list(source_keys or [])
     context: SnapshotContext | ToolResult = await _load_snapshot_for_analysis_tool(
         tool_name="build_incident_bundle",
         project_name=project_name,
         session_id=session_id,
         archive_name=archive_name,
         requested_source_keys=source_keys,
-        requested_source_keys_detail=source_keys_detail,
         max_groups=max_groups,
     )
     if isinstance(context, ToolResult):
@@ -482,7 +573,6 @@ async def build_incident_bundle(
             session_id=session_id,
             archive_name=archive_name,
             requested_source_keys=source_keys,
-            requested_source_keys_detail=source_keys_detail,
             max_groups=max_groups,
         )
 

@@ -57,6 +57,13 @@ GROUP_ERRORS_TOOL_DESCRIPTION = (
     "since/until window."
 )
 
+INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION = (
+    "Inspect collected proxy-shaped snapshot sources for deterministic ingress "
+    "signals. Summarizes HTTP status classes, route/status clusters, and "
+    "upstream-style 502/503/504 errors from persisted logs. This tool reads "
+    "snapshot files only; it does not run live proxy or shell commands."
+)
+
 GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION = (
     "Search one persisted workflow or session snapshot with controlled grep "
     "semantics. Use grep for the text pattern. Omit source filters to search "
@@ -151,6 +158,18 @@ GROUP_ERRORS_NEXT_STEP_TIPS = [
     (
         "Call suggest_followup_window with the grouped timestamps, then "
         "recollect with collect_logs using the returned since/until values."
+    ),
+]
+
+PROXY_ACTIVITY_NEXT_STEP_TIPS = [
+    "Use top_routes to decide which host/path/status cluster needs raw context.",
+    (
+        "Reopen raw lines with read_log_snapshot_file before concluding whether "
+        "traffic failed at the edge proxy or upstream application."
+    ),
+    (
+        "If 502, 503, or 504 errors are clustered, inspect the related app "
+        "container logs for the same time window."
     ),
 ]
 

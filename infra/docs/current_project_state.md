@@ -122,10 +122,12 @@ Currently implemented tools:
 - `create_filtered_view`
 - `group_errors`
 - `build_incident_bundle`
+- `inspect_proxy_activity`
 - `suggest_followup_window`
 - `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
+- `stat_container_path`
 - `read_container_file`
 - `list_container_directory`
 

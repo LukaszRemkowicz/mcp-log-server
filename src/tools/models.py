@@ -328,6 +328,54 @@ class GroupedErrorPayload(BaseModel):
     last_seen: SnapshotLineReferencePayload
 
 
+class ProxyStatusClassCountPayload(BaseModel):
+    """Count HTTP proxy lines by status class."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status_class: Literal["1xx", "2xx", "3xx", "4xx", "5xx"]
+    count: int
+
+
+class ProxyRouteSignalPayload(BaseModel):
+    """Describe one grouped proxy route/status signal."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str | None
+    host: str | None
+    method: str | None
+    status_code: int
+    status_class: Literal["1xx", "2xx", "3xx", "4xx", "5xx"]
+    count: int
+    source_keys: list[str]
+    is_upstream_error: bool
+    first_seen: SnapshotLineReferencePayload
+    last_seen: SnapshotLineReferencePayload
+
+
+class InspectProxyActivityPayload(BaseModel):
+    """Structured response returned by `inspect_proxy_activity`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_proxy_activity"]
+    requested_project_name: str | None
+    project_name: str
+    workspace: SnapshotWorkspace
+    session_id: str | None
+    snapshot_dir: str
+    searched_source_keys: list[str]
+    total_line_count: int
+    parsed_proxy_line_count: int
+    http_status_line_count: int
+    upstream_error_count: int
+    max_groups: int
+    truncated: bool
+    status_class_counts: list[ProxyStatusClassCountPayload]
+    top_routes: list[ProxyRouteSignalPayload]
+
+
 class GroupErrorsPayload(BaseModel):
     """Structured response returned by `group_errors`.
 
