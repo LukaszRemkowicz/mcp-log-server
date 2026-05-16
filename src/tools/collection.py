@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 from fastmcp.tools.base import ToolResult
 
@@ -18,6 +19,7 @@ from tools.agent_hints import COLLECT_LOGS_NEXT_STEP_TIPS, COLLECT_LOGS_TOOL_DES
 from tools.errors import build_collect_logs_error_details, build_collect_logs_error_result
 from tools.models import CollectLogsPayload, ProjectManifestSummary, SnapshotWorkspace
 from utils.mcp_errors import build_agent_tool_error_result
+from utils.types import JSONObject
 
 logger: logging.Logger = get_logger("tools.collection")
 
@@ -143,6 +145,23 @@ async def collect_logs(
             manifest_result.manifest,
             defaults.source_keys,
         )
+        if not manifest_sources.sources and manifest_sources.missing_source_keys:
+            return build_agent_tool_error_result(
+                error_code="unknown_source_keys",
+                message="No requested source_keys were found in the configured manifest.",
+                retry_tips=[
+                    "Call list_projects to discover valid source_keys for this project.",
+                    "Retry with source_keys from the project manifest, or use source_keys=['all'].",
+                ],
+                details=cast(
+                    JSONObject,
+                    {
+                        "project_name": project_name,
+                        "requested_source_keys": defaults.source_keys,
+                        "unknown_requested_source_keys": manifest_sources.missing_source_keys,
+                    },
+                ),
+            )
         project_payload = await collection_service.build_logs(
             manifest=manifest_result.manifest,
             sources=manifest_sources.sources,

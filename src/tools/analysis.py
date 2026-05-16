@@ -32,7 +32,7 @@ from tools.agent_hints import (
 )
 from tools.errors import build_invalid_source_key_arguments_result, build_snapshot_tool_error_result
 from tools.models import GroupedErrorPayload, GroupErrorsPayload, SuggestFollowupWindowPayload
-from tools.utils import SourceKeyArgumentError, resolve_source_keys_alias
+from tools.utils import SourceKeyArgumentError, resolve_source_keys_for_snapshot
 from utils.log_snapshots import format_followup_timestamp, parse_followup_timestamp
 from utils.types import JSONValue
 
@@ -319,7 +319,7 @@ async def group_errors(
         return invalid_group_window_result
 
     try:
-        source_keys = resolve_source_keys_alias(source_keys, source_key)
+        source_keys = resolve_source_keys_for_snapshot(source_keys, source_key)
     except SourceKeyArgumentError as error:
         return build_invalid_source_key_arguments_result(
             message=str(error),
@@ -411,6 +411,7 @@ async def build_incident_bundle(
     source_keys: list[str] | None = None,
     source_key: str | None = None,
     max_groups: int = DEFAULT_MAX_ERROR_GROUPS,
+    max_lines_per_source: int | None = None,
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
     """Build one compact incident summary, then confirm conclusions with raw snapshot context.
@@ -434,9 +435,15 @@ async def build_incident_bundle(
     invalid_group_window_result = _build_invalid_group_window_result(max_groups)
     if invalid_group_window_result is not None:
         return invalid_group_window_result
+    if max_lines_per_source is not None and max_lines_per_source < 1:
+        return build_snapshot_tool_error_result(
+            error_code="invalid_incident_bundle_line_limit",
+            message="max_lines_per_source must be a positive integer when provided.",
+            retry_tips=["Retry with max_lines_per_source >= 1, or omit it."],
+        )
 
     try:
-        source_keys = resolve_source_keys_alias(source_keys, source_key)
+        source_keys = resolve_source_keys_for_snapshot(source_keys, source_key)
     except SourceKeyArgumentError as error:
         return build_invalid_source_key_arguments_result(
             message=str(error),
@@ -528,7 +535,7 @@ async def create_filtered_view(
         return invalid_limit_result
 
     try:
-        source_keys = resolve_source_keys_alias(source_keys, source_key)
+        source_keys = resolve_source_keys_for_snapshot(source_keys, source_key)
     except SourceKeyArgumentError as error:
         return build_invalid_source_key_arguments_result(
             message=str(error),

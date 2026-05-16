@@ -25,11 +25,13 @@ from typing import Any, cast
 from uuid import UUID
 
 import mcp.types as mt
+from fastmcp.exceptions import NotFoundError
 from fastmcp.resources.base import ResourceResult
 from fastmcp.server.auth import AccessToken
 from fastmcp.server.dependencies import get_access_token, get_http_request
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import Tool, ToolResult
+from pydantic import ValidationError
 from tortoise.exceptions import BaseORMException
 
 from auth.mcp_caller_context import AuthenticatedMcpCaller, set_request_mcp_caller
@@ -138,6 +140,51 @@ def _access_token_missing_error() -> AgentToolErrorResult:
             "Regenerate local development JWTs if the Authorization header is missing.",
         ],
         details={"required_header": "Authorization"},
+    )
+
+
+def _unknown_tool_error(tool_name: str) -> AgentToolErrorResult:
+    """Return an agent-facing error when a tool name is not available."""
+
+    return build_agent_tool_error_result(
+        error_code="unknown_tool",
+        message=f"Unknown tool: {tool_name!r}.",
+        retry_tips=[
+            "Call tools/list to discover currently available tools for this token.",
+            "Check that the token has the scope required for the tool.",
+        ],
+        details={"tool_name": tool_name},
+    )
+
+
+def _invalid_tool_arguments_error(
+    *,
+    tool_name: str,
+    error: ValidationError,
+) -> AgentToolErrorResult:
+    """Return an agent-facing error for FastMCP/Pydantic argument validation."""
+
+    invalid_arguments = sorted(
+        {
+            str(location[0])
+            for item in error.errors()
+            if (location := item.get("loc")) and isinstance(location, tuple)
+        }
+    )
+    return build_agent_tool_error_result(
+        error_code="invalid_tool_arguments",
+        message="Tool arguments failed validation.",
+        retry_tips=[
+            "Check the tool schema from tools/list and retry with the expected argument types.",
+            "Use arrays for list arguments such as project_names and source_keys.",
+        ],
+        details=cast(
+            JSONObject,
+            {
+                "tool_name": tool_name,
+                "invalid_arguments": invalid_arguments,
+            },
+        ),
     )
 
 
@@ -483,11 +530,14 @@ class AccessAuditMiddleware(Middleware):
 
         try:
             result = await call_next(context)
+        except NotFoundError:
+            result = _unknown_tool_error(tool_name)
+        except ValidationError as error:
+            result = _invalid_tool_arguments_error(tool_name=tool_name, error=error)
         except Exception:
             duration_seconds = round(perf_counter() - started_at, 3)
             await agent_call_audit_service.complete_tool_call(
                 agent_call_pk=agent_call_pk,
-                session_id=session_id,
                 tool_name=tool_name,
                 duration_seconds=duration_seconds,
                 success=False,
@@ -509,7 +559,6 @@ class AccessAuditMiddleware(Middleware):
         duration_seconds = round(perf_counter() - started_at, 3)
         await agent_call_audit_service.complete_tool_call(
             agent_call_pk=agent_call_pk,
-            session_id=session_id,
             tool_name=tool_name,
             duration_seconds=duration_seconds,
             success=not tool_error,

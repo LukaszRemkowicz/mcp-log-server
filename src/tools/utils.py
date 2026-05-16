@@ -85,3 +85,25 @@ def resolve_source_keys_alias(
     if not stripped_source_key:
         raise SourceKeyArgumentError("source_key must be a non-empty string.")
     return [stripped_source_key]
+
+
+def resolve_source_keys_for_snapshot(
+    source_keys: list[str] | None,
+    source_key: str | None,
+) -> list[str] | None:
+    """Return snapshot source keys, treating `all` as the all-sources alias."""
+
+    resolved_source_keys = resolve_source_keys_alias(source_keys, source_key)
+    if resolved_source_keys is None:
+        return None
+
+    normalized_source_keys: list[str] = []
+    for item in resolved_source_keys:
+        stripped_item = item.strip()
+        if not stripped_item:
+            raise SourceKeyArgumentError("source_keys entries must be non-empty strings.")
+        normalized_source_keys.append(stripped_item)
+
+    if any(item == "all" for item in normalized_source_keys):
+        return None
+    return normalized_source_keys

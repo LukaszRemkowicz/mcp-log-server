@@ -81,6 +81,13 @@ READ_CONTAINER_FILE_TOOL_DESCRIPTION = (
     "This tool rejects directories and bounds the returned content with max_bytes."
 )
 
+STAT_CONTAINER_PATH_TOOL_DESCRIPTION = (
+    "Return metadata for one explicit file or directory path inside a "
+    "manifest-approved docker source container without reading file contents. "
+    "Use this to check whether a path exists, whether it is a directory, its "
+    "size, mode, and modified timestamp before deciding whether to read or list it."
+)
+
 LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION = (
     "List files and directories inside a manifest-approved docker source "
     "container, like running ls -la in a terminal. If path is omitted or blank, "

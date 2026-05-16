@@ -181,6 +181,10 @@ Start the local database and app together:
 doppler run -- docker compose up --build
 ```
 
+The local `app` service applies committed Aerich migrations with
+`uv run migrate` before starting the FastMCP server. If migrations fail, the
+app exits instead of starting against a stale schema.
+
 Start only the local database:
 
 ```bash
@@ -561,9 +565,10 @@ Run the service through Docker Compose with Doppler:
 doppler run -- docker compose up --build
 ```
 
-The `app` service mounts `./src` into the container and reloads automatically
-when files under `src/` change, including copied workflow assets such as
-prompts, skills, schemas, and examples.
+The local `app` service applies committed migrations on startup, then mounts
+`./src` into the container and reloads automatically when files under `src/`
+change, including copied workflow assets such as prompts, skills, schemas, and
+examples.
 
 The local Compose stack also starts a `db` service and stores its data in the
 named `postgres-data` volume.

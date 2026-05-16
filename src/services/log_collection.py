@@ -199,7 +199,6 @@ class LogCollectionService:
                 sources=sources,
                 missing_source_keys=missing_source_keys,
                 source_keys=source_keys,
-                session_id=session_id,
                 since=since,
                 until=until,
                 time_filters=time_filters,
@@ -281,7 +280,6 @@ class LogCollectionService:
         sources: list[SourceDefinition],
         missing_source_keys: list[str],
         source_keys: list[str],
-        session_id: str | None,
         since: str | None,
         until: str | None,
         time_filters: DockerTimeFilters,
@@ -290,10 +288,9 @@ class LogCollectionService:
 
         project_name = manifest.project_key
         warnings, retry_tips = self._build_feedback(missing_source_keys=missing_source_keys)
-        normalized_session_id: str | None = session_id.strip() if session_id is not None else None
 
         workflow_collect_logs_obj = await self.create_workflow_collect_logs_obj(
-            session_id=normalized_session_id,
+            session_id=None,
             project_name=project_name,
             source_keys=source_keys,
             missing_source_keys=missing_source_keys,
@@ -305,7 +302,7 @@ class LogCollectionService:
         snapshot_dir = self.snapshot_service.prepare_workspace(
             project_name=project_name,
             workspace=LogWorkspace.WORKFLOW,
-            session_id=normalized_session_id,
+            session_id=None,
             snapshot_dir=workflow_collect_logs_obj.snapshot_dir,
         )
         collected_results = self.collect_sources(

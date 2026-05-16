@@ -35,7 +35,7 @@ from tools.models import (
     LogSnapshotFilePayload,
     ReadLogSnapshotFilePayload,
 )
-from tools.utils import SourceKeyArgumentError, resolve_source_keys_alias
+from tools.utils import SourceKeyArgumentError, resolve_source_keys_for_snapshot
 from utils.log_preview import truncate_log_preview
 from utils.types import JSONObject, JSONValue
 
@@ -334,6 +334,8 @@ async def read_log_snapshot_file(
         next_step_tips=READ_SNAPSHOT_NEXT_STEP_TIPS,
         truncated=truncated,
         content=preview_content,
+        output_file=file_payload.output_file,
+        returned_bytes=len(preview_content.encode("utf-8")),
         file=file_payload,
     )
     logger.info(
@@ -425,7 +427,7 @@ async def grep_log_snapshot(
         )
 
     try:
-        source_keys = resolve_source_keys_alias(source_keys, source_key)
+        source_keys = resolve_source_keys_for_snapshot(source_keys, source_key)
     except SourceKeyArgumentError as error:
         return build_invalid_source_key_arguments_result(
             message=str(error),

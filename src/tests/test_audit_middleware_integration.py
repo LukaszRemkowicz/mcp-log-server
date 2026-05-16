@@ -85,8 +85,25 @@ async def test_audit_middleware_persists_agent_call_for_collect_logs(
     assert rows[0].error_code is None
 
 
-def test_prepare_collect_logs_session_id_is_mandatory_for_collect_logs() -> None:
-    """Verify collect_logs always gets an effective session id from middleware."""
+def test_prepare_collect_logs_session_id_is_mandatory_for_session_collect_logs() -> None:
+    """Verify session collect_logs gets an effective session id from middleware."""
+
+    context = MiddlewareContext(
+        message=mt.CallToolRequestParams(
+            name="collect_logs",
+            arguments={"workspace": "session", "session_id": None},
+        )
+    )
+
+    session_id = _prepare_collect_logs_session_id(context)
+
+    assert str(UUID(str(session_id))) == str(session_id)
+    assert context.message.arguments is not None
+    assert context.message.arguments["session_id"] == str(session_id)
+
+
+def test_prepare_collect_logs_session_id_generates_for_workflow_collect_logs() -> None:
+    """Verify workflow collect_logs also gets an effective session id."""
 
     context = MiddlewareContext(
         message=mt.CallToolRequestParams(
@@ -103,6 +120,61 @@ def test_prepare_collect_logs_session_id_is_mandatory_for_collect_logs() -> None
 
 
 @pytest.mark.anyio
+async def test_audit_middleware_completes_workflow_collect_logs_with_generated_session(
+    mocker: MockerFixture,
+) -> None:
+    """Verify workflow collect_logs gets an audit row with generated session id."""
+
+    token = AccessToken(
+        token="test-token",
+        client_id="workflow-client",
+        scopes=["logs:collect"],
+        claims={
+            "sub": "codex-subject",
+            "client_id": "workflow-client",
+            "client_type": "workflow_agent",
+        },
+    )
+    mocker.patch("middleware.audit.get_access_token", return_value=token)
+    complete_tool_call = mocker.patch(
+        "middleware.audit.agent_call_audit_service.complete_tool_call",
+        new=mocker.AsyncMock(),
+    )
+    context = MiddlewareContext(
+        message=mt.CallToolRequestParams(
+            name="collect_logs",
+            arguments={
+                "workspace": "workflow",
+                "project_names": ["landingpage"],
+                "source_keys": ["backend"],
+            },
+        )
+    )
+    middleware = AccessAuditMiddleware()
+
+    async def call_next(
+        next_context: MiddlewareContext[mt.CallToolRequestParams],
+    ) -> ToolResult:
+        assert next_context.message.arguments is not None
+        session_id = UUID(str(next_context.message.arguments["session_id"]))
+        return ToolResult(
+            content=[],
+            structured_content={"workspace": "workflow", "session_id": str(session_id)},
+        )
+
+    result = await middleware.on_call_tool(
+        context,
+        cast(CallNext[mt.CallToolRequestParams, ToolResult], call_next),
+    )
+
+    assert result.structured_content is not None
+    session_id = UUID(result.structured_content["session_id"])
+    assert result.structured_content == {"workspace": "workflow", "session_id": str(session_id)}
+    complete_tool_call.assert_awaited_once()
+    assert complete_tool_call.await_args.kwargs["agent_call_pk"] is not None
+
+
+@pytest.mark.anyio
 async def test_audit_middleware_returns_agent_error_when_agent_call_create_fails(
     mocker: MockerFixture,
 ) -> None:
@@ -110,12 +182,12 @@ async def test_audit_middleware_returns_agent_error_when_agent_call_create_fails
 
     token = AccessToken(
         token="test-token",
-        client_id="workflow-client",
+        client_id="codex-client",
         scopes=["logs:collect"],
         claims={
-            "sub": "workflow-subject",
-            "client_id": "workflow-client",
-            "client_type": "workflow_agent",
+            "sub": "codex-subject",
+            "client_id": "codex-client",
+            "client_type": "codex",
         },
     )
     mocker.patch("middleware.audit.get_access_token", return_value=token)
@@ -128,7 +200,7 @@ async def test_audit_middleware_returns_agent_error_when_agent_call_create_fails
     context = MiddlewareContext(
         message=mt.CallToolRequestParams(
             name="collect_logs",
-            arguments={"workspace": "workflow", "project_names": ["landingpage"]},
+            arguments={"workspace": "session", "project_names": ["landingpage"]},
         )
     )
     middleware = AccessAuditMiddleware()

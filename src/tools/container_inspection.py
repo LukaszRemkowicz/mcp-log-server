@@ -24,8 +24,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 
-from fastmcp.dependencies import CurrentAccessToken
-from fastmcp.server.auth import AccessToken, require_scopes
+from fastmcp.server.auth import require_scopes
 from fastmcp.tools.base import ToolResult
 
 from app import mcp
@@ -44,12 +43,14 @@ from services.project_manifest import ProjectManifestError, ProjectManifestServi
 from tools.agent_hints import (
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
     READ_CONTAINER_FILE_TOOL_DESCRIPTION,
+    STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
 )
 from tools.errors import build_container_inspection_error_result
 from tools.models import (
     ContainerPathMetadataPayload,
     ListContainerDirectoryPayload,
     ReadContainerFilePayload,
+    StatContainerPathPayload,
 )
 
 logger: logging.Logger = get_logger("tools.container_inspection")
@@ -72,8 +73,6 @@ async def _prepare_container_inspection_context(
     project_name: str,
     source_key: str,
     path: str,
-    shape_defaults: dict[str, object],
-    log_extra: dict[str, object],
 ) -> ContainerInspectionContext | ToolResult:
     """Resolve manifest, container source, and allowed path for one inspection tool."""
 
@@ -85,7 +84,9 @@ async def _prepare_container_inspection_context(
                 "event": "tool_error",
                 "tool_name": action,
                 "error_message": manifest_result.message,
-                **log_extra,
+                "source_key": source_key,
+                "path": path,
+                "project_name": project_name,
             },
         )
         return build_container_inspection_error_result(
@@ -95,7 +96,6 @@ async def _prepare_container_inspection_context(
             source_key=source_key,
             path=path,
             settings=settings,
-            shape_defaults=shape_defaults,
         )
 
     definition = manifest_service.get_container_source_or_error(
@@ -110,7 +110,6 @@ async def _prepare_container_inspection_context(
             source_key=source_key,
             path=path,
             settings=settings,
-            shape_defaults=shape_defaults,
         )
 
     normalized_path = docker_service.normalize_container_path_or_error(path)
@@ -122,7 +121,6 @@ async def _prepare_container_inspection_context(
             source_key=source_key,
             path=path,
             settings=settings,
-            shape_defaults=shape_defaults,
         )
 
     if not docker_service.container_path_is_allowed(definition, normalized_path):
@@ -136,7 +134,6 @@ async def _prepare_container_inspection_context(
             source_key=source_key,
             path=path,
             settings=settings,
-            shape_defaults=shape_defaults,
         )
 
     return ContainerInspectionContext(
@@ -170,6 +167,67 @@ def create_container_payload(
 
 @mcp.tool(
     auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
+    description=STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
+)
+@project_authorized_tool
+async def stat_container_path(
+    source_key: str,
+    path: str,
+    project_name: str | None = None,
+) -> ToolResult:
+    """Return metadata for one approved container file or directory path."""
+
+    assert project_name is not None
+    context = await _prepare_container_inspection_context(
+        action="stat_container_path",
+        project_name=project_name,
+        source_key=source_key,
+        path=path,
+    )
+    if isinstance(context, ToolResult):
+        return context
+
+    stat_payload = docker_service.stat_container_path(
+        context.definition.target,
+        context.normalized_path,
+    )
+    if isinstance(stat_payload, DockerServiceError):
+        return build_container_inspection_error_result(
+            action="stat_container_path",
+            message=stat_payload.message,
+            requested_project_name=project_name,
+            source_key=source_key,
+            path=path,
+            settings=settings,
+        )
+
+    payload = StatContainerPathPayload(
+        action="stat_container_path",
+        requested_project_name=project_name,
+        project_name=context.project_name,
+        source_key=context.definition.source_key,
+        container_name=context.definition.target,
+        path=context.normalized_path,
+        file=create_container_payload(stat_payload),
+    )
+
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "stat_container_path",
+            "source_key": payload.source_key,
+            "container_name": payload.container_name,
+            "path": payload.path,
+            "is_dir": payload.file.is_dir,
+            "size": payload.file.size,
+        },
+    )
+    return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
+
+
+@mcp.tool(
+    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
     description=READ_CONTAINER_FILE_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
@@ -178,7 +236,6 @@ async def read_container_file(
     path: str,
     project_name: str | None = None,
     max_bytes: int = MAX_CONTAINER_FILE_BYTES,
-    access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
     """Read one approved text file from a docker source container.
 
@@ -196,29 +253,12 @@ async def read_container_file(
     arbitrary container exec to agents.
     """
 
-    assert access_token is not None
     assert project_name is not None
-    shape_defaults: dict[str, object] = {
-        "requested_project_name": project_name,
-        "source_key": source_key,
-        "path": path,
-        "max_bytes": max_bytes,
-        "truncated": False,
-        "content": "",
-        "file": None,
-    }
     context = await _prepare_container_inspection_context(
         action="read_container_file",
         project_name=project_name,
         source_key=source_key,
         path=path,
-        shape_defaults=shape_defaults,
-        log_extra={
-            "source_key": source_key,
-            "path": path,
-            "project_name": project_name,
-            "max_bytes": max_bytes,
-        },
     )
     if isinstance(context, ToolResult):
         return context
@@ -235,7 +275,6 @@ async def read_container_file(
             source_key=source_key,
             path=path,
             settings=settings,
-            shape_defaults=shape_defaults,
         )
 
     read_result = docker_service.read_container_file(
@@ -251,7 +290,6 @@ async def read_container_file(
             source_key=source_key,
             path=path,
             settings=settings,
-            shape_defaults=shape_defaults,
         )
     content, truncated = read_result
     payload = ReadContainerFilePayload(
@@ -291,7 +329,6 @@ async def list_container_directory(
     source_key: str,
     path: str | None = None,
     project_name: str | None = None,
-    access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
     """List files/directories inside an approved container directory.
 
@@ -309,15 +346,7 @@ async def list_container_directory(
     - same manifest/JWT/path safety checks as the other inspection tools
     """
 
-    assert access_token is not None
     assert project_name is not None
-    shape_defaults: dict[str, object] = {
-        "requested_project_name": project_name,
-        "source_key": source_key,
-        "path": path,
-        "truncated": False,
-        "entries": [],
-    }
     manifest_result = await manifest_service.get_or_error(project_name)
     if isinstance(manifest_result, ProjectManifestError):
         logger.info(
@@ -338,7 +367,6 @@ async def list_container_directory(
             source_key=source_key,
             path=path,
             settings=settings,
-            shape_defaults=shape_defaults,
         )
     manifest = manifest_result.manifest
     project_name_value = manifest_result.project_name
@@ -351,7 +379,6 @@ async def list_container_directory(
             source_key=source_key,
             path=path,
             settings=settings,
-            shape_defaults=shape_defaults,
         )
 
     normalized_path = docker_service.resolve_container_directory_path_or_error(
@@ -366,7 +393,6 @@ async def list_container_directory(
             source_key=source_key,
             path=path,
             settings=settings,
-            shape_defaults=shape_defaults,
         )
 
     if not docker_service.container_path_is_allowed(definition, normalized_path):
@@ -380,7 +406,6 @@ async def list_container_directory(
             source_key=source_key,
             path=path,
             settings=settings,
-            shape_defaults=shape_defaults,
         )
 
     list_result = docker_service.list_container_directory(
@@ -395,7 +420,6 @@ async def list_container_directory(
             source_key=source_key,
             path=path,
             settings=settings,
-            shape_defaults=shape_defaults,
         )
     entries, truncated = list_result
     payload = ListContainerDirectoryPayload(

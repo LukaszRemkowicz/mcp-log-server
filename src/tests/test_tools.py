@@ -23,6 +23,7 @@ from tools.agent_hints import (
     GROUP_ERRORS_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
     READ_CONTAINER_FILE_TOOL_DESCRIPTION,
+    STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
     SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION,
 )
 from tools.workflow import build_workflow_bootstrap_payload, get_allowed_workflow_tool_metadata
@@ -49,6 +50,7 @@ def test_application_registers_expected_mcp_components(
         assert "create_filtered_view" in tool_names
         assert "suggest_followup_window" in tool_names
         assert "list_projects" in tool_names
+        assert "stat_container_path" in tool_names
         assert "read_container_file" in tool_names
         assert "list_container_directory" in tool_names
         assert "close_agent_session" in tool_names
@@ -146,6 +148,8 @@ def test_application_registers_expected_mcp_components(
         assert app_close_session_tool.description == CLOSE_AGENT_SESSION_TOOL_DESCRIPTION
         app_read_container_tool = next(tool for tool in tools if tool.name == "read_container_file")
         assert app_read_container_tool.description == READ_CONTAINER_FILE_TOOL_DESCRIPTION
+        app_stat_container_tool = next(tool for tool in tools if tool.name == "stat_container_path")
+        assert app_stat_container_tool.description == STAT_CONTAINER_PATH_TOOL_DESCRIPTION
         app_list_container_tool = next(
             tool for tool in tools if tool.name == "list_container_directory"
         )
@@ -175,6 +179,7 @@ def test_application_registers_expected_mcp_components(
             "group_errors",
             "build_incident_bundle",
             "create_filtered_view",
+            "stat_container_path",
             "read_container_file",
             "list_container_directory",
         }

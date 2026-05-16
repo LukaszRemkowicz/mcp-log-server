@@ -235,6 +235,8 @@ class ReadLogSnapshotFilePayload(BaseModel):
     next_step_tips: list[str]
     truncated: bool
     content: str
+    output_file: str
+    returned_bytes: int
     file: LogSnapshotFilePayload
 
 
@@ -498,6 +500,24 @@ class ReadContainerFilePayload(BaseModel):
     max_bytes: int
     truncated: bool
     content: str
+    file: ContainerPathMetadataPayload
+
+
+class StatContainerPathPayload(BaseModel):
+    """Structured success payload returned by `stat_container_path`.
+
+    It returns metadata for an approved file or directory without reading file
+    contents or recursively listing children.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["stat_container_path"]
+    requested_project_name: str | None
+    project_name: str
+    source_key: str
+    container_name: str
+    path: str
     file: ContainerPathMetadataPayload
 
 

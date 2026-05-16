@@ -244,7 +244,7 @@ It is not a prompt and not a workflow payload.
 Characteristics:
 
 - bind-mounts `./src`
-- uses `watchfiles`
+- applies committed migrations with `uv run migrate`, then uses `watchfiles`
 - includes `app`, `db`, and `tests` services
 - uses the official `postgres:18` image for the `db` service
 - persists local database data in the named `postgres-data` Docker volume

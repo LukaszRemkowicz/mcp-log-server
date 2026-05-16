@@ -52,7 +52,12 @@ services:
       COMMANDS_APP_SERVICE: app
     ports:
       - "127.0.0.1:${MCP_PORT_HOST:-8001}:8001"
-    command: ["uv", "run", "watchfiles", "--filter", "all", "python -m main", "/app/src"]
+    command:
+      [
+        "sh",
+        "-lc",
+        "uv run migrate && uv run watchfiles --filter all 'python -m main' /app/src",
+      ]
 
   test:
     build:

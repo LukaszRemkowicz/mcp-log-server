@@ -97,7 +97,6 @@ class AgentCallAuditService:
         self,
         *,
         agent_call_pk: UUID | None,
-        session_id: UUID | None,
         tool_name: str,
         duration_seconds: float,
         success: bool,
@@ -106,12 +105,11 @@ class AgentCallAuditService:
         """Update one AgentCall row with final request outcome metadata."""
 
         if agent_call_pk is None:
-            logger.warning(
-                "skipped completing agent call audit row without row pk",
+            logger.debug(
+                "skipped completing tool call without audit row",
                 extra={
-                    "event": "agent_call_complete_missing_pk",
+                    "event": "agent_call_complete_skipped_no_row",
                     "tool_name": tool_name,
-                    "session_id": str(session_id) if session_id is not None else None,
                     "duration_seconds": duration_seconds,
                     "success": success,
                     "error_code": error_code,
@@ -134,7 +132,6 @@ class AgentCallAuditService:
                 extra={
                     "event": "agent_call_complete_failed",
                     "tool_name": tool_name,
-                    "session_id": str(session_id) if session_id is not None else None,
                     "agent_call_pk": str(agent_call_pk),
                 },
             )

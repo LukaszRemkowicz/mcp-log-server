@@ -69,14 +69,12 @@ async def test_agent_call_service_creates_tool_call_payload(mocker: MockerFixtur
 @pytest.mark.anyio
 async def test_agent_call_service_completes_tool_call(mocker: MockerFixture) -> None:
     agent_call_pk = uuid4()
-    session_id = uuid4()
     db_service = mocker.Mock()
     db_service.update = mocker.AsyncMock()
     service = AgentCallAuditService(db_service=db_service)
 
     await service.complete_tool_call(
         agent_call_pk=agent_call_pk,
-        session_id=session_id,
         tool_name="collect_logs",
         duration_seconds=12.5,
         success=False,
@@ -121,17 +119,16 @@ async def test_agent_call_service_ignores_missing_row_on_complete(
 ) -> None:
     db_service = mocker.Mock()
     db_service.update = mocker.AsyncMock()
-    warning_spy = mocker.patch("services.agent_calls.logger.warning")
+    debug_spy = mocker.patch("services.agent_calls.logger.debug")
     service = AgentCallAuditService(db_service=db_service)
 
     await service.complete_tool_call(
         agent_call_pk=None,
-        session_id=uuid4(),
         tool_name="collect_logs",
         duration_seconds=12.5,
         success=True,
         error_code=None,
     )
 
-    warning_spy.assert_called_once()
+    debug_spy.assert_called_once()
     db_service.update.assert_not_called()
