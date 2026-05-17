@@ -92,13 +92,11 @@ class LogSnapshotFilePayload(BaseModel):
 
 
 class LogSnapshotMetadata(BaseModel):
-    """Represent the metadata JSON stored beside one persisted log snapshot.
+    """Represent resolved metadata for one persisted log snapshot.
 
-    This model is used for the on-disk `snapshot_metadata.json` file. It is the
-    durable bridge between:
-
-    - the original `collect_logs` call
-    - later follow-up calls such as listing, reading, or grepping the snapshot
+    Runtime snapshot lookup is DB-backed. This model is the in-memory contract
+    passed from snapshot lookup to follow-up tools such as listing, reading,
+    grepping, filtering, and grouped analysis.
     """
 
     model_config = ConfigDict(extra="forbid")

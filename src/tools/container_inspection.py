@@ -214,6 +214,57 @@ async def _prepare_container_inspection_context(
     )
 
 
+async def _prepare_container_directory_context(
+    *,
+    action: str,
+    project_name: str,
+    source_key: str,
+    path: str | None,
+) -> ContainerInspectionContext | ToolResult:
+    """Resolve manifest, container source, and allowed directory-listing path."""
+
+    source_context = await _prepare_container_source_context(
+        action=action,
+        project_name=project_name,
+        source_key=source_key,
+    )
+    if isinstance(source_context, ToolResult):
+        return source_context
+
+    normalized_path = docker_service.resolve_container_directory_path_or_error(
+        source_context.definition,
+        path,
+    )
+    if isinstance(normalized_path, DockerServiceError):
+        return build_container_inspection_error_result(
+            action=action,
+            message=normalized_path.message,
+            requested_project_name=project_name,
+            source_key=source_key,
+            path=path,
+            settings=settings,
+        )
+
+    if not docker_service.container_path_is_allowed(source_context.definition, normalized_path):
+        return build_container_inspection_error_result(
+            action=action,
+            message=(
+                "Requested container path is outside the manifest whitelist "
+                "for the selected source."
+            ),
+            requested_project_name=project_name,
+            source_key=source_key,
+            path=path,
+            settings=settings,
+        )
+
+    return ContainerInspectionContext(
+        project_name=source_context.project_name,
+        definition=source_context.definition,
+        normalized_path=normalized_path,
+    )
+
+
 def create_container_payload(
     stat_payload: ContainerPathStat,
 ) -> ContainerPathMetadataPayload:
@@ -643,70 +694,18 @@ async def list_container_directory(
     """
 
     assert project_name is not None
-    manifest_result = await manifest_service.get_or_error(project_name)
-    if isinstance(manifest_result, ProjectManifestError):
-        logger.info(
-            "tool error",
-            extra={
-                "event": "tool_error",
-                "tool_name": "list_container_directory",
-                "error_message": manifest_result.message,
-                "source_key": source_key,
-                "path": path,
-                "project_name": project_name,
-            },
-        )
-        return build_container_inspection_error_result(
-            action="list_container_directory",
-            message=manifest_result.message,
-            requested_project_name=project_name,
-            source_key=source_key,
-            path=path,
-            settings=settings,
-        )
-    manifest = manifest_result.manifest
-    project_name_value = manifest_result.project_name
-    definition = manifest_service.get_container_source_or_error(manifest, source_key)
-    if isinstance(definition, ProjectManifestError):
-        return build_container_inspection_error_result(
-            action="list_container_directory",
-            message=definition.message,
-            requested_project_name=project_name,
-            source_key=source_key,
-            path=path,
-            settings=settings,
-        )
-
-    normalized_path = docker_service.resolve_container_directory_path_or_error(
-        definition,
-        path,
+    context = await _prepare_container_directory_context(
+        action="list_container_directory",
+        project_name=project_name,
+        source_key=source_key,
+        path=path,
     )
-    if isinstance(normalized_path, DockerServiceError):
-        return build_container_inspection_error_result(
-            action="list_container_directory",
-            message=normalized_path.message,
-            requested_project_name=project_name,
-            source_key=source_key,
-            path=path,
-            settings=settings,
-        )
-
-    if not docker_service.container_path_is_allowed(definition, normalized_path):
-        return build_container_inspection_error_result(
-            action="list_container_directory",
-            message=(
-                "Requested container path is outside the manifest whitelist "
-                "for the selected source."
-            ),
-            requested_project_name=project_name,
-            source_key=source_key,
-            path=path,
-            settings=settings,
-        )
+    if isinstance(context, ToolResult):
+        return context
 
     list_result = docker_service.list_container_directory(
-        definition.target,
-        normalized_path,
+        context.definition.target,
+        context.normalized_path,
     )
     if isinstance(list_result, DockerServiceError):
         return build_container_inspection_error_result(
@@ -721,10 +720,10 @@ async def list_container_directory(
     payload = ListContainerDirectoryPayload(
         action="list_container_directory",
         requested_project_name=project_name,
-        project_name=project_name_value,
-        source_key=definition.source_key,
-        container_name=definition.target,
-        path=normalized_path,
+        project_name=context.project_name,
+        source_key=context.definition.source_key,
+        container_name=context.definition.target,
+        path=context.normalized_path,
         truncated=truncated,
         entries=[create_container_payload(entry) for entry in entries],
     )

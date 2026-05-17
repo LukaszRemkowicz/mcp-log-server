@@ -21,7 +21,9 @@ from services.log_snapshots import (
 from storage import LogFileStorage
 from tests.conftest import override_settings
 from tests.factories import AgentSessionFactory
+from tools import utils as tool_utils
 from tools.models import LogSnapshotFilePayload, LogSnapshotMetadata
+from utils import log_snapshots
 
 
 def build_file_payload(output_file: Path) -> LogSnapshotFilePayload:
@@ -97,6 +99,11 @@ class FakeCollectLogsDBService:
         ):
             return self.collect_logs
         return None
+
+
+def test_old_snapshot_metadata_file_readers_are_not_exposed() -> None:
+    assert not hasattr(log_snapshots, "read_snapshot_metadata")
+    assert not hasattr(tool_utils, "load_snapshot_metadata_from_json")
 
 
 def test_prepare_workspace_requires_session_id_for_session_workspace(tmp_path) -> None:

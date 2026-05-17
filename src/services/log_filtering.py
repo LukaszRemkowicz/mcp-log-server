@@ -27,7 +27,7 @@ _DOCKER_JSON_LINE_PATTERN = re.compile(r"^\S+\s+({.*})\s*$")
 
 
 def _snapshot_dir_from_metadata(metadata: LogSnapshotMetadata) -> str:
-    """Return the relative snapshot directory represented by metadata files."""
+    """Return the relative snapshot directory represented by snapshot metadata."""
 
     if not metadata.files:
         return ""

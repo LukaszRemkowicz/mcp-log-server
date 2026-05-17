@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import re
 import shutil
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-
-from tools.models import LogSnapshotMetadata
 
 RETENTION_DURATION_PATTERN = re.compile(
     r"^(?P<value>\d+)\s*(?P<unit>s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours|d|day|days)$",
@@ -59,14 +56,6 @@ def cleanup_old_snapshot_dirs(root_dir: Path, *, retention: timedelta) -> None:
         entry_modified_at = datetime.fromtimestamp(entry.stat().st_mtime, UTC)
         if entry_modified_at < cutoff:
             shutil.rmtree(entry)
-
-
-def load_snapshot_metadata_from_json(metadata_json: str) -> LogSnapshotMetadata:
-    """Load one current snapshot metadata file into the typed tool contract."""
-
-    metadata = json.loads(metadata_json)
-    metadata.pop("snapshot_id", None)
-    return LogSnapshotMetadata.model_validate(metadata)
 
 
 def resolve_source_keys_alias(

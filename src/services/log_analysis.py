@@ -125,7 +125,7 @@ def _extract_request_path(value: str | None) -> str | None:
 
 
 def _snapshot_dir_from_metadata(metadata: LogSnapshotMetadata) -> str:
-    """Return the relative snapshot directory represented by metadata files."""
+    """Return the relative snapshot directory represented by snapshot metadata."""
 
     if not metadata.files:
         return ""

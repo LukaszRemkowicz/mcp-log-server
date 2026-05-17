@@ -53,6 +53,16 @@ DEFAULT_MAX_ERROR_GROUPS = 50
 DEFAULT_MAX_PROXY_GROUPS = 50
 DEFAULT_FILTERED_VIEW_MAX_LINES = 200
 GROUP_ERRORS_SUMMARY_LIMIT = 5
+GROUP_ERRORS_SUMMARY_MESSAGE_MAX_CHARS = 120
+
+
+def _summarize_group_message(message: str) -> str:
+    """Keep the human summary compact while preserving full details in groups."""
+
+    collapsed = " ".join(message.split())
+    if len(collapsed) <= GROUP_ERRORS_SUMMARY_MESSAGE_MAX_CHARS:
+        return collapsed
+    return f"{collapsed[: GROUP_ERRORS_SUMMARY_MESSAGE_MAX_CHARS - 3].rstrip()}..."
 
 
 def _build_group_errors_summary(
@@ -71,7 +81,8 @@ def _build_group_errors_summary(
     details = [
         (
             f"{group.count}x {group.severity} {group.category} in "
-            f"{', '.join(group.source_keys)}: {group.message_summary}"
+            f"{', '.join(group.source_keys)}: "
+            f"{_summarize_group_message(group.message_summary)}"
         )
         for group in groups[:GROUP_ERRORS_SUMMARY_LIMIT]
     ]

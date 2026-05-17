@@ -994,6 +994,10 @@ async def test_analysis_tools_api_read_collected_snapshot(
         and group["first_seen"]["output_file"] == "workflow/landingpage/latest/app_file.log"
         for group in groups
     )
+    if tool_name == "group_errors":
+        assert payload["summary"].startswith("Found 2 error-like lines in 2 groups.")
+        assert "Database connection failed" in payload["summary"]
+        assert len(payload["summary"]) < 260
 
 
 async def test_inspect_proxy_activity_api_groups_proxy_status_signals(
@@ -1708,10 +1712,19 @@ async def test_stat_container_path_api_returns_file_metadata(
     assert payload["file"]["size"] == 12
 
 
+@pytest.mark.parametrize(
+    ("arguments", "expected_path"),
+    [
+        ({"project_name": "dockerpage", "source_key": "backend", "path": "/app"}, "/app"),
+        ({"project_name": "dockerpage", "source_key": "backend"}, "/app"),
+    ],
+)
 async def test_list_container_directory_api_returns_entries(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
+    arguments: dict[str, object],
+    expected_path: str,
 ) -> None:
     """Verify list_container_directory returns whitelisted container entries."""
 
@@ -1722,7 +1735,7 @@ async def test_list_container_directory_api_returns_entries(
         {"allowed_projects": ["dockerpage"]},
     )
 
-    mocker.patch(
+    list_directory = mocker.patch(
         "tools.container_inspection.docker_service.list_container_directory",
         return_value=(
             [
@@ -1746,11 +1759,7 @@ async def test_list_container_directory_api_returns_entries(
             "method": "tools/call",
             "params": {
                 "name": "list_container_directory",
-                "arguments": {
-                    "project_name": "dockerpage",
-                    "source_key": "backend",
-                    "path": "/app",
-                },
+                "arguments": arguments,
             },
         },
     )
@@ -1761,7 +1770,9 @@ async def test_list_container_directory_api_returns_entries(
     assert response.json()["result"]["isError"] is False
     assert payload["action"] == "list_container_directory"
     assert payload["project_name"] == "dockerpage"
+    assert payload["path"] == expected_path
     assert payload["entries"][0]["name"] == "VERSION"
+    list_directory.assert_called_once_with("app-container", expected_path)
 
 
 async def test_list_projects_api_returns_multiple_manifest_backed_projects(
