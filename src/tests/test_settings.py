@@ -16,6 +16,7 @@ def test_settings_expose_uppercase_fields() -> None:
     assert settings.LOG_SNAPSHOT_RETENTION == "7d"
     assert settings.MCP_PATH == "/mcp"
     assert settings.MCP_JSON_RESPONSE is True
+    assert settings.MCP_CALLER_MODEL == "database.models.McpCaller"
 
 
 @pytest.mark.parametrize(
@@ -47,5 +48,5 @@ def test_settings_resolves_database_dsn(
     database_config: dict[str, Any],
     expected_dsn: str,
 ) -> None:
-    with override_settings(**database_config) as settings:
-        assert settings.db == expected_dsn
+    with override_settings(**database_config) as test_settings:
+        assert test_settings.db == expected_dsn

@@ -6,17 +6,24 @@ from typing import Any, ClassVar
 
 from tortoise import fields
 
+from cache import clear_cache_namespace
 from core.types import LogWorkspace
 from database.fields import FileField, FileStorage
 from database.managers import CollectLogsManager, DatabaseModel, ObjectsManager
-from database.types import AgentCallEvent, CollectLogsSourceStatus, LogSourceType, LogStream
+from database.types import (
+    AgentCallEvent,
+    AgentSessionStatus,
+    CollectLogsSourceStatus,
+    LogSourceType,
+    LogStream,
+)
 from storage import storage as log_storage
 
 
-class Authentication(DatabaseModel):
+class McpCaller(DatabaseModel):
     """Manually managed MCP caller allowlist entry."""
 
-    objects: ClassVar[ObjectsManager[Authentication]]
+    objects: ClassVar[ObjectsManager[McpCaller]]
 
     id = fields.BigIntField(
         primary_key=True,
@@ -48,8 +55,50 @@ class Authentication(DatabaseModel):
     )
 
     class Meta:
-        table = "authentications"
+        table = "mcp_callers"
         unique_together = (("client_id", "client_type", "workspace"),)
+
+
+class AgentSession(DatabaseModel):
+    """One agent session owned by one MCP caller."""
+
+    objects: ClassVar[ObjectsManager[AgentSession]]
+
+    id = fields.BigIntField(
+        primary_key=True,
+        description="Database-generated integer id for this agent session.",
+    )
+    created_at = fields.DatetimeField(
+        auto_now_add=True,
+        description="UTC timestamp when this agent session was created.",
+    )
+    updated_at = fields.DatetimeField(
+        auto_now=True,
+        description="UTC timestamp when this agent session was last updated.",
+    )
+    name = fields.CharField(
+        max_length=24,
+        unique=True,
+        description="Human-readable session name returned to agents as session_id.",
+    )
+    caller: fields.ForeignKeyRelation[McpCaller] = fields.ForeignKeyField(
+        "models.McpCaller",
+        related_name="agent_sessions",
+        on_delete=fields.CASCADE,
+        description="Allowed MCP caller that owns this agent session.",
+    )
+    status = fields.CharEnumField(
+        AgentSessionStatus,
+        default=AgentSessionStatus.ACTIVE,
+        description="Lifecycle status for this agent session.",
+    )
+    closed_at = fields.DatetimeField(
+        null=True,
+        description="UTC timestamp when this session was closed, if closed.",
+    )
+
+    class Meta:
+        table = "agent_sessions"
 
 
 class AgentCall(DatabaseModel):
@@ -65,22 +114,17 @@ class AgentCall(DatabaseModel):
         auto_now_add=True,
         description="UTC timestamp when this MCP call row was created.",
     )
-    session_id = fields.UUIDField(
-        description="MCP-generated UUID shared by all rows that belong to one agent session.",
+    session: fields.ForeignKeyRelation[AgentSession] = fields.ForeignKeyField(
+        "models.AgentSession",
+        related_name="agent_calls",
+        on_delete=fields.CASCADE,
+        description="Session that owns this recorded MCP call row.",
     )
-    session_ended = fields.BooleanField(
-        default=False,
-        description=(
-            "Whether this row marks the end of the agent session. Planned "
-            "close_agent_session support will write this explicitly."
-        ),
-    )
-    workspace = fields.CharEnumField(
-        LogWorkspace,
-        description=(
-            "Requested log workspace for the call: 'workflow' for shared scheduled "
-            "workflow context or 'session' for an interactive investigation."
-        ),
+    caller: fields.ForeignKeyRelation[McpCaller] = fields.ForeignKeyField(
+        "models.McpCaller",
+        related_name="agent_calls",
+        on_delete=fields.CASCADE,
+        description="Allowed MCP caller that created this recorded MCP call row.",
     )
     event = fields.CharEnumField(
         AgentCallEvent,
@@ -88,16 +132,6 @@ class AgentCall(DatabaseModel):
             "MCP action type, such as mcp_call_tool, mcp_read_resource, "
             "mcp_list_tools, or mcp_call_tool_exception."
         ),
-    )
-    client_id = fields.CharField(
-        max_length=255,
-        null=True,
-        description="Authenticated FastMCP client id for the caller, when available.",
-    )
-    client_type = fields.CharField(
-        max_length=128,
-        null=True,
-        description="JWT client_type claim identifying the caller category, when available.",
     )
     tool_name = fields.CharField(
         max_length=255,
@@ -156,13 +190,15 @@ class CollectLogs(DatabaseModel):
         auto_now_add=True,
         description="UTC timestamp when this collected log metadata row was created.",
     )
-    session_id = fields.UUIDField(
-        null=True,
-        description="Agent session UUID for session workspace collections.",
-    )
     workspace = fields.CharEnumField(
         LogWorkspace,
         description="Collection workspace, currently 'workflow' or 'session'.",
+    )
+    session: fields.ForeignKeyRelation[AgentSession] = fields.ForeignKeyField(
+        "models.AgentSession",
+        related_name="collect_logs",
+        on_delete=fields.CASCADE,
+        description="Session that owns this collected log artifact.",
     )
     project_name = fields.CharField(
         max_length=255,
@@ -234,6 +270,7 @@ class CollectLogsSource(DatabaseModel):
     collect_logs: fields.ForeignKeyRelation[CollectLogs] = fields.ForeignKeyField(
         "models.CollectLogs",
         related_name="sources",
+        on_delete=fields.CASCADE,
         description="Parent collect_logs artifact this source file belongs to.",
     )
     source_key = fields.CharField(
@@ -306,6 +343,7 @@ class ProjectManifest(DatabaseModel):
     """Persist one project manifest with the same shape as manifest JSON."""
 
     objects: ClassVar[ObjectsManager[ProjectManifest]]
+    cache_namespace: ClassVar[str] = "project_manifest"
 
     id = fields.UUIDField(
         primary_key=True,
@@ -338,6 +376,12 @@ class ProjectManifest(DatabaseModel):
     sources: fields.Field[list[dict[str, Any]]] = fields.JSONField(
         description="List of source definitions with the same shape as Manifest.sources.",
     )
+
+    @classmethod
+    async def clear_cache(cls) -> None:
+        """Clear cached ProjectManifest query results."""
+
+        await clear_cache_namespace(cls.cache_namespace)
 
     class Meta:
         table = "project_manifests"

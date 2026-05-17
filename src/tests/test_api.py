@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from pytest_mock import MockerFixture
@@ -40,11 +41,15 @@ from tests.conftest import (
 )
 from tools import collection as collection_tools
 
+SESSION_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+){2,}-[a-f0-9]{4}$")
+
 ToolCall = tuple[str, dict[str, object]]
 ProtectedToolCall = tuple[str, dict[str, object], list[str]]
 CallerContextToolCall = tuple[str, dict[str, object], list[str], list[str], bool]
 ProjectProtectedInvalidTokenFactory = Callable[["CustomJwtToken", list[str]], str]
 InvalidTokenFactory = Callable[["CustomJwtToken"], str]
+
+pytestmark = pytest.mark.anyio
 
 
 SNAPSHOT_TOOL_CALLS: tuple[ToolCall, ...] = (
@@ -278,7 +283,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
         ),
     ],
 )
-def test_tools_list_filters_visible_tools_per_jwt(
+async def test_tools_list_filters_visible_tools_per_jwt(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     subject: str,
@@ -295,7 +300,7 @@ def test_tools_list_filters_visible_tools_per_jwt(
         client_id,
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={"jsonrpc": "2.0", "id": "2", "method": "tools/list", "params": {}},
     )
@@ -306,7 +311,7 @@ def test_tools_list_filters_visible_tools_per_jwt(
     assert tool_names.isdisjoint(expected_absent)
 
 
-def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
+async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -325,7 +330,7 @@ def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
         "workflow-agent",
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=workflow_token,
         data={
             "jsonrpc": "2.0",
@@ -369,7 +374,7 @@ def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
     assert any(argument["name"] == "session_id" for argument in collect_logs_tool["arguments"])
 
 
-def test_service_status_api_does_not_report_project_access(
+async def test_service_status_api_does_not_report_project_access(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -386,7 +391,7 @@ def test_service_status_api_does_not_report_project_access(
         },
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -410,7 +415,7 @@ def test_service_status_api_does_not_report_project_access(
     ("tool_name", "arguments", "scopes", "allowed_projects", "needs_snapshot"),
     CALLER_CONTEXT_TOOL_CALLS,
 )
-def test_mcp_tools_api_use_database_caller_context_for_project_access(
+async def test_mcp_tools_api_use_database_caller_context_for_project_access(
     file_backed_project_context: FileBackedProjectContext,
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
@@ -531,15 +536,15 @@ def test_mcp_tools_api_use_database_caller_context_for_project_access(
     if tool_name in CALLER_CONTEXT_LOG_TOOL_NAMES:
         with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
             if needs_snapshot:
-                collect_response = jsonrpc.post(
+                collect_response = await jsonrpc.post(
                     token=token,
                     data=build_collect_logs_request(source_keys=["app_file"]),
                 )
                 assert collect_response.status_code == 200
                 assert collect_response.json()["result"]["isError"] is False
-            response = jsonrpc.post(token=token, data=request_data)
+            response = await jsonrpc.post(token=token, data=request_data)
     else:
-        response = jsonrpc.post(token=token, data=request_data)
+        response = await jsonrpc.post(token=token, data=request_data)
 
     assert response.status_code == 200
     assert response.json()["result"]["isError"] is False
@@ -553,7 +558,7 @@ def test_mcp_tools_api_use_database_caller_context_for_project_access(
     assert payload["project_name"] == allowed_projects[0]
 
 
-def test_collect_logs_api_returns_requested_and_resolved_file_sources(
+async def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -561,7 +566,7 @@ def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     """Verify collect_logs persists requested file sources and reports unknown keys."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(
                 source_keys=["app_file", "missing_source"],
@@ -599,7 +604,7 @@ def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     assert project_payload["sources"][0]["line_count"] == 3
 
 
-def test_collect_logs_api_errors_when_all_requested_sources_are_unknown(
+async def test_collect_logs_api_errors_when_all_requested_sources_are_unknown(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -607,7 +612,7 @@ def test_collect_logs_api_errors_when_all_requested_sources_are_unknown(
     """Verify collect_logs does not look successful when no source can be collected."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["missing_source"]),
         )
@@ -626,7 +631,7 @@ def test_collect_logs_api_errors_when_all_requested_sources_are_unknown(
     }
 
 
-def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
+async def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -634,11 +639,11 @@ def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
     """Verify snapshot grep/read edge cases through the real JSON-RPC path."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["snapshot_text"]),
         )
-        grep_response = jsonrpc.post(
+        grep_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -656,7 +661,7 @@ def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
                 },
             },
         )
-        read_response = jsonrpc.post(
+        read_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -703,7 +708,7 @@ def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
     assert read_payload["truncated"] is False
 
 
-def test_snapshot_tools_api_support_all_source_keys_alias(
+async def test_snapshot_tools_api_support_all_source_keys_alias(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -711,11 +716,11 @@ def test_snapshot_tools_api_support_all_source_keys_alias(
     """Verify snapshot and analysis follow-up tools accept source_keys=["all"]."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["all"]),
         )
-        list_response = jsonrpc.post(
+        list_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -727,7 +732,7 @@ def test_snapshot_tools_api_support_all_source_keys_alias(
                 },
             },
         )
-        grep_response = jsonrpc.post(
+        grep_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -743,7 +748,7 @@ def test_snapshot_tools_api_support_all_source_keys_alias(
                 },
             },
         )
-        filtered_response = jsonrpc.post(
+        filtered_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -759,7 +764,7 @@ def test_snapshot_tools_api_support_all_source_keys_alias(
                 },
             },
         )
-        group_response = jsonrpc.post(
+        group_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -775,7 +780,7 @@ def test_snapshot_tools_api_support_all_source_keys_alias(
                 },
             },
         )
-        bundle_response = jsonrpc.post(
+        bundle_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -815,7 +820,10 @@ def test_snapshot_tools_api_support_all_source_keys_alias(
     assert list_response.status_code == 200
     assert list_response.json()["result"]["isError"] is False
     assert list_payload["workspace"] == "workflow"
-    assert list_payload["session_id"] is None
+    assert (
+        list_payload["session_id"]
+        == collect_response.json()["result"]["structuredContent"]["session_id"]
+    )
     assert [item["source_key"] for item in list_payload["files"]] == expected_source_keys
     assert grep_response.status_code == 200
     assert grep_response.json()["result"]["isError"] is False
@@ -832,7 +840,7 @@ def test_snapshot_tools_api_support_all_source_keys_alias(
     assert bundle_payload["searched_source_keys"] == expected_source_keys
 
 
-def test_grep_log_snapshot_api_truncates_large_matching_lines(
+async def test_grep_log_snapshot_api_truncates_large_matching_lines(
     tmp_path: Path,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -845,16 +853,15 @@ def test_grep_log_snapshot_api_truncates_large_matching_lines(
         f"{long_line}\n",
         encoding="utf-8",
     )
-    assert jsonrpc.api_client.portal is not None
-    jsonrpc.api_client.portal.call(_seed_project_manifests, fixture_root / "manifests")
+    await _seed_project_manifests(fixture_root / "manifests")
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
         )
-        grep_response = jsonrpc.post(
+        grep_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -884,7 +891,7 @@ def test_grep_log_snapshot_api_truncates_large_matching_lines(
     assert match["line"] == long_line[:2_000]
 
 
-def test_snapshot_tools_api_reject_conflicting_source_key_arguments(
+async def test_snapshot_tools_api_reject_conflicting_source_key_arguments(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -892,11 +899,11 @@ def test_snapshot_tools_api_reject_conflicting_source_key_arguments(
     """Verify source_key/source_keys conflicts are rejected at the MCP boundary."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["snapshot_text"]),
         )
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -935,7 +942,7 @@ def test_snapshot_tools_api_reject_conflicting_source_key_arguments(
         ("build_incident_bundle", "build_incident_bundle"),
     ],
 )
-def test_analysis_tools_api_read_collected_snapshot(
+async def test_analysis_tools_api_read_collected_snapshot(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -945,11 +952,11 @@ def test_analysis_tools_api_read_collected_snapshot(
     """Verify grouped analysis tools read the latest collected workflow snapshot."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
         )
-        analysis_response = jsonrpc.post(
+        analysis_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -989,7 +996,7 @@ def test_analysis_tools_api_read_collected_snapshot(
     )
 
 
-def test_inspect_proxy_activity_api_groups_proxy_status_signals(
+async def test_inspect_proxy_activity_api_groups_proxy_status_signals(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -997,11 +1004,11 @@ def test_inspect_proxy_activity_api_groups_proxy_status_signals(
     """Verify proxy diagnostics summarize collected ingress/proxy snapshot sources."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["nginx", "traefik"]),
         )
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -1051,7 +1058,7 @@ def test_inspect_proxy_activity_api_groups_proxy_status_signals(
     "tool_name",
     ["group_errors", "build_incident_bundle", "create_filtered_view", "inspect_proxy_activity"],
 )
-def test_analysis_tools_api_support_single_source_alias(
+async def test_analysis_tools_api_support_single_source_alias(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -1060,11 +1067,11 @@ def test_analysis_tools_api_support_single_source_alias(
     """Verify analysis tools accept source_key as the single-source alias."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
         )
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -1093,7 +1100,7 @@ def test_analysis_tools_api_support_single_source_alias(
     "tool_name",
     ["group_errors", "build_incident_bundle", "create_filtered_view", "inspect_proxy_activity"],
 )
-def test_analysis_tools_api_reject_conflicting_source_key_arguments(
+async def test_analysis_tools_api_reject_conflicting_source_key_arguments(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -1102,11 +1109,11 @@ def test_analysis_tools_api_reject_conflicting_source_key_arguments(
     """Verify analysis tools reject source_key and source_keys together."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
         )
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -1137,7 +1144,50 @@ def test_analysis_tools_api_reject_conflicting_source_key_arguments(
     }
 
 
-def test_create_filtered_view_api_reads_collected_snapshot(
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("group_errors", {"max_groups": 0}),
+        ("build_incident_bundle", {"max_groups": 0}),
+        ("create_filtered_view", {"max_lines": 0}),
+        ("inspect_proxy_activity", {"max_groups": 0}),
+    ],
+)
+async def test_analysis_tools_api_validate_requested_snapshot_before_tool_arguments(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+    tool_name: str,
+    arguments: dict[str, object],
+) -> None:
+    """Verify snapshot lookup runs before analysis-specific argument validation."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": f"{tool_name}-snapshot-first",
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": {
+                        "project_name": "landingpage",
+                        **arguments,
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["error_code"] == "snapshot_not_found"
+    assert payload["message"] == "Requested workflow log snapshot was not found."
+
+
+async def test_create_filtered_view_api_reads_collected_snapshot(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -1145,11 +1195,11 @@ def test_create_filtered_view_api_reads_collected_snapshot(
     """Verify create_filtered_view reads a collected snapshot through JSON-RPC."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
         )
-        filtered_response = jsonrpc.post(
+        filtered_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -1183,14 +1233,14 @@ def test_create_filtered_view_api_reads_collected_snapshot(
 
 
 @pytest.mark.parametrize(("tool_name", "arguments"), PROJECT_PROTECTED_TOOL_CALL_ARGUMENTS)
-def test_project_protected_tools_api_require_bearer_token(
+async def test_project_protected_tools_api_require_bearer_token(
     jsonrpc: JsonRpcClient,
     tool_name: str,
     arguments: dict[str, object],
 ) -> None:
     """Verify every project-protected tool rejects missing bearer tokens."""
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=None,
         data={
             "jsonrpc": "2.0",
@@ -1232,7 +1282,7 @@ def test_project_protected_tools_api_require_bearer_token(
         ),
     ],
 )
-def test_project_protected_tools_api_reject_invalid_bearer_tokens(
+async def test_project_protected_tools_api_reject_invalid_bearer_tokens(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     tool_name: str,
@@ -1243,7 +1293,7 @@ def test_project_protected_tools_api_reject_invalid_bearer_tokens(
 ) -> None:
     """Verify project-protected tools reject malformed, expired, or bad tokens."""
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token_factory(custom_jwt_token, scopes),
         data={
             "jsonrpc": "2.0",
@@ -1261,7 +1311,7 @@ def test_project_protected_tools_api_reject_invalid_bearer_tokens(
     ("tool_name", "arguments", "scopes"),
     PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS,
 )
-def test_project_protected_tools_api_reject_project_access_mismatch(
+async def test_project_protected_tools_api_reject_project_access_mismatch(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     tool_name: str,
@@ -1273,7 +1323,7 @@ def test_project_protected_tools_api_reject_project_access_mismatch(
     token: str = custom_jwt_token("agent", scopes, "agent")
     mismatched_arguments: dict[str, object] = {**arguments, "project_name": "other-project"}
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -1293,7 +1343,7 @@ def test_project_protected_tools_api_reject_project_access_mismatch(
 
 
 @pytest.mark.parametrize(("tool_name", "arguments"), SNAPSHOT_TOOL_CALLS)
-def test_snapshot_tools_api_accept_valid_bearer_token(
+async def test_snapshot_tools_api_accept_valid_bearer_token(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -1303,11 +1353,11 @@ def test_snapshot_tools_api_accept_valid_bearer_token(
     """Verify snapshot tools accept valid tokens after a workflow snapshot exists."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
         )
-        tool_response = jsonrpc.post(
+        tool_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -1327,7 +1377,7 @@ def test_snapshot_tools_api_accept_valid_bearer_token(
     assert payload["project_name"] == "landingpage"
 
 
-def test_list_projects_api_returns_manifest_backed_projects(
+async def test_list_projects_api_returns_manifest_backed_projects(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -1340,7 +1390,7 @@ def test_list_projects_api_returns_manifest_backed_projects(
         {"projects_access": "all"},
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -1359,7 +1409,7 @@ def test_list_projects_api_returns_manifest_backed_projects(
     assert "backend" in landingpage["source_keys"]
 
 
-def test_read_container_file_api_returns_file_contents(
+async def test_read_container_file_api_returns_file_contents(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
@@ -1388,7 +1438,7 @@ def test_read_container_file_api_returns_file_contents(
         return_value=("release-123\n", False),
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -1413,7 +1463,7 @@ def test_read_container_file_api_returns_file_contents(
     assert payload["file"]["name"] == "VERSION"
 
 
-def test_inspect_containers_health_api_returns_container_status(
+async def test_inspect_containers_health_api_returns_container_status(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
@@ -1447,7 +1497,7 @@ def test_inspect_containers_health_api_returns_container_status(
         ),
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -1480,7 +1530,7 @@ def test_inspect_containers_health_api_returns_container_status(
     assert backend_payload["image"] == "portfolio/backend:2026-05-16"
 
 
-def test_inspect_container_detail_api_returns_curated_container_metadata(
+async def test_inspect_container_detail_api_returns_curated_container_metadata(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
@@ -1558,7 +1608,7 @@ def test_inspect_container_detail_api_returns_curated_container_metadata(
         ),
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -1604,7 +1654,7 @@ def test_inspect_container_detail_api_returns_curated_container_metadata(
     assert payload["health_log"][0]["output"] == "ok\n"
 
 
-def test_stat_container_path_api_returns_file_metadata(
+async def test_stat_container_path_api_returns_file_metadata(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
@@ -1629,7 +1679,7 @@ def test_stat_container_path_api_returns_file_metadata(
         ),
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -1658,7 +1708,7 @@ def test_stat_container_path_api_returns_file_metadata(
     assert payload["file"]["size"] == 12
 
 
-def test_list_container_directory_api_returns_entries(
+async def test_list_container_directory_api_returns_entries(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
@@ -1688,7 +1738,7 @@ def test_list_container_directory_api_returns_entries(
         ),
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -1714,7 +1764,7 @@ def test_list_container_directory_api_returns_entries(
     assert payload["entries"][0]["name"] == "VERSION"
 
 
-def test_list_projects_api_returns_multiple_manifest_backed_projects(
+async def test_list_projects_api_returns_multiple_manifest_backed_projects(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -1726,7 +1776,7 @@ def test_list_projects_api_returns_multiple_manifest_backed_projects(
         "all-project-workflow-client",
         {"client_type": "workflow_agent", "projects_access": "all"},
     )
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -1752,13 +1802,13 @@ def test_list_projects_api_returns_multiple_manifest_backed_projects(
     assert payload[1]["source_keys"] == ["app_file"]
 
 
-def test_collect_logs_api_returns_agent_error_for_project_mismatch(
+async def test_collect_logs_api_returns_agent_error_for_project_mismatch(
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
 ) -> None:
     """Verify collect_logs returns a structured project mismatch error."""
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=valid_jwt_token,
         data=build_collect_logs_request(project_names=["other-project"]),
     )
@@ -1776,7 +1826,7 @@ def test_collect_logs_api_returns_agent_error_for_project_mismatch(
 
 
 @pytest.mark.parametrize("project_names", [None, []])
-def test_collect_logs_api_uses_all_accessible_projects_when_project_names_not_provided(
+async def test_collect_logs_api_uses_all_accessible_projects_when_project_names_not_provided(
     multi_project_collect_context: MultiProjectCollectContext,
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
@@ -1801,7 +1851,7 @@ def test_collect_logs_api_uses_all_accessible_projects_when_project_names_not_pr
     )
 
     with override_settings(LOGS_DIR=multi_project_collect_context.logs_dir):
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=token,
             data=request_data,
         )
@@ -1832,7 +1882,7 @@ def test_collect_logs_api_uses_all_accessible_projects_when_project_names_not_pr
     ).exists()
 
 
-def test_collect_logs_api_generates_session_id_before_tool_call(
+async def test_collect_logs_api_generates_session_id_before_tool_call(
     file_backed_project_context: FileBackedProjectContext,
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
@@ -1855,7 +1905,7 @@ def test_collect_logs_api_generates_session_id_before_tool_call(
         new=mocker.AsyncMock(),
     )
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=token,
             data=build_collect_logs_request(
                 source_keys=["app_file"],
@@ -1869,7 +1919,8 @@ def test_collect_logs_api_generates_session_id_before_tool_call(
 
     assert response.status_code == 200
     assert response.json()["result"]["isError"] is False
-    assert str(UUID(session_id)) == session_id
+    assert SESSION_ID_PATTERN.fullmatch(session_id)
+    assert len(session_id) <= 24
     assert payload["workspace"] == "session"
     assert (
         file_backed_project_context.logs_dir
@@ -1880,7 +1931,72 @@ def test_collect_logs_api_generates_session_id_before_tool_call(
     ).exists()
 
 
-def test_collect_logs_api_blocks_workflow_agent_session_workspace(
+async def test_analysis_tool_rejects_snapshot_owned_by_other_caller(
+    file_backed_project_context: FileBackedProjectContext,
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify tools compare loaded snapshot caller_id against the request caller."""
+
+    owner_token = custom_jwt_token(
+        "codex-agent",
+        [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
+        "codex-agent",
+        {"client_type": "codex"},
+    )
+    other_token = custom_jwt_token(
+        "codex-agent",
+        [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
+        "codex-client",
+        {"client_type": "codex"},
+    )
+    mocker.patch(
+        "middleware.audit.agent_call_audit_service.create_tool_call",
+        new=mocker.AsyncMock(return_value=uuid4()),
+    )
+    mocker.patch(
+        "middleware.audit.agent_call_audit_service.complete_tool_call",
+        new=mocker.AsyncMock(),
+    )
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = await jsonrpc.post(
+            token=owner_token,
+            data=build_collect_logs_request(
+                source_keys=["app_file"],
+                workspace="session",
+                session_id=None,
+            ),
+        )
+        session_id = collect_response.json()["result"]["structuredContent"]["session_id"]
+        response = await jsonrpc.post(
+            token=other_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "group-errors-other-caller-snapshot",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_errors",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "session_id": session_id,
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["error_code"] == "snapshot_not_found"
+    assert payload["message"] == "Requested session log snapshot was not found."
+
+
+async def test_collect_logs_api_blocks_workflow_agent_session_workspace(
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
@@ -1892,7 +2008,7 @@ def test_collect_logs_api_blocks_workflow_agent_session_workspace(
         new=mocker.AsyncMock(),
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=valid_jwt_token,
         data=build_collect_logs_request(
             source_keys=["app_file"],
@@ -1915,7 +2031,7 @@ def test_collect_logs_api_blocks_workflow_agent_session_workspace(
     create_spy.assert_not_called()
 
 
-def test_workflow_skill_resource_read_api_returns_skill_contents(
+async def test_workflow_skill_resource_read_api_returns_skill_contents(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -1927,7 +2043,7 @@ def test_workflow_skill_resource_read_api_returns_skill_contents(
         "workflow-agent",
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=workflow_token,
         data={
             "jsonrpc": "2.0",
@@ -1944,7 +2060,7 @@ def test_workflow_skill_resource_read_api_returns_skill_contents(
     assert "SEVERITY CLASSIFICATION" in contents[0]["text"]
 
 
-def test_resources_list_shows_concrete_workflow_skill_resources(
+async def test_resources_list_shows_concrete_workflow_skill_resources(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -1956,7 +2072,7 @@ def test_resources_list_shows_concrete_workflow_skill_resources(
         "workflow-agent",
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=workflow_token,
         data={
             "jsonrpc": "2.0",
@@ -1975,7 +2091,7 @@ def test_resources_list_shows_concrete_workflow_skill_resources(
     assert "skill://workflow/bot_detection" in resource_uris
 
 
-def test_resource_templates_list_exposes_workflow_skill_template(
+async def test_resource_templates_list_exposes_workflow_skill_template(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -1987,7 +2103,7 @@ def test_resource_templates_list_exposes_workflow_skill_template(
         "workflow-agent",
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=workflow_token,
         data={
             "jsonrpc": "2.0",
@@ -2011,7 +2127,7 @@ def test_resource_templates_list_exposes_workflow_skill_template(
     ]
 
 
-def test_invalid_workflow_skill_resource_returns_agent_guidance(
+async def test_invalid_workflow_skill_resource_returns_agent_guidance(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -2023,7 +2139,7 @@ def test_invalid_workflow_skill_resource_returns_agent_guidance(
         "workflow-agent",
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=workflow_token,
         data={
             "jsonrpc": "2.0",
@@ -2046,7 +2162,7 @@ def test_invalid_workflow_skill_resource_returns_agent_guidance(
     ]
 
 
-def test_codex_cannot_access_workflow_components(
+async def test_codex_cannot_access_workflow_components(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -2058,7 +2174,7 @@ def test_codex_cannot_access_workflow_components(
         "codex-agent",
     )
 
-    tool_response = jsonrpc.post(
+    tool_response = await jsonrpc.post(
         token=codex_token,
         data={
             "jsonrpc": "2.0",
@@ -2067,7 +2183,7 @@ def test_codex_cannot_access_workflow_components(
             "params": {"name": "analyze_daily_log_bundle", "arguments": {}},
         },
     )
-    resource_response = jsonrpc.post(
+    resource_response = await jsonrpc.post(
         token=codex_token,
         data={
             "jsonrpc": "2.0",
@@ -2086,13 +2202,13 @@ def test_codex_cannot_access_workflow_components(
     assert "Unknown resource" in resource_response.json()["error"]["message"]
 
 
-def test_api_returns_structured_error_for_unknown_tool(
+async def test_api_returns_structured_error_for_unknown_tool(
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
 ) -> None:
     """Verify unknown tools include a stable structured error payload."""
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=valid_jwt_token,
         data={
             "jsonrpc": "2.0",
@@ -2110,7 +2226,7 @@ def test_api_returns_structured_error_for_unknown_tool(
     assert result["structuredContent"]["details"] == {"tool_name": "does_not_exist"}
 
 
-def test_api_returns_structured_error_for_tool_argument_type_mismatch(
+async def test_api_returns_structured_error_for_tool_argument_type_mismatch(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -2118,7 +2234,7 @@ def test_api_returns_structured_error_for_tool_argument_type_mismatch(
     """Verify FastMCP validation errors are normalized for agents."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -2146,13 +2262,13 @@ def test_api_returns_structured_error_for_tool_argument_type_mismatch(
     assert payload["details"]["invalid_arguments"] == ["source_keys"]
 
 
-def test_api_returns_fastmcp_error_for_unknown_jsonrpc_method(
+async def test_api_returns_fastmcp_error_for_unknown_jsonrpc_method(
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
 ) -> None:
     """Verify unknown JSON-RPC methods use FastMCP's native error body."""
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=valid_jwt_token,
         data={
             "jsonrpc": "2.0",
@@ -2177,14 +2293,14 @@ def test_api_returns_fastmcp_error_for_unknown_jsonrpc_method(
         ("resources/read", {"uri": "skill://workflow/severity_guide"}),
     ],
 )
-def test_api_requires_bearer_token(
+async def test_api_requires_bearer_token(
     jsonrpc: JsonRpcClient,
     method: str,
     params: dict[str, object],
 ) -> None:
     """Verify protected MCP methods require a bearer token."""
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=None,
         data={"jsonrpc": "2.0", "id": "7", "method": method, "params": params},
     )
@@ -2238,7 +2354,7 @@ def test_api_requires_bearer_token(
         ),
     ],
 )
-def test_api_rejects_invalid_bearer_tokens(
+async def test_api_rejects_invalid_bearer_tokens(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     token_factory: InvalidTokenFactory,
@@ -2246,7 +2362,7 @@ def test_api_rejects_invalid_bearer_tokens(
 ) -> None:
     """Verify protected MCP methods reject invalid bearer tokens."""
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token_factory(custom_jwt_token),
         data={"jsonrpc": "2.0", "id": f"invalid-{label}", "method": "tools/list", "params": {}},
     )
@@ -2255,7 +2371,7 @@ def test_api_rejects_invalid_bearer_tokens(
     assert response.json()["error"] == "invalid_token"
 
 
-def test_tool_call_api_rejects_jwt_without_client_id(
+async def test_tool_call_api_rejects_jwt_without_client_id(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -2268,7 +2384,7 @@ def test_tool_call_api_rejects_jwt_without_client_id(
         {"client_id": ""},
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -2276,7 +2392,7 @@ def test_tool_call_api_rejects_jwt_without_client_id(
             "method": "tools/call",
             "params": {
                 "name": "close_agent_session",
-                "arguments": {"session_id": "ef5e1daa-d06b-479c-926d-8107639bd467"},
+                "arguments": {"session_id": "gentle-river-finds-a8f2"},
             },
         },
     )
@@ -2288,11 +2404,11 @@ def test_tool_call_api_rejects_jwt_without_client_id(
     assert payload["error_code"] == "invalid_client_id"
 
 
-def test_tool_call_api_rejects_jwt_for_unregistered_client(
+async def test_tool_call_api_rejects_jwt_for_unregistered_client(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
-    """Verify tool calls require a matching Authentication row."""
+    """Verify tool calls require a matching McpCaller row."""
 
     token = custom_jwt_token(
         "unregistered-agent",
@@ -2301,7 +2417,7 @@ def test_tool_call_api_rejects_jwt_for_unregistered_client(
         {"client_type": "codex"},
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -2309,7 +2425,7 @@ def test_tool_call_api_rejects_jwt_for_unregistered_client(
             "method": "tools/call",
             "params": {
                 "name": "close_agent_session",
-                "arguments": {"session_id": "ef5e1daa-d06b-479c-926d-8107639bd467"},
+                "arguments": {"session_id": "gentle-river-finds-a8f2"},
             },
         },
     )

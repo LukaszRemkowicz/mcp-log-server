@@ -7,7 +7,7 @@ Tortoise class methods such as ``CollectLogs.get(...)`` directly.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Any, ClassVar, cast
 
 from core.types import LogWorkspace
 from database.fields import FileReference, FileStorage
@@ -31,18 +31,21 @@ class CollectLogsService:
         """Create one collect_logs artifact row."""
 
         obj = await self.model.objects.create(**payload.model_dump())
+        await obj.fetch_related("session")
         return self._to_out(obj)
 
     async def get(self, collect_logs_id: int) -> CollectLogsOut:
         """Return one collect_logs artifact row by id."""
 
         obj = await self.model.objects.get(id=collect_logs_id)
+        await obj.fetch_related("session")
         return self._to_out(obj)
 
     async def get_with_sources(self, collect_logs_id: int) -> CollectLogsWithSourcesOut:
         """Return one collect_logs artifact row with source rows by id."""
 
         obj = await self.model.objects.get(id=collect_logs_id)
+        await obj.fetch_related("session")
         return await self._to_out_with_sources(obj)
 
     async def get_latest(self, project_name: str) -> CollectLogsOut | None:
@@ -51,6 +54,7 @@ class CollectLogsService:
         obj = await self.model.objects.get_latest(project_name)
         if obj is None:
             return None
+        await obj.fetch_related("session")
         return self._to_out(obj)
 
     async def get_latest_with_sources(
@@ -62,6 +66,7 @@ class CollectLogsService:
         obj = await self.model.objects.get_latest(project_name)
         if obj is None:
             return None
+        await obj.fetch_related("session")
         return await self._to_out_with_sources(obj)
 
     async def get_session_collect_logs_with_sources(
@@ -75,10 +80,11 @@ class CollectLogsService:
         obj = await self.model.objects.filter(
             project_name=project_name,
             workspace=LogWorkspace.SESSION,
-            session_id=session_id,
+            session__name=session_id,
         ).first()
         if obj is None:
             return None
+        await obj.fetch_related("session")
         return await self._to_out_with_sources(obj)
 
     async def get_archive_with_sources(
@@ -96,6 +102,7 @@ class CollectLogsService:
         ).first()
         if obj is None:
             return None
+        await obj.fetch_related("session")
         return await self._to_out_with_sources(obj)
 
     @staticmethod
@@ -104,8 +111,9 @@ class CollectLogsService:
 
         return CollectLogsOut(
             id=obj.id,
-            session_id=obj.session_id,
+            session_id=obj.session.name,
             workspace=obj.workspace,
+            caller_id=cast(int, cast(Any, obj.session).caller_id),
             project_name=obj.project_name,
             collected_at=obj.collected_at,
             snapshot_dir=obj.snapshot_dir,

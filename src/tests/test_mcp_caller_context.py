@@ -39,6 +39,7 @@ async def test_project_authorized_tool_uses_request_caller_projects(mocker) -> N
 
     token = _token_with_claims({})
     caller = AuthenticatedMcpCaller(
+        caller_id=1,
         client_id="codex-client",
         client_type="codex",
         workspace=LogWorkspace.WORKFLOW,
@@ -66,6 +67,7 @@ async def test_project_authorized_tool_rejects_jwt_project_claim_override(mocker
 
     token = _token_with_claims({"projects_access": "all"})
     caller = AuthenticatedMcpCaller(
+        caller_id=1,
         client_id="codex-client",
         client_type="codex",
         workspace=LogWorkspace.WORKFLOW,

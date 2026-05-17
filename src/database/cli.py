@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Sequence
+from pathlib import Path
+
+MIGRATIONS_DIR = Path("migrations/models")
 
 INIT_DB_REQUIRED_MESSAGES = (
     "You need to run `aerich init-db` first",
@@ -57,11 +61,93 @@ def _replay_error(error: subprocess.CalledProcessError) -> None:
         sys.stderr.write(str(error.stderr))
 
 
+def _migration_sort_key(path: Path) -> int:
+    """Return numeric migration prefix, or 0 when a file is not numbered."""
+
+    prefix = path.stem.split("_", maxsplit=1)[0]
+    return int(prefix) if prefix.isdecimal() else 0
+
+
+def _next_migration_prefix(paths: set[Path]) -> str:
+    """Return the next Django-style migration number for committed migrations."""
+
+    latest = max(
+        (_migration_sort_key(path) for path in paths),
+        default=0,
+    )
+    return f"{latest + 1:03d}"
+
+
+def _slugify_migration_suffix(value: str) -> str:
+    """Return a stable migration filename suffix from command text."""
+
+    slug = re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
+    return slug or "update"
+
+
+def _prepare_makemigrations_args(args: Sequence[str]) -> tuple[list[str], str | None]:
+    """Translate project-friendly suffix args into Aerich migrate args."""
+
+    aerich_args: list[str] = []
+    suffix: str | None = None
+    positional_parts: list[str] = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg in {"--name", "-n"} and index + 1 < len(args):
+            suffix = _slugify_migration_suffix(args[index + 1])
+            aerich_args.extend([arg, suffix])
+            index += 2
+            continue
+        if arg.startswith("--name="):
+            suffix = _slugify_migration_suffix(arg.split("=", maxsplit=1)[1])
+            aerich_args.append(f"--name={suffix}")
+            index += 1
+            continue
+        if arg.startswith("-"):
+            aerich_args.append(arg)
+            index += 1
+            continue
+
+        positional_parts.append(arg)
+        index += 1
+
+    if positional_parts and suffix is None:
+        suffix = _slugify_migration_suffix(" ".join(positional_parts))
+        aerich_args.extend(["--name", suffix])
+
+    return aerich_args, suffix
+
+
+def _normalize_generated_migration_name(before: set[Path], suffix: str | None = None) -> None:
+    """Rename a newly generated Aerich migration to the project filename style."""
+
+    generated = [
+        path
+        for path in MIGRATIONS_DIR.glob("*.py")
+        if path not in before and not path.stem[:3].isdecimal()
+    ]
+    if len(generated) != 1:
+        return
+
+    source = generated[0]
+    parts = source.stem.split("_")
+    generated_suffix = (
+        "_".join(parts[2:]) if len(parts) >= 3 and parts[1].isdecimal() else source.stem
+    )
+    target_suffix = suffix or generated_suffix or "update"
+    target = source.with_name(f"{_next_migration_prefix(before)}_{target_suffix}.py")
+    source.rename(target)
+
+
 def _run_makemigrations(args: Sequence[str]) -> int:
     """Generate migrations, initializing Aerich first when needed."""
 
+    aerich_args, suffix = _prepare_makemigrations_args(args)
+    before = set(MIGRATIONS_DIR.glob("*.py"))
     try:
-        result = _run_aerich(["migrate", *args], capture_output=True, check=True)
+        result = _run_aerich(["migrate", *aerich_args], capture_output=True, check=True)
+        _normalize_generated_migration_name(before, suffix=suffix)
         _replay_output(result)
         return result.returncode
     except subprocess.CalledProcessError as error:

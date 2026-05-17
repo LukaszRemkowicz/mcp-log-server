@@ -4,7 +4,7 @@ import json
 import shutil
 import subprocess
 import time
-from collections.abc import AsyncIterator, Generator
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,18 +15,26 @@ import pytest
 from fastmcp.server.auth import AccessToken
 from joserfc import jwt
 from joserfc.jwk import OctKey
-from starlette.testclient import TestClient
 from tortoise import Tortoise, connections
 
 from app import create_application, mcp
 from auth.auth_provider import build_auth_provider
+from auth.mcp_caller_model import get_mcp_caller_model
 from auth.scopes import LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE
-from cache import clear_cache
 from conf import set_settings, settings
 from core.types import LogWorkspace
-from database.models import Authentication
+from database.managers import DatabaseModel
+from database.models import (
+    AgentCall,
+    AgentSession,
+    CollectLogs,
+    CollectLogsSource,
+    McpCaller,
+    ProjectManifest,
+)
 from database.schemas import ProjectManifestCreate, ProjectManifestUpdate
 from database.services.project_manifests import ProjectManifestService as ProjectManifestDBService
+from database.signals import register_database_signals
 from manifests.loader import list_project_manifests
 from manifests.models import Manifest
 from settings import Settings
@@ -50,7 +58,7 @@ async def _test_lifespan_without_database(_app: object) -> AsyncIterator[None]:
     transport initializes its request/session manager there. The test database
     fixture owns Tortoise setup, seeding, flushing, and shutdown, so the app's
     production DB lifespan must not run a second Tortoise lifecycle inside the
-    TestClient portal loop.
+    test request client.
     """
 
     yield
@@ -150,7 +158,7 @@ class FakeDockerClient:
 @contextmanager
 def override_settings(
     **updates: object,
-) -> Generator[Settings]:
+) -> Iterator[Settings]:
     """Temporarily patch selected shared app settings for tests."""
 
     previous_settings = settings.model_copy()
@@ -228,15 +236,25 @@ def pytest_sessionstart(session: pytest.Session) -> None:  # noqa: ARG001
 async def _flush_database_tables() -> None:
     """Delete all rows from registered Tortoise app model tables."""
 
-    for model in Tortoise.apps["models"].values():
+    ordered_models: list[type[DatabaseModel]] = [
+        CollectLogsSource,
+        CollectLogs,
+        AgentCall,
+        AgentSession,
+        McpCaller,
+    ]
+    for model in ordered_models:
         await model.all().delete()
+    for registered_model in Tortoise.apps["models"].values():
+        if registered_model in ordered_models or registered_model.__name__ == "Aerich":
+            continue
+        await registered_model.all().delete()
 
 
 async def _clear_project_manifest_cache() -> None:
     """Clear manifest caches that can otherwise cross pytest event loops."""
 
-    await clear_cache(ProjectManifestDBService.all)
-    await clear_cache(ProjectManifestDBService.get)
+    await ProjectManifest.clear_cache()
 
 
 async def _initialize_test_database() -> None:
@@ -246,6 +264,7 @@ async def _initialize_test_database() -> None:
         db_url=settings.db,
         modules={"models": ["database.models"]},
     )
+    register_database_signals()
 
 
 async def _close_test_database() -> None:
@@ -256,29 +275,9 @@ async def _close_test_database() -> None:
     await Tortoise._reset_apps()  # noqa Access to a protected member of a class
 
 
-@pytest.fixture(autouse=True)
-async def _async_database_setup(
-    anyio_backend: str,  # noqa: ARG001
-    request: pytest.FixtureRequest,
-) -> AsyncIterator[None]:
+@pytest.fixture
+async def db() -> AsyncIterator[None]:
     """Provide Django-style database setup, manifest seed, and flush for each test."""
-
-    if "jsonrpc" in request.fixturenames:
-        jsonrpc: JsonRpcClient = request.getfixturevalue("jsonrpc")
-        assert jsonrpc.api_client.portal is not None
-        portal = jsonrpc.api_client.portal
-        portal.call(_clear_project_manifest_cache)
-        portal.call(_initialize_test_database)
-        portal.call(_flush_database_tables)
-        portal.call(_create_callers)
-        portal.call(_seed_project_manifests)
-        try:
-            yield
-        finally:
-            portal.call(_clear_project_manifest_cache)
-            portal.call(_flush_database_tables)
-            portal.call(_close_test_database)
-        return
 
     await _clear_project_manifest_cache()
     await _initialize_test_database()
@@ -297,10 +296,10 @@ async def _async_database_setup(
 class JsonRpcClient:
     """Small test helper for authenticated JSON-RPC POST calls."""
 
-    api_client: TestClient
+    api_client: httpx.AsyncClient
     mcp_path: str
 
-    def post(
+    async def post(
         self,
         *,
         token: str | None,
@@ -312,7 +311,7 @@ class JsonRpcClient:
         if token is not None:
             headers["Authorization"] = f"Bearer {token}"
 
-        return self.api_client.post(self.mcp_path, headers=headers, json=data)
+        return await self.api_client.post(self.mcp_path, headers=headers, json=data)
 
 
 def build_collect_logs_request(
@@ -410,8 +409,9 @@ async def _create_callers() -> None:
         ),
     )
     for client_id, client_type, workspace, allowed_projects in default_mcp_clients:
+        caller_model = get_mcp_caller_model()
         exists = (
-            await Authentication.objects.filter(
+            await caller_model.objects.filter(
                 client_id=client_id,
                 client_type=client_type,
                 workspace=workspace,
@@ -421,7 +421,7 @@ async def _create_callers() -> None:
         )
         if exists:
             continue
-        await Authentication.objects.create(
+        await caller_model.objects.create(
             client_id=client_id,
             client_type=client_type,
             workspace=workspace,
@@ -565,15 +565,14 @@ def valid_jwt_token(custom_jwt_token: CustomJwtToken) -> str:
 
 
 @pytest.fixture
-def jsonrpc() -> Generator[JsonRpcClient]:
+async def jsonrpc(
+    db: None,  # noqa: ARG001
+) -> AsyncIterator[JsonRpcClient]:
     """Return a JSON-RPC client that exercises the real FastMCP HTTP path.
 
-    The client is entered with `TestClient` so FastMCP starts the HTTP
-    transport lifespan and its internal session manager. During this test-only
-    lifespan, database startup/shutdown is disabled: `_async_database_setup`
-    already initializes and seeds Tortoise in the same TestClient portal loop
-    for tests that use this fixture. Running the production DB lifespan here
-    would initialize or close asyncpg pools from a second event loop.
+    The async ASGI client keeps request handling in the same event loop as the
+    async database fixture, so Tortoise and asyncpg share one straightforward
+    setup path.
     """
 
     app = create_application(auth_provider=build_auth_provider(settings))
@@ -585,11 +584,16 @@ def jsonrpc() -> Generator[JsonRpcClient]:
     previous_lifespan = mcp._lifespan  # noqa: SLF001
     mcp._lifespan = _test_lifespan_without_database  # noqa: SLF001
     try:
-        with TestClient(asgi_app) as client:
-            yield JsonRpcClient(
-                api_client=client,
-                mcp_path=settings.MCP_PATH,
-            )
+        async with asgi_app.router.lifespan_context(asgi_app):
+            transport = httpx.ASGITransport(app=asgi_app)
+            async with httpx.AsyncClient(
+                transport=transport,
+                base_url="http://testserver",
+            ) as client:
+                yield JsonRpcClient(
+                    api_client=client,
+                    mcp_path=settings.MCP_PATH,
+                )
     finally:
         mcp._lifespan = previous_lifespan  # noqa: SLF001
 

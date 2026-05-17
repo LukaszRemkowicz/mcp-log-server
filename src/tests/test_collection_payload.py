@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import UUID
 
 import pytest
 from docker.errors import DockerException
@@ -16,12 +16,7 @@ from core.types import LogWorkspace
 from exception import InvalidTimeFilterError
 from manifests.loader import list_project_manifests, load_project_manifest
 from manifests.models import SourceDefinition
-from services.log_collection import (
-    BuildLogsError,
-    CollectSourceError,
-    DockerTimeFilters,
-    LogCollectionService,
-)
+from services.log_collection import CollectSourceError, DockerTimeFilters, LogCollectionService
 from services.project_authorization import ProjectAuthorizationError, ProjectAuthorizationService
 from services.project_manifest import ProjectManifestService
 from tests.conftest import (
@@ -32,10 +27,12 @@ from tests.conftest import (
     override_settings,
     runtime_test_manifest,
 )
+from tests.factories import AgentSessionFactory
 from tools.models import SnapshotWorkspace
 
-SESSION_ID = "8f197fe7-11d8-4b03-9edb-130ece9dc241"
-SECOND_SESSION_ID = "19e70607-0ff0-4853-bd64-2400db93ee31"
+SESSION_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+){2,}-[a-f0-9]{4}$")
+SESSION_ID = "gentle-river-finds-a8f2"
+SECOND_SESSION_ID = "quiet-field-opens-b1c2"
 
 
 async def build_collect_logs(
@@ -80,6 +77,10 @@ async def build_collect_logs(
         manifest,
         requested_source_keys,
     )
+    if session_id is None:
+        agent_session = await AgentSessionFactory.save_to_db()
+    else:
+        agent_session = await AgentSessionFactory.save_to_db(name=session_id)
 
     return await collection_service.build_logs(
         manifest=manifest,
@@ -87,7 +88,7 @@ async def build_collect_logs(
         missing_source_keys=manifest_sources.missing_source_keys,
         source_keys=manifest_sources.source_keys,
         workspace=workspace,
-        session_id=session_id,
+        session_id=agent_session.name,
         since=normalized_since,
         until=until,
     )
@@ -115,6 +116,7 @@ def collect_source(
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_build_collect_logs_collects_requested_file_source(
     tmp_path: Path,
     valid_access_token: AccessToken,
@@ -162,6 +164,7 @@ async def test_build_collect_logs_collects_requested_file_source(
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_build_collect_logs_uses_runtime_default_log_window(
     tmp_path: Path,
     valid_access_token: AccessToken,
@@ -182,6 +185,7 @@ async def test_build_collect_logs_uses_runtime_default_log_window(
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_build_collect_logs_archives_previous_latest_snapshot(
     tmp_path: Path,
     valid_access_token: AccessToken,
@@ -226,6 +230,7 @@ async def test_build_collect_logs_archives_previous_latest_snapshot(
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_workflow_archive_files_are_tracked_without_inventory_json(
     tmp_path: Path,
     valid_access_token: AccessToken,
@@ -269,6 +274,7 @@ async def test_workflow_archive_files_are_tracked_without_inventory_json(
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_build_collect_logs_replaces_incomplete_workflow_latest_snapshot(
     tmp_path: Path,
     valid_access_token: AccessToken,
@@ -297,6 +303,7 @@ async def test_build_collect_logs_replaces_incomplete_workflow_latest_snapshot(
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_session_snapshot_cleanup_uses_configured_retention_window(
     tmp_path: Path,
     valid_access_token: AccessToken,
@@ -339,6 +346,7 @@ async def test_session_snapshot_cleanup_uses_configured_retention_window(
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_build_collect_logs_rejects_project_mismatch(
     tmp_path: Path,
     valid_access_token: AccessToken,
@@ -361,6 +369,7 @@ async def test_build_collect_logs_rejects_project_mismatch(
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_build_collect_logs_collects_full_window_without_tail_controls(
     tmp_path: Path,
     valid_access_token: AccessToken,
@@ -382,6 +391,7 @@ async def test_build_collect_logs_collects_full_window_without_tail_controls(
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_build_collect_logs_persists_large_file_without_inline_logs(
     tmp_path: Path,
     valid_access_token: AccessToken,
@@ -634,7 +644,8 @@ def test_collect_source_reports_docker_api_unavailable(
 
 
 @pytest.mark.anyio
-async def test_build_collect_logs_requires_agent_chosen_session_id(
+@pytest.mark.usefixtures("db")
+async def test_build_collect_logs_uses_generated_session_id_for_session_workspace(
     tmp_path: Path,
     valid_access_token: AccessToken,
 ) -> None:
@@ -651,26 +662,21 @@ async def test_build_collect_logs_requires_agent_chosen_session_id(
             until=None,
         )
 
-    assert isinstance(payload, BuildLogsError)
-    assert payload.error_code == "missing_session_id"
-    assert payload.message == (
-        "Session workspace is unavailable because MCP did not provide the required session_id."
-    )
-    assert payload.retry_tips == [
-        "This is a system error, not something the agent can fix with tool arguments.",
-        ("Ask administrator to check MCP middleware, session propagation, and system logs."),
-    ]
+    assert payload.workspace == "session"
+    session_name = Path(payload.snapshot_dir).parent.name
+    assert SESSION_ID_PATTERN.fullmatch(session_name)
+    assert payload.snapshot_dir == str(logs_dir / "sessions" / session_name / "landingpage")
 
 
 def test_collect_logs_service_generates_session_id_for_session_workspace() -> None:
     session_id = LogCollectionService.resolve_session_id(None)
 
-    assert session_id is not None
-    assert isinstance(session_id, UUID)
+    assert SESSION_ID_PATTERN.fullmatch(session_id)
+    assert len(session_id) <= 24
 
 
 def test_collect_logs_service_reuses_session_id_for_session_workspace() -> None:
-    existing_session_id = UUID("8f197fe7-11d8-4b03-9edb-130ece9dc241")
+    existing_session_id = "calm-river-opens-a1b2"
 
     assert (
         LogCollectionService.resolve_session_id(f" {existing_session_id} ") == existing_session_id
@@ -680,10 +686,12 @@ def test_collect_logs_service_reuses_session_id_for_session_workspace() -> None:
 def test_collect_logs_service_generates_session_id_without_existing_value() -> None:
     session_id = LogCollectionService.resolve_session_id(None)
 
-    assert isinstance(session_id, UUID)
+    assert SESSION_ID_PATTERN.fullmatch(session_id)
+    assert len(session_id) <= 24
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_build_collect_logs_reuses_agent_chosen_session_id(
     tmp_path: Path,
     valid_access_token: AccessToken,

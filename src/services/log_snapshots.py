@@ -34,6 +34,7 @@ class SnapshotContext:
     """Resolved snapshot metadata and filesystem paths for one snapshot request."""
 
     project_name: str
+    caller_id: int
     snapshot_dir: Path
     metadata: LogSnapshotMetadata
     sources: list[CollectLogsSourceOut]
@@ -81,7 +82,7 @@ class LogSnapshotService:
 
     - prepare workflow and session snapshot directories
     - archive or replace older persisted workspaces when policy requires it
-    - load authorized snapshot context for follow-up read/grep operations
+    - load snapshot context for follow-up read/grep operations
     - run grep against already persisted snapshot files
 
     This service is the persistence boundary for collected logs. It owns
@@ -194,6 +195,7 @@ class LogSnapshotService:
             snapshot_dir = self.storage.path(snapshot_dir)
         return SnapshotContext(
             project_name=collect_logs.project_name,
+            caller_id=collect_logs.caller_id,
             snapshot_dir=snapshot_dir,
             metadata=metadata,
             sources=collect_logs.sources,
@@ -239,6 +241,7 @@ class LogSnapshotService:
             snapshot_dir = self.storage.path(snapshot_dir)
         return SnapshotContext(
             project_name=collect_logs.project_name,
+            caller_id=collect_logs.caller_id,
             snapshot_dir=snapshot_dir,
             metadata=metadata,
             sources=collect_logs.sources,

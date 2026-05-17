@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -11,17 +12,25 @@ from pytest_mock import MockerFixture
 import database.cli as database_cli
 import database.config as database_config
 import database.ensure_test_database as ensure_test_database_module
+from auth.mcp_caller_model import get_mcp_caller_model
 from core.types import LogWorkspace
 from database.fields import FileField
 from database.managers import CollectLogsManager
 from database.models import (
     AgentCall,
-    Authentication,
+    AgentSession,
     CollectLogs,
     CollectLogsSource,
+    McpCaller,
     ProjectManifest,
 )
-from database.types import AgentCallEvent, CollectLogsSourceStatus, LogSourceType, LogStream
+from database.types import (
+    AgentCallEvent,
+    AgentSessionStatus,
+    CollectLogsSourceStatus,
+    LogSourceType,
+    LogStream,
+)
 from tests.conftest import override_settings
 
 
@@ -75,6 +84,106 @@ def test_makemigrations_runs_aerich_migrate(
     assert calls[0][3]["DATABASE_HOST"] == "127.0.0.1"
     assert calls[0][3]["DATABASE_PORT"] == "5437"
     assert capsys.readouterr().out == "generated\n"
+
+
+def test_makemigrations_normalizes_aerich_filename(
+    mocker: MockerFixture,
+    tmp_path: Path,
+) -> None:
+    migrations_dir = tmp_path / "migrations" / "models"
+    migrations_dir.mkdir(parents=True)
+    (migrations_dir / "001_init.py").write_text("init\n", encoding="utf-8")
+
+    def fake_run(
+        args: list[str],
+        *,
+        capture_output: bool,
+        check: bool,
+        env: dict[str, str],
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        (migrations_dir / "2_20260517120000_remove_agent_call_redundant_fields.py").write_text(
+            "upgrade\n",
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    mocker.patch("database.cli.subprocess.run", fake_run)
+    mocker.patch("database.cli.MIGRATIONS_DIR", migrations_dir)
+
+    result = database_cli._run_makemigrations([])
+
+    assert result == 0
+    assert not (migrations_dir / "2_20260517120000_remove_agent_call_redundant_fields.py").exists()
+    assert (migrations_dir / "002_remove_agent_call_redundant_fields.py").read_text(
+        encoding="utf-8"
+    ) == "upgrade\n"
+
+
+def test_makemigrations_accepts_positional_suffix(
+    mocker: MockerFixture,
+    tmp_path: Path,
+) -> None:
+    migrations_dir = tmp_path / "migrations" / "models"
+    migrations_dir.mkdir(parents=True)
+    (migrations_dir / "001_init.py").write_text("init\n", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(
+        args: list[str],
+        *,
+        capture_output: bool,
+        check: bool,
+        env: dict[str, str],
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        (migrations_dir / "2_20260517120000_update.py").write_text("upgrade\n", encoding="utf-8")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    mocker.patch("database.cli.subprocess.run", fake_run)
+    mocker.patch("database.cli.MIGRATIONS_DIR", migrations_dir)
+
+    result = database_cli._run_makemigrations(["Remove agent call redundant fields"])
+
+    assert result == 0
+    assert calls == [["aerich", "migrate", "--name", "remove_agent_call_redundant_fields"]]
+    assert (migrations_dir / "002_remove_agent_call_redundant_fields.py").read_text(
+        encoding="utf-8"
+    ) == "upgrade\n"
+
+
+def test_makemigrations_slugifies_aerich_name_option(
+    mocker: MockerFixture,
+    tmp_path: Path,
+) -> None:
+    migrations_dir = tmp_path / "migrations" / "models"
+    migrations_dir.mkdir(parents=True)
+    (migrations_dir / "001_init.py").write_text("init\n", encoding="utf-8")
+    calls: list[list[str]] = []
+
+    def fake_run(
+        args: list[str],
+        *,
+        capture_output: bool,
+        check: bool,
+        env: dict[str, str],
+        text: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        (migrations_dir / "2_20260517120000_update.py").write_text("upgrade\n", encoding="utf-8")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    mocker.patch("database.cli.subprocess.run", fake_run)
+    mocker.patch("database.cli.MIGRATIONS_DIR", migrations_dir)
+
+    result = database_cli._run_makemigrations(["--name", "Remove agent call redundant fields"])
+
+    assert result == 0
+    assert calls == [["aerich", "migrate", "--name", "remove_agent_call_redundant_fields"]]
+    assert (migrations_dir / "002_remove_agent_call_redundant_fields.py").read_text(
+        encoding="utf-8"
+    ) == "upgrade\n"
 
 
 def test_makemigrations_initializes_aerich_when_required(
@@ -258,15 +367,15 @@ async def test_ensure_test_database_rejects_non_test_database() -> None:
 
 def test_database_models_are_importable_from_dedicated_module() -> None:
     assert AgentCall.Meta.table == "agent_calls"
-    assert set(AgentCall._meta.fields_map) == {
+    agent_call_fields = set(AgentCall._meta.fields_map)
+    agent_call_fields.discard("session_id")
+    agent_call_fields.discard("caller_id")
+    assert agent_call_fields == {
         "id",
         "created_at",
-        "session_id",
-        "session_ended",
-        "workspace",
+        "session",
+        "caller",
         "event",
-        "client_id",
-        "client_type",
         "tool_name",
         "uri",
         "duration_seconds",
@@ -277,14 +386,13 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
         "arguments",
     }
     assert (
-        AgentCall._meta.fields_map["session_id"].description
-        == "MCP-generated UUID shared by all rows that belong to one agent session."
+        AgentCall._meta.fields_map["session"].description
+        == "Session that owns this recorded MCP call row."
     )
-    assert AgentCall._meta.fields_map["workspace"].description == (
-        "Requested log workspace for the call: 'workflow' for shared scheduled "
-        "workflow context or 'session' for an interactive investigation."
+    assert (
+        AgentCall._meta.fields_map["caller"].description
+        == "Allowed MCP caller that created this recorded MCP call row."
     )
-    assert cast(Any, AgentCall._meta.fields_map["workspace"]).enum_type is LogWorkspace
     assert cast(Any, AgentCall._meta.fields_map["event"]).enum_type is AgentCallEvent
     assert AgentCall._meta.fields_map["uri"].description == (
         "MCP resource URI when event records a resource read, such as a workflow "
@@ -297,14 +405,41 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
     assert AgentCall.objects is not None
     assert AgentCall.objects._model is AgentCall
 
+    assert AgentSession.Meta.table == "agent_sessions"
+    agent_session_fields = set(AgentSession._meta.fields_map)
+    agent_session_fields.discard("collect_logs")
+    agent_session_fields.discard("agent_calls")
+    agent_session_fields.discard("caller_id")
+    assert agent_session_fields == {
+        "id",
+        "created_at",
+        "updated_at",
+        "name",
+        "caller",
+        "status",
+        "closed_at",
+    }
+    assert (
+        AgentSession._meta.fields_map["name"].description
+        == "Human-readable session name returned to agents as session_id."
+    )
+    assert (
+        AgentSession._meta.fields_map["caller"].description
+        == "Allowed MCP caller that owns this agent session."
+    )
+    assert cast(Any, AgentSession._meta.fields_map["status"]).enum_type is AgentSessionStatus
+    assert AgentSession.objects is not None
+    assert AgentSession.objects._model is AgentSession
+
     assert CollectLogs.Meta.table == "collect_logs"
     collect_logs_fields = set(CollectLogs._meta.fields_map)
     collect_logs_fields.discard("sources")
+    collect_logs_fields.discard("session_id")
     assert collect_logs_fields == {
         "id",
         "created_at",
-        "session_id",
         "workspace",
+        "session",
         "project_name",
         "collected_at",
         "snapshot_dir",
@@ -319,6 +454,10 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
         "retry_tips",
     }
     assert cast(Any, CollectLogs._meta.fields_map["workspace"]).enum_type is LogWorkspace
+    assert (
+        CollectLogs._meta.fields_map["session"].description
+        == "Session that owns this collected log artifact."
+    )
     assert (
         CollectLogs._meta.fields_map["snapshot_dir"].description
         == "Persisted snapshot directory path under the logs root."
@@ -394,8 +533,12 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
     assert AgentCall.objects is not ProjectManifest.objects
     assert CollectLogs.objects is not CollectLogsSource.objects
 
-    assert Authentication.Meta.table == "authentications"
-    assert set(Authentication._meta.fields_map) == {
+    assert McpCaller.Meta.table == "mcp_callers"
+    assert get_mcp_caller_model() is McpCaller
+    mcp_caller_fields = set(McpCaller._meta.fields_map)
+    mcp_caller_fields.discard("agent_calls")
+    mcp_caller_fields.discard("agent_sessions")
+    assert mcp_caller_fields == {
         "id",
         "created_at",
         "updated_at",
@@ -405,22 +548,22 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
         "allowed_projects",
     }
     assert (
-        Authentication._meta.fields_map["client_id"].description
+        McpCaller._meta.fields_map["client_id"].description
         == "Stable client_id claim allowed to call MCP tools."
     )
     assert (
-        Authentication._meta.fields_map["client_type"].description
+        McpCaller._meta.fields_map["client_type"].description
         == "Stable client_type claim allowed for this MCP client id."
     )
     assert (
-        Authentication._meta.fields_map["workspace"].description
+        McpCaller._meta.fields_map["workspace"].description
         == "MCP workspace this caller is allowed to use."
     )
     assert (
-        Authentication._meta.fields_map["allowed_projects"].description
+        McpCaller._meta.fields_map["allowed_projects"].description
         == "Project names this MCP caller row is allowed to access."
     )
-    assert Authentication.objects is not AgentCall.objects
+    assert McpCaller.objects is not AgentCall.objects
 
 
 @pytest.mark.anyio

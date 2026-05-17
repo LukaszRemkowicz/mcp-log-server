@@ -204,7 +204,7 @@ async def collect_logs(
     payload = CollectLogsPayload(
         action="collect_logs",
         workspace=workspace,
-        session_id=session_id if workspace == LogWorkspace.SESSION else None,
+        session_id=session_id,
         requested_project_names=project_names,
         next_step_tips=COLLECT_LOGS_NEXT_STEP_TIPS,
         projects=project_payloads,

@@ -24,6 +24,7 @@ class AgentCallService:
 
         context = payload.model_dump()
         context["id"] = context.pop("pk")
+        context["caller_id"] = context.pop("caller")
         return await self.model.objects.create(**context)
 
     async def get(self, call_id: UUID) -> AgentCall:
@@ -35,6 +36,12 @@ class AgentCallService:
         """Return agent call rows that match the given filter payload."""
 
         context = payload.model_dump(exclude={"limit", "offset"}, exclude_none=True)
+        name = context.pop("session_id", None)
+        if name is not None:
+            context["session__name"] = name
+        workspace = context.pop("workspace", None)
+        if workspace is not None:
+            context["caller__workspace"] = workspace
         return (
             await self.model.objects.filter(**context)
             .order_by(

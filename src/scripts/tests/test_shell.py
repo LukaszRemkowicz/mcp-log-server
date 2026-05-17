@@ -34,10 +34,10 @@ def test_developer_shell_bootstraps_project_namespace(
     namespace = shell.build_shell_namespace()
     assert result == 0
     assert calls == [f"init:{shell.TORTOISE_ORM['connections']['default']}", "close"]
-    assert "Authentication" in namespace
+    assert "McpCaller" in namespace
     assert "Preloaded imports:" in output
     assert (
-        "from database.models import Authentication, AgentCall, CollectLogs, "
+        "from database.models import McpCaller, AgentCall, CollectLogs, "
         "CollectLogsSource, ProjectManifest" in output
     )
     assert "from core.types import LogWorkspace" in output

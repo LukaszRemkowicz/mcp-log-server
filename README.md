@@ -38,6 +38,20 @@ Current MCP workflow surface includes:
   `skill://workflow/bot_detection`
 - prompts: none exposed right now
 
+### Tool Groups
+
+The tool surface is easier to understand as purpose-based groups. These groups
+are documentation categories, not auth scopes.
+
+| Group | Tools | Purpose |
+| --- | --- | --- |
+| Workflow bootstrap and discovery | `analyze_daily_log_bundle`, `list_projects` | Prepare the daily workflow prompt/tool inventory and expose authorized project/source inventory. |
+| Log collection and session lifecycle | `collect_logs`, `close_agent_session` | Collect raw logs into workflow or session artifacts and close interactive session audit metadata. |
+| Snapshot inventory and raw inspection | `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot` | List, read, and search persisted raw snapshot files after collection. |
+| Snapshot analysis and derived views | `create_filtered_view`, `group_errors`, `build_incident_bundle`, `inspect_proxy_activity`, `suggest_followup_window` | Build deterministic cleaned views, grouped summaries, proxy activity diagnostics, incident bundles, and recollection windows from an already-collected snapshot. |
+| Container inspection | `inspect_containers_health`, `inspect_container_detail`, `stat_container_path`, `read_container_file`, `list_container_directory` | Inspect approved manifest-bounded containers and paths without mutating container state. |
+| MCP service diagnostics | `get_mcp_service_status`, `get_mcp_health_check` | Check MCP server/runtime health during development and operations. |
+
 The daily workflow mirrors the current `landingpage` monitoring pattern:
 `analyze_daily_log_bundle` returns structured workflow data with:
 
@@ -234,7 +248,7 @@ port `127.0.0.1:${DATABASE_PORT_HOST:-5437}` when `DATABASE_HOST` and
 
 ```bash
 docker compose up -d db
-uv run makemigrations --name initial
+uv run makemigrations initial
 uv run migrate
 ```
 
@@ -244,11 +258,20 @@ files. On the first run against a fresh database, it falls back to
 `uv run migrate` delegates to `aerich upgrade` and applies already generated
 migration files.
 
-For later model changes:
+For later model changes, pass a short custom name as the positional suffix:
 
 ```bash
-uv run makemigrations --name <short_name>
+uv run makemigrations remove_agent_call_redundant_fields
 uv run migrate
+```
+
+The wrapper slugifies the suffix, passes it to Aerich as `--name`, and
+normalizes Aerich timestamp filenames into the project style, for example
+`003_rename_agent_call_client_to_caller.py`. Aerich's native name option still
+works too:
+
+```bash
+uv run makemigrations --name "rename agent call client to caller"
 ```
 
 Review generated files under `migrations/` before committing them. Production
@@ -344,7 +367,7 @@ operator-controlled run.
 The server now uses FastMCP's HTTP auth layer, so tool visibility and tool
 calls are evaluated per bearer token, not once at process startup.
 
-Tool calls also pass through the `authentications` database allowlist. FastMCP
+Tool calls also pass through the `mcp_callers` database allowlist. FastMCP
 still validates the JWT signature, issuer, audience, expiration, and scopes
 first. After that, middleware checks for one manual row matching:
 
@@ -355,12 +378,15 @@ first. After that, middleware checks for one manual row matching:
 The row also stores `allowed_projects` as a JSON list of project names. That
 database list becomes the effective project allowlist for the tool call, so a
 valid JWT is not enough by itself; the caller must also have a matching
-`authentications` row for the requested workspace and projects.
+`mcp_callers` row for the requested workspace and projects.
+
+The concrete caller model is resolved through `MCP_CALLER_MODEL`, which defaults
+to `database.models.McpCaller`.
 
 Example manual row:
 
 ```sql
-INSERT INTO authentications (
+INSERT INTO mcp_callers (
     client_id,
     client_type,
     workspace,

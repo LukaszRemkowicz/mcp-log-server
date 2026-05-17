@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     MCP_PATH: str = "/mcp"
     MCP_STATELESS_HTTP: bool = True
     MCP_JSON_RESPONSE: bool = True
+    MCP_CALLER_MODEL: str = "database.models.McpCaller"
     DATABASE_HOST: str = "127.0.0.1"
     DATABASE_PORT: int = 5432
     DATABASE_NAME: str = "mcp_log_server"

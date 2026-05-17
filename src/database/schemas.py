@@ -10,18 +10,17 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from core.types import LogWorkspace
 from database.fields import FileReference
+from database.types import AgentSessionStatus
+from services.session_ids import SESSION_ID_MAX_LENGTH
 
 
 class AgentCallCreate(BaseModel):
     """Validated payload for creating one agent call metadata row."""
 
     pk: UUID = Field(default_factory=uuid4)
-    session_id: UUID
-    workspace: str
+    session_id: int
+    caller: int
     event: str
-    session_ended: bool = False
-    client_id: str | None = None
-    client_type: str | None = None
     tool_name: str | None = None
     uri: str | None = None
     duration_seconds: float | None = None
@@ -35,7 +34,7 @@ class AgentCallCreate(BaseModel):
 class AgentCallFilter(BaseModel):
     """Validated payload for filtering agent call metadata rows."""
 
-    session_id: UUID | None = None
+    session_id: str | None = Field(default=None, max_length=SESSION_ID_MAX_LENGTH)
     workspace: str | None = None
     event: str | None = None
     project_name: str | None = None
@@ -48,10 +47,27 @@ class AgentCallUpdate(BaseModel):
     """Validated payload for updating one agent call metadata row."""
 
     pk: UUID
-    session_ended: bool | None = None
     duration_seconds: float | None = None
     success: bool | None = None
     error_code: str | None = None
+
+
+class AgentSessionCreate(BaseModel):
+    """Validated payload for creating one agent session."""
+
+    name: str = Field(max_length=SESSION_ID_MAX_LENGTH)
+    caller_id: int
+    status: AgentSessionStatus = AgentSessionStatus.ACTIVE
+
+
+class AgentSessionOut(BaseModel):
+    """Pydantic representation of one agent session row."""
+
+    id: int
+    name: str
+    caller_id: int
+    status: AgentSessionStatus
+    closed_at: datetime | None = None
 
 
 class ProjectManifestCreate(BaseModel):
@@ -78,8 +94,8 @@ class ProjectManifestUpdate(BaseModel):
 class CollectLogsCreate(BaseModel):
     """Validated payload for creating one collected log artifact row."""
 
-    session_id: UUID | None = None
     workspace: LogWorkspace
+    session_id: int
     project_name: str
     collected_at: datetime
     snapshot_dir: str
@@ -157,8 +173,9 @@ class CollectLogsOut(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     id: int
-    session_id: UUID | None = None
+    session_id: str | None = None
     workspace: LogWorkspace
+    caller_id: int
     project_name: str
     collected_at: datetime
     snapshot_dir: str

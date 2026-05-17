@@ -12,6 +12,7 @@ dependencies = [
   "aiocache>=0.12.3",
   "authlib>=1.6.0",
   "docker>=7.1.0",
+  "factory-boy>=3.3.3",
   "fastmcp>=2.0.0",
   "joserfc>=1.4.0",
   "pydantic>=2.9.0",
@@ -45,6 +46,9 @@ dev = [
 [tool.black]
 line-length = 100
 target-version = ["py313"]
+force-exclude = '''
+^/migrations/
+'''
 
 [tool.isort]
 profile = "black"

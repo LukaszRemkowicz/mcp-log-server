@@ -8,6 +8,7 @@ from fastmcp.dependencies import CurrentAccessToken
 from fastmcp.server.auth import AccessToken
 from fastmcp.tools.base import ToolResult
 
+from auth.mcp_caller_context import get_request_mcp_caller
 from auth.scopes import LOGS_COLLECT_SCOPE
 from core.types import LogWorkspace
 from decorators import project_authorized_tool, workflow_discoverable_tool
@@ -37,6 +38,7 @@ from tools.models import (
 )
 from tools.utils import SourceKeyArgumentError, resolve_source_keys_for_snapshot
 from utils.log_preview import truncate_log_preview
+from utils.log_snapshots import build_snapshot_not_found_retry_tips
 from utils.types import JSONObject, JSONValue
 
 logger: logging.Logger = get_logger("tools.snapshots")
@@ -98,6 +100,34 @@ def _build_snapshot_lookup_error_result(
         message=lookup_error.message,
         retry_tips=lookup_error.retry_tips,
         details=error_details,
+    )
+
+
+def _build_snapshot_owner_mismatch_result(
+    *,
+    tool_name: str,
+    context: SnapshotContext,
+    project_name: str,
+    session_id: str | None,
+    archive_name: str | None,
+    details: JSONObject | None = None,
+    log_extra: dict[str, object] | None = None,
+) -> ToolResult:
+    """Return the same shape as a missing snapshot when caller ownership fails."""
+
+    workspace = context.metadata.workspace
+    return _build_snapshot_lookup_error_result(
+        lookup_error=SnapshotLookupError(
+            message=f"Requested {workspace} log snapshot was not found.",
+            error_code="snapshot_not_found",
+            retry_tips=build_snapshot_not_found_retry_tips(workspace),
+        ),
+        tool_name=tool_name,
+        project_name=project_name,
+        session_id=session_id,
+        archive_name=archive_name,
+        details=details,
+        log_extra=log_extra,
     )
 
 
@@ -165,6 +195,7 @@ async def list_log_snapshot_files(
     """
 
     assert access_token is not None
+    caller = get_request_mcp_caller()
     context: SnapshotContext | SnapshotLookupError = await _load_snapshot_context(
         project_name=project_name,
         session_id=session_id,
@@ -174,6 +205,14 @@ async def list_log_snapshot_files(
         return _build_snapshot_lookup_error_result(
             lookup_error=context,
             tool_name="list_log_snapshot_files",
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
+        )
+    if context.caller_id != caller.caller_id:
+        return _build_snapshot_owner_mismatch_result(
+            tool_name="list_log_snapshot_files",
+            context=context,
             project_name=project_name,
             session_id=session_id,
             archive_name=archive_name,
@@ -237,6 +276,7 @@ async def read_log_snapshot_file(
     """
 
     assert access_token is not None
+    caller = get_request_mcp_caller()
     if max_bytes < 1:
         return build_snapshot_tool_error_result(
             error_code="invalid_snapshot_read_limit",
@@ -265,6 +305,20 @@ async def read_log_snapshot_file(
         return _build_snapshot_lookup_error_result(
             lookup_error=context,
             tool_name="read_log_snapshot_file",
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
+            details={
+                "source_key": source_key,
+                "start_line": start_line,
+                "line_count": line_count,
+            },
+            log_extra={"source_key": source_key},
+        )
+    if context.caller_id != caller.caller_id:
+        return _build_snapshot_owner_mismatch_result(
+            tool_name="read_log_snapshot_file",
+            context=context,
             project_name=project_name,
             session_id=session_id,
             archive_name=archive_name,
@@ -407,6 +461,7 @@ async def grep_log_snapshot(
     """
 
     assert access_token is not None
+    caller = get_request_mcp_caller()
     if not grep.strip():
         return build_snapshot_tool_error_result(
             error_code="empty_grep_pattern",
@@ -444,6 +499,22 @@ async def grep_log_snapshot(
         return _build_snapshot_lookup_error_result(
             lookup_error=context,
             tool_name="grep_log_snapshot",
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
+            details={
+                "grep": grep,
+                "source_keys": source_keys_detail,
+            },
+            log_extra={
+                "source_keys": source_keys,
+                "grep_length": len(grep),
+            },
+        )
+    if context.caller_id != caller.caller_id:
+        return _build_snapshot_owner_mismatch_result(
+            tool_name="grep_log_snapshot",
+            context=context,
             project_name=project_name,
             session_id=session_id,
             archive_name=archive_name,

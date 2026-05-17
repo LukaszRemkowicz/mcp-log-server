@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
-from uuid import UUID
 
 import pytest
 
@@ -21,6 +20,7 @@ from services.log_snapshots import (
 )
 from storage import LogFileStorage
 from tests.conftest import override_settings
+from tests.factories import AgentSessionFactory
 from tools.models import LogSnapshotFilePayload, LogSnapshotMetadata
 
 
@@ -129,14 +129,16 @@ def test_prepare_workspace_workflow_creates_latest_and_archive_dirs(tmp_path) ->
 
 @pytest.mark.anyio
 async def test_load_session_snapshot_returns_context_from_db_contract(tmp_path) -> None:
-    session_id = UUID("11111111-1111-4111-8111-111111111111")
-    source_file = tmp_path / "sessions" / str(session_id) / "landingpage" / "backend.log"
+    session = AgentSessionFactory.build()
+    session_id = session.name
+    source_file = tmp_path / "sessions" / session_id / "landingpage" / "backend.log"
     source_file.parent.mkdir(parents=True)
     source_file.write_text("one\ntwo\n", encoding="utf-8")
     collect_logs = CollectLogsWithSourcesOut(
         id=1,
         session_id=session_id,
         workspace=LogWorkspace.SESSION,
+        caller_id=1,
         project_name="landingpage",
         collected_at=datetime(2026, 5, 14, 12, 0, tzinfo=UTC),
         snapshot_dir=f"sessions/{session_id}/landingpage",
@@ -174,15 +176,16 @@ async def test_load_session_snapshot_returns_context_from_db_contract(tmp_path) 
 
     result = await service.load_session_snapshot(
         project_name="landingpage",
-        session_id=str(session_id),
+        session_id=session_id,
     )
 
     assert isinstance(result, SnapshotContext)
     assert result.project_name == "landingpage"
-    assert result.snapshot_dir == tmp_path / "sessions" / str(session_id) / "landingpage"
+    assert result.caller_id == 1
+    assert result.snapshot_dir == tmp_path / "sessions" / session_id / "landingpage"
     assert result.metadata.project_name == "landingpage"
     assert result.metadata.workspace == "session"
-    assert result.metadata.session_id == str(session_id)
+    assert result.metadata.session_id == session_id
     assert result.metadata.files[0].source_key == "backend"
     assert result.metadata.files[0].output_file == (
         f"sessions/{session_id}/landingpage/backend.log"
@@ -201,7 +204,7 @@ async def test_load_session_snapshot_returns_lookup_error_when_db_object_missing
 
     result = await service.load_session_snapshot(
         project_name="landingpage",
-        session_id="11111111-1111-4111-8111-111111111111",
+        session_id="gentle-river-finds-a8f2",
     )
 
     assert isinstance(result, SnapshotLookupError)
@@ -256,6 +259,7 @@ def test_grep_snapshot_returns_error_for_missing_db_source_file(tmp_path) -> Non
     )
     context = SnapshotContext(
         project_name="landingpage",
+        caller_id=1,
         snapshot_dir=missing_file.parent,
         metadata=metadata,
         sources=[
@@ -326,6 +330,7 @@ def test_grep_snapshot_returns_matches_from_db_source_files(tmp_path) -> None:
     )
     context = SnapshotContext(
         project_name="landingpage",
+        caller_id=1,
         snapshot_dir=backend_file.parent,
         metadata=metadata,
         sources=sources,
@@ -365,6 +370,7 @@ def test_grep_snapshot_returns_error_for_unknown_source_key(tmp_path) -> None:
     ]
     context = SnapshotContext(
         project_name="landingpage",
+        caller_id=1,
         snapshot_dir=backend_file.parent,
         metadata=LogSnapshotMetadata(
             project_name="landingpage",
