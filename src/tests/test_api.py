@@ -1932,6 +1932,7 @@ async def test_list_projects_api_returns_multiple_manifest_backed_projects(
         "landingpage",
         "other",
         "shop",
+        "vps-security",
     ]
     assert payload[0]["project_summary"] == "Alpha project summary."
     assert payload[1]["project_summary"] == "Beta project summary."
