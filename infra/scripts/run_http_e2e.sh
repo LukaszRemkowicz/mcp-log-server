@@ -117,7 +117,6 @@ assert_file_exists() {
 
 (
   cd "$REPO_ROOT"
-  uv run commands generate-dev-jwt --output-file "$TOKENS_FILE"
   uv run python -m database.ensure_test_database
   uv run migrate >/dev/null
   uv run python - <<'PY'
@@ -166,6 +165,7 @@ async def main() -> None:
 
 asyncio.run(main())
 PY
+  uv run commands generate-dev-jwt --output-file "$TOKENS_FILE"
 )
 WORKFLOW_AGENT_JWT="$(jq -r '.workflow_agent' "$TOKENS_FILE")"
 CODEX_AGENT_JWT="$(jq -r '.codex_agent' "$TOKENS_FILE")"

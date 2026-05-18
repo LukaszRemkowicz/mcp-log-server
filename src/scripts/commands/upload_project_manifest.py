@@ -31,6 +31,7 @@ COMMANDS_APP_SERVICE = os.environ.get(
     "COMMANDS_APP_SERVICE",
     "app",
 )
+CONTAINER_MANIFESTS_DIR = "/tmp/mcp-log-server-manifests"
 
 ProjectManifestCommandStatus = Literal["created", "exists", "updated", "missing"]
 
@@ -254,11 +255,21 @@ async def update_project_manifest_internal(
 
 def _run_internal_manifest_command(
     command: list[str],
+    *,
+    manifest_files: list[Path] | None = None,
 ) -> None:
     """Run one hidden manifest command inside the Docker Compose app service."""
 
+    docker_service = DockerCommandService()
     try:
-        result = DockerCommandService().run_compose_service_command(
+        if manifest_files is not None:
+            docker_service.copy_files_to_compose_service(
+                project_name=COMMANDS_COMPOSE_PROJECT_NAME,
+                service_name=COMMANDS_APP_SERVICE,
+                files=manifest_files,
+                target_dir=CONTAINER_MANIFESTS_DIR,
+            )
+        result = docker_service.run_compose_service_command(
             project_name=COMMANDS_COMPOSE_PROJECT_NAME,
             service_name=COMMANDS_APP_SERVICE,
             command=command,
@@ -270,6 +281,23 @@ def _run_internal_manifest_command(
         typer.echo(result.output.rstrip())
     if result.exit_code != 0:
         raise typer.Exit(result.exit_code)
+
+
+def _manifest_files_for_container_copy(
+    *,
+    manifests_dir: Path,
+    project_name: str | None,
+    all_projects: bool,
+) -> list[Path]:
+    """Validate selected manifests and return matching JSON files for container copy."""
+
+    manifests = _load_manifests(
+        manifests_dir=manifests_dir,
+        project_name=project_name,
+        all_projects=all_projects,
+    )
+    manifest_root = manifests_dir.expanduser()
+    return [manifest_root / f"{manifest.project_key}.json" for manifest in manifests]
 
 
 def upload_project_manifest(
@@ -293,13 +321,18 @@ def upload_project_manifest(
     if project_name is None and not all_projects:
         raise typer.BadParameter("Provide PROJECT_NAME or use --all.")
 
+    manifest_files = _manifest_files_for_container_copy(
+        manifests_dir=path,
+        project_name=project_name,
+        all_projects=all_projects,
+    )
     command = ["uv", "run", "python", "-m", "scripts.main", "upload-project-manifest-internal"]
-    command.extend(["--path", str(path)])
+    command.extend(["--path", CONTAINER_MANIFESTS_DIR])
     if all_projects:
         command.append("--all")
     elif project_name is not None:
         command.append(project_name)
-    _run_internal_manifest_command(command)
+    _run_internal_manifest_command(command, manifest_files=manifest_files)
 
 
 def update_project_manifest(
@@ -314,6 +347,11 @@ def update_project_manifest(
 ) -> None:
     """Run the manifest update command inside the Docker Compose app service."""
 
+    manifest_files = _manifest_files_for_container_copy(
+        manifests_dir=path,
+        project_name=project_name,
+        all_projects=False,
+    )
     _run_internal_manifest_command(
         [
             "uv",
@@ -323,8 +361,9 @@ def update_project_manifest(
             "scripts.main",
             "update-project-manifest-internal",
             "--path",
-            str(path),
+            CONTAINER_MANIFESTS_DIR,
             "--project",
             project_name,
-        ]
+        ],
+        manifest_files=manifest_files,
     )

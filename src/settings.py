@@ -28,6 +28,7 @@ FAIL2BAN_SOCKET_PATH = Path(
 FAIL2BAN_CLIENT_COMMAND = "fail2ban-client"
 FAIL2BAN_JAILS = ["portfolio-nginx-probes", "portfolio-traefik-probes"]
 FAIL2BAN_COMMAND_TIMEOUT_SECONDS = 5
+FAIL2BAN_PROXY_URL = os.environ.get("FAIL2BAN_PROXY_URL", "").rstrip("/")
 MCP_PATH = "/mcp"
 MCP_STATELESS_HTTP = True
 MCP_JSON_RESPONSE = True

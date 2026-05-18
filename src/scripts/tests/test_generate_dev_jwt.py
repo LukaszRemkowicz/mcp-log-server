@@ -21,7 +21,21 @@ def _decode_jwt_payload(token: str) -> dict[str, Any]:
     return json.loads(urlsafe_b64decode(padded_payload))
 
 
-def test_generate_dev_jwt_command_prints_example_tokens() -> None:
+async def _fake_token_response(_settings: object) -> dict[str, str]:
+    return {
+        "workflow_agent": "workflow-token",
+        "codex_agent": "codex-token",
+        "created_at": "2026-05-18T00:00:00Z",
+        "updated_at": "2026-05-18T00:00:00Z",
+    }
+
+
+def test_generate_dev_jwt_command_prints_example_tokens(mocker) -> None:
+    mocker.patch(
+        "scripts.commands.generate_dev_jwt._build_example_token_response_with_database",
+        _fake_token_response,
+    )
+
     result = runner.invoke(app, ["generate-dev-jwt"])
 
     assert result.exit_code == 0
@@ -31,7 +45,12 @@ def test_generate_dev_jwt_command_prints_example_tokens() -> None:
     assert payload["codex_agent"]
 
 
-def test_generate_dev_jwt_command_writes_tokens_to_output_file() -> None:
+def test_generate_dev_jwt_command_writes_tokens_to_output_file(mocker) -> None:
+    mocker.patch(
+        "scripts.commands.generate_dev_jwt._build_example_token_response_with_database",
+        _fake_token_response,
+    )
+
     with runner.isolated_filesystem():
         output_file = Path(".agent/DEV_JWT_TOKENS.json")
 
@@ -52,34 +71,5 @@ def test_generate_dev_jwt_help_describes_command_purpose() -> None:
     assert result.exit_code == 0
     assert "Generate signed local development JWTs for MCP clients." in output
     assert "--output-file" in output
-    assert "--workflow-client-id" in output
-    assert "workflow-agent" in output
-    assert "--codex-client-type" in output
-    assert "codex" in output
-
-
-def test_generate_dev_jwt_command_accepts_client_claim_overrides() -> None:
-    result = runner.invoke(
-        app,
-        [
-            "generate-dev-jwt",
-            "--workflow-client-id",
-            "workflow-local",
-            "--workflow-client-type",
-            "workflow_test",
-            "--codex-client-id",
-            "codex-local",
-            "--codex-client-type",
-            "codex_test",
-        ],
-    )
-
-    assert result.exit_code == 0
-    payload = json.loads(result.output)
-    workflow_claims = _decode_jwt_payload(payload["workflow_agent"])
-    codex_claims = _decode_jwt_payload(payload["codex_agent"])
-
-    assert workflow_claims["client_id"] == "workflow-local"
-    assert workflow_claims["client_type"] == "workflow_test"
-    assert codex_claims["client_id"] == "codex-local"
-    assert codex_claims["client_type"] == "codex_test"
+    assert "--workflow-client-id" not in output
+    assert "--codex-client-type" not in output

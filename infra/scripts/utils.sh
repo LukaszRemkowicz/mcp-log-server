@@ -3,7 +3,7 @@
 set -euo pipefail
 
 log_header() {
-    printf "\n==> %s\n" "$1"
+    printf "\n🚀 %s\n" "$1"
 }
 
 log_step() {
@@ -11,23 +11,23 @@ log_step() {
     local total="$2"
     local message="$3"
 
-    printf "\n[%s/%s] %s\n" "$current" "$total" "$message"
+    printf "\n🔹 [%s/%s] %s\n" "$current" "$total" "$message"
 }
 
 log_info() {
-    printf "   %s\n" "$1"
+    printf "ℹ️  %s\n" "$1"
 }
 
 log_success() {
-    printf "OK %s\n" "$1"
+    printf "✅ %s\n" "$1"
 }
 
 log_warn() {
-    printf "WARN %s\n" "$1" >&2
+    printf "⚠️  %s\n" "$1" >&2
 }
 
 log_error() {
-    printf "ERROR %s\n" "$1" >&2
+    printf "🛑 ERROR: %s\n" "$1" >&2
 }
 
 get_project_dir() {
@@ -142,6 +142,7 @@ confirm_continue() {
     local prompt="$1"
 
     if [[ "${AUTO_APPROVE:-false}" == "true" ]]; then
+        log_info "AUTO_APPROVE=true, continuing without prompt."
         return 0
     fi
 
@@ -175,8 +176,10 @@ prune_local_images() {
     )
 
     if [[ "${#image_ids[@]}" -eq 0 ]]; then
+        log_success "Nothing to clean for $repository"
         return 0
     fi
 
+    log_info "Removing ${#image_ids[@]} old image(s) for $repository"
     docker rmi "${image_ids[@]}" >/dev/null || true
 }

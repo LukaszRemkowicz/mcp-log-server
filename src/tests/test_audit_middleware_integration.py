@@ -578,6 +578,54 @@ async def test_audit_middleware_authorizes_workspace_agnostic_tools_for_session_
 
 @pytest.mark.anyio
 @pytest.mark.usefixtures("db")
+async def test_audit_middleware_list_projects_uses_session_caller_without_workflow_row(
+    mocker: MockerFixture,
+) -> None:
+    """Verify list_projects does not require a workflow caller row for Codex."""
+
+    await McpCaller.objects.filter(client_id="session-discovery-client").delete()
+    await ProjectManifest.all().delete()
+    caller = await McpCallerFactory.save_to_db(
+        client_id="session-discovery-client",
+        client_type="codex",
+        workspace=LogWorkspace.SESSION,
+        allowed_projects=["all"],
+    )
+    token = AccessToken(
+        token="test-token",
+        client_id=caller.client_id,
+        scopes=["projects.read"],
+        claims={
+            "sub": "codex-subject",
+            "client_type": caller.client_type,
+        },
+    )
+    mocker.patch("middleware.audit.get_access_token", return_value=token)
+    request = SimpleNamespace(state=SimpleNamespace())
+    mocker.patch("middleware.audit.get_http_request", return_value=request)
+    context = MiddlewareContext(
+        message=mt.CallToolRequestParams(name="list_projects", arguments={})
+    )
+    middleware = AccessAuditMiddleware()
+    call_next = mocker.AsyncMock(
+        return_value=ToolResult(content=[], structured_content={"result": []})
+    )
+
+    result = await middleware.on_call_tool(
+        context,
+        cast(CallNext[mt.CallToolRequestParams, ToolResult], call_next),
+    )
+
+    call_next.assert_awaited_once()
+    request_caller = request.state.caller
+    assert isinstance(request_caller, AuthenticatedMcpCaller)
+    assert request_caller.workspace == LogWorkspace.SESSION
+    assert request_caller.allowed_projects == frozenset()
+    assert result.structured_content == {"result": []}
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_audit_middleware_sets_database_caller_on_request_state(
     mocker: MockerFixture,
 ) -> None:

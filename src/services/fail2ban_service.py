@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from conf import settings
 
@@ -50,6 +53,15 @@ class Fail2banActivity:
     retry_tips: list[str] = field(default_factory=list)
 
 
+@dataclass(frozen=True, slots=True)
+class Fail2banCommandResult:
+    """Small command result shape shared by subprocess and proxy responses."""
+
+    returncode: int
+    stdout: str
+    stderr: str
+
+
 class Fail2banService:
     """Run and parse fixed fail2ban-client status commands."""
 
@@ -58,6 +70,7 @@ class Fail2banService:
         *,
         socket_path: str | Path | None = None,
         client_command: str | None = None,
+        proxy_url: str | None = None,
         jails: list[str] | None = None,
         command_timeout_seconds: int | None = None,
     ) -> None:
@@ -65,6 +78,7 @@ class Fail2banService:
 
         self.socket_path = Path(socket_path or settings.FAIL2BAN_SOCKET_PATH)
         self.client_command = client_command or settings.FAIL2BAN_CLIENT_COMMAND
+        self.proxy_url = proxy_url if proxy_url is not None else settings.FAIL2BAN_PROXY_URL
         self.jails = jails or settings.FAIL2BAN_JAILS
         self.command_timeout_seconds = (
             command_timeout_seconds or settings.FAIL2BAN_COMMAND_TIMEOUT_SECONDS
@@ -166,8 +180,14 @@ class Fail2banService:
             )
         return self._parse_jail_status(jail=jail, output=completed.stdout)
 
-    def _run_command(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+    def _run_command(
+        self,
+        command: list[str],
+    ) -> subprocess.CompletedProcess[str] | Fail2banCommandResult:
         """Run one allowlisted command without shell expansion."""
+
+        if self.proxy_url:
+            return self._run_proxy_command(command)
 
         return subprocess.run(
             command,
@@ -175,6 +195,37 @@ class Fail2banService:
             check=False,
             text=True,
             timeout=self.command_timeout_seconds,
+        )
+
+    def _run_proxy_command(self, command: list[str]) -> Fail2banCommandResult:
+        """Run one fixed fail2ban status command through the root proxy service."""
+
+        status_command = self._build_status_command()
+        if command == status_command:
+            endpoint = "/status"
+        elif (
+            len(command) == len(status_command) + 1
+            and command[: len(status_command)] == status_command
+        ):
+            jail = command[-1]
+            if jail not in self.jails:
+                raise ValueError(f"Fail2ban jail is not allowlisted: {jail}")
+            endpoint = f"/status/{quote(jail, safe='')}"
+        else:
+            raise ValueError("Fail2ban proxy rejected a non-allowlisted command shape.")
+
+        request = Request(
+            f"{self.proxy_url}{endpoint}",
+            headers={"Accept": "application/json"},
+            method="GET",
+        )
+        with urlopen(request, timeout=self.command_timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        return Fail2banCommandResult(
+            returncode=int(payload.get("returncode", 1)),
+            stdout=str(payload.get("stdout", "")),
+            stderr=str(payload.get("stderr", "")),
         )
 
     @staticmethod
