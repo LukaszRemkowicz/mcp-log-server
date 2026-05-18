@@ -44,6 +44,9 @@ CREATE_FILTERED_VIEW_TOOL_DESCRIPTION = (
     "This keeps the raw snapshot as the source of truth while removing "
     "low-signal lines through manifest-selected noise profiles. "
     "Use source_key for one source or source_keys for multiple sources; do not pass both. "
+    "Use view_mode='head' for chronological cleaned lines, view_mode='errors' "
+    "for incident-oriented lines first, or view_mode='sample' for a broader "
+    "spread across selected sources. "
     "Use it when you want a smaller analysis view before reading or grepping "
     "raw files directly."
 )

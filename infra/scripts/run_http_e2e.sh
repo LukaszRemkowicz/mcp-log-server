@@ -8,9 +8,9 @@ MANIFESTS_DIR="$TMP_ROOT/manifests"
 LOGS_DIR="$TMP_ROOT/logs"
 SERVER_LOG="$TMP_ROOT/server.log"
 TOKENS_FILE="$TMP_ROOT/dev_jwt_tokens.json"
-PORT="${PORT:-18081}"
-HOST="${HOST:-127.0.0.1}"
-BASE_URL="http://${HOST}:${PORT}/mcp"
+MCP_PORT="${MCP_PORT:-${PORT:-18081}}"
+MCP_HOST="${MCP_HOST:-${HOST:-127.0.0.1}}"
+BASE_URL="http://${MCP_HOST}:${MCP_PORT}/mcp"
 SESSION_ID="gentle-river-finds-a8f2"
 
 export DATABASE_HOST="${DATABASE_HOST:-127.0.0.1}"
@@ -184,8 +184,8 @@ export CODEX_AGENT_JWT
 
 (
   cd "$REPO_ROOT/src"
-  PORT="$PORT" \
-  HOST="$HOST" \
+  MCP_PORT="$MCP_PORT" \
+  MCP_HOST="$MCP_HOST" \
   LOGS_DIR="$LOGS_DIR" \
   uv run python -m main >"$SERVER_LOG" 2>&1
 ) &

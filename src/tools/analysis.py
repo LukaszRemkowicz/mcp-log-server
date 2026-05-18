@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 from pathlib import Path
+from typing import cast
 
 from fastmcp.dependencies import CurrentAccessToken
 from fastmcp.server.auth import AccessToken, require_scopes
@@ -34,7 +35,12 @@ from tools.agent_hints import (
     SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION,
 )
 from tools.errors import build_invalid_source_key_arguments_result, build_snapshot_tool_error_result
-from tools.models import GroupedErrorPayload, GroupErrorsPayload, SuggestFollowupWindowPayload
+from tools.models import (
+    FilteredViewMode,
+    GroupedErrorPayload,
+    GroupErrorsPayload,
+    SuggestFollowupWindowPayload,
+)
 from tools.utils import SourceKeyArgumentError, resolve_source_keys_for_snapshot
 from utils.log_snapshots import (
     build_snapshot_not_found_retry_tips,
@@ -274,6 +280,28 @@ def _build_invalid_filtered_view_limit_result(
     return None
 
 
+def _build_invalid_filtered_view_mode_result(view_mode: str) -> ToolResult | None:
+    """Return a tool error when the filtered-view response mode is unknown."""
+
+    valid_view_modes = {"head", "errors", "sample"}
+    if view_mode in valid_view_modes:
+        return None
+    valid_view_modes_detail: list[JSONValue] = [item for item in sorted(valid_view_modes)]
+    return build_snapshot_tool_error_result(
+        error_code="invalid_filtered_view_mode",
+        message="view_mode must be one of: head, errors, sample.",
+        retry_tips=[
+            "Use view_mode='head' for chronological cleaned lines.",
+            "Use view_mode='errors' for incident-oriented cleaned lines first.",
+            "Use view_mode='sample' to spread returned lines across selected sources.",
+        ],
+        details={
+            "view_mode": view_mode,
+            "valid_view_modes": valid_view_modes_detail,
+        },
+    )
+
+
 def _build_filtered_view_source_key_error_result(
     *,
     error: CreateFilteredViewError,
@@ -283,6 +311,7 @@ def _build_filtered_view_source_key_error_result(
     source_keys: list[str] | None,
     source_keys_detail: list[JSONValue],
     max_lines: int,
+    view_mode: str,
 ) -> ToolResult:
     """Build the filtered-view source-key or manifest lookup error response."""
 
@@ -308,6 +337,7 @@ def _build_filtered_view_source_key_error_result(
             "archive_name": archive_name,
             "source_keys": source_keys_detail,
             "max_lines": max_lines,
+            "view_mode": view_mode,
         },
     )
 
@@ -616,6 +646,7 @@ async def create_filtered_view(
     archive_name: str | None = None,
     source_keys: list[str] | None = None,
     source_key: str | None = None,
+    view_mode: str = "head",
     max_lines: int = DEFAULT_FILTERED_VIEW_MAX_LINES,
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
@@ -642,6 +673,10 @@ async def create_filtered_view(
     )
     if invalid_limit_result is not None:
         return invalid_limit_result
+    invalid_mode_result = _build_invalid_filtered_view_mode_result(view_mode)
+    if invalid_mode_result is not None:
+        return invalid_mode_result
+    filtered_view_mode = cast(FilteredViewMode, view_mode)
 
     try:
         source_keys = resolve_source_keys_for_snapshot(source_keys, source_key)
@@ -669,6 +704,7 @@ async def create_filtered_view(
             source_keys=source_keys,
             source_keys_detail=source_keys_detail,
             max_lines=max_lines,
+            view_mode=view_mode,
         )
 
     manifest = manifest_result.manifest
@@ -691,6 +727,7 @@ async def create_filtered_view(
         max_lines=max_lines,
         requested_project_name=project_name,
         project_name=context.project_name,
+        view_mode=filtered_view_mode,
         next_step_tips=FILTERED_VIEW_NEXT_STEP_TIPS,
     )
     if isinstance(payload, CreateFilteredViewError):
@@ -702,6 +739,7 @@ async def create_filtered_view(
             source_keys=source_keys,
             source_keys_detail=source_keys_detail,
             max_lines=max_lines,
+            view_mode=view_mode,
         )
 
     logger.info(
@@ -716,6 +754,7 @@ async def create_filtered_view(
             "kept_line_count": payload.kept_line_count,
             "excluded_line_count": payload.excluded_line_count,
             "returned_line_count": payload.returned_line_count,
+            "view_mode": payload.view_mode,
             "truncated": payload.truncated,
         },
     )

@@ -1340,6 +1340,7 @@ async def test_create_filtered_view_api_reads_collected_snapshot(
                     "arguments": {
                         "project_name": "landingpage",
                         "source_keys": ["app_file"],
+                        "view_mode": "head",
                         "max_lines": 10,
                     },
                 },
@@ -1356,10 +1357,54 @@ async def test_create_filtered_view_api_reads_collected_snapshot(
     assert payload["project_name"] == "landingpage"
     assert payload["snapshot_dir"] == "workflow/landingpage/latest"
     assert payload["searched_source_keys"] == ["app_file"]
+    assert payload["view_mode"] == "head"
     assert payload["total_line_count"] == 3
     assert payload["kept_line_count"] == 3
     assert payload["excluded_line_count"] == 0
     assert payload["cleaned_lines"][0]["output_file"] == "workflow/landingpage/latest/app_file.log"
+
+
+async def test_create_filtered_view_api_rejects_unknown_view_mode(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify create_filtered_view returns agent-facing mode validation errors."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["app_file"]),
+        )
+        filtered_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "create-filtered-view-invalid-mode-api",
+                "method": "tools/call",
+                "params": {
+                    "name": "create_filtered_view",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_keys": ["app_file"],
+                        "view_mode": "latest",
+                    },
+                },
+            },
+        )
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert filtered_response.status_code == 200
+    assert filtered_response.json()["result"]["isError"] is True
+
+    payload = filtered_response.json()["result"]["structuredContent"]
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "invalid_filtered_view_mode"
+    assert payload["details"] == {
+        "view_mode": "latest",
+        "valid_view_modes": ["errors", "head", "sample"],
+    }
 
 
 @pytest.mark.parametrize(("tool_name", "arguments"), PROJECT_PROTECTED_TOOL_CALL_ARGUMENTS)

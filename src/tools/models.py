@@ -518,6 +518,9 @@ class FilteredViewSourceSummaryPayload(BaseModel):
     top_exclusion_reasons: list[str]
 
 
+FilteredViewMode = Literal["head", "errors", "sample"]
+
+
 class CreateFilteredViewPayload(BaseModel):
     """Structured response returned by `create_filtered_view`."""
 
@@ -530,6 +533,7 @@ class CreateFilteredViewPayload(BaseModel):
     session_id: str | None
     snapshot_dir: str
     searched_source_keys: list[str]
+    view_mode: FilteredViewMode
     max_lines: int
     total_line_count: int
     kept_line_count: int
