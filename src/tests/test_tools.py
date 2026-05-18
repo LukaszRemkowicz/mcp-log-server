@@ -23,6 +23,7 @@ from tools.agent_hints import (
     GROUP_ERRORS_TOOL_DESCRIPTION,
     INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
     INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
+    INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION,
     INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
     READ_CONTAINER_FILE_TOOL_DESCRIPTION,
@@ -60,6 +61,7 @@ def test_application_registers_expected_mcp_components(
         assert "read_container_file" in tool_names
         assert "list_container_directory" in tool_names
         assert "close_agent_session" in tool_names
+        assert "inspect_live_fail2ban_activity" in tool_names
         assert "get_mcp_service_status" in tool_names
         assert "get_mcp_health_check" in tool_names
         assert "list_workflow_skills" not in tool_names
@@ -173,6 +175,10 @@ def test_application_registers_expected_mcp_components(
         )
         assert app_list_container_tool.description == LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION
         assert "path" not in app_list_container_tool.parameters["required"]
+        app_fail2ban_tool = next(
+            tool for tool in tools if tool.name == "inspect_live_fail2ban_activity"
+        )
+        assert app_fail2ban_tool.description == INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION
         workflow_followup_tool = next(
             item
             for item in bootstrap_text["tools"]

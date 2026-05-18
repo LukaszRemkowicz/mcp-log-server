@@ -14,6 +14,10 @@ def test_settings_expose_uppercase_fields() -> None:
     assert settings.DEFAULT_LOG_WINDOW == "24h"
     assert settings.WORKFLOW_ARCHIVE_RETENTION == "14d"
     assert settings.LOG_SNAPSHOT_RETENTION == "7d"
+    assert settings.FAIL2BAN_SOCKET_PATH.as_posix() == "/var/run/fail2ban/fail2ban.sock"
+    assert settings.FAIL2BAN_CLIENT_COMMAND == "fail2ban-client"
+    assert settings.FAIL2BAN_JAILS == ["portfolio-nginx-probes", "portfolio-traefik-probes"]
+    assert settings.FAIL2BAN_COMMAND_TIMEOUT_SECONDS == 5
     assert settings.MCP_PATH == "/mcp"
     assert settings.MCP_JSON_RESPONSE is True
     assert settings.MCP_CALLER_MODEL == "database.models.McpCaller"

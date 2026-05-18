@@ -169,6 +169,21 @@ are reviewed and approved.
   PostgreSQL application password.
   Default: `mcp-log-server-local-password`
 
+- `FAIL2BAN_SOCKET_PATH`
+  Path where the MCP app expects the fail2ban Unix socket inside the app
+  container.
+  Default: `/var/run/fail2ban/fail2ban.sock`
+
+  Live `inspect_live_fail2ban_activity` diagnostics call
+  `fail2ban-client -s "$FAIL2BAN_SOCKET_PATH" ...`. This is separate from
+  collected fail2ban logs; the live command only works when the host socket is
+  intentionally mounted into the MCP container.
+
+- `FAIL2BAN_SOCKET_DIR_HOST`
+  Host path to the fail2ban Unix socket directory when using the optional fail2ban Compose
+  override.
+  Default: `/var/run/fail2ban`
+
 The Compose files run PostgreSQL through the official `postgres:18` image.
 Database files are stored in the named `postgres-data` Docker volume, so data
 persists when containers are recreated.
@@ -606,6 +621,29 @@ the dedicated production compose file:
 
 ```bash
 doppler run -- docker compose -f docker-compose.prod.yml up --build -d
+```
+
+The production deploy script includes the fail2ban socket override by default,
+so the normal VPS path is still:
+
+```bash
+doppler run -- TAG=v1.2.3 infra/scripts/release/deploy.sh
+```
+
+If the VPS should deploy without live fail2ban socket access, disable the
+override explicitly:
+
+```bash
+doppler run -- ENABLE_FAIL2BAN_SOCKET=false TAG=v1.2.3 infra/scripts/release/deploy.sh
+```
+
+Then verify from inside the app container:
+
+```bash
+docker compose \
+  -f docker-compose.prod.yml \
+  -f docker-compose.fail2ban.yml \
+  exec app fail2ban-client -s /var/run/fail2ban/fail2ban.sock status
 ```
 
 Production compose differences:

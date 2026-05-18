@@ -36,6 +36,7 @@ services:
       DATABASE_NAME: ${DATABASE_NAME:?DATABASE_NAME is required}
       DATABASE_USER: ${DATABASE_USER:?DATABASE_USER is required}
       DATABASE_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
+      FAIL2BAN_SOCKET_PATH: ${FAIL2BAN_SOCKET_PATH:-/var/run/fail2ban/fail2ban.sock}
       # Used by `uv run commands ...` to find this Compose app service.
       # Must match the Compose project name and the `services.app` key.
       COMMANDS_COMPOSE_PROJECT_NAME: mcp-log-server

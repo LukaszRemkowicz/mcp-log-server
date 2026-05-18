@@ -7,6 +7,10 @@ WORKDIR /app
 
 COPY --from=ghcr.io/astral-sh/uv:0.7.3 /uv /uvx /bin/
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends fail2ban \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml README.md ./
 COPY src ./src
 COPY migrations ./migrations

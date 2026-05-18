@@ -43,6 +43,16 @@ class Settings(BaseSettings):
         default="7d",
         alias="LOG_SNAPSHOT_RETENTION",
     )
+    FAIL2BAN_SOCKET_PATH: Path = Field(
+        default=Path("/var/run/fail2ban/fail2ban.sock"),
+        alias="FAIL2BAN_SOCKET_PATH",
+    )
+    FAIL2BAN_CLIENT_COMMAND: str = "fail2ban-client"
+    FAIL2BAN_JAILS: list[str] = Field(
+        default_factory=lambda: ["portfolio-nginx-probes", "portfolio-traefik-probes"],
+        alias="FAIL2BAN_JAILS",
+    )
+    FAIL2BAN_COMMAND_TIMEOUT_SECONDS: int = 5
     MCP_PATH: str = "/mcp"
     MCP_STATELESS_HTTP: bool = True
     MCP_JSON_RESPONSE: bool = True

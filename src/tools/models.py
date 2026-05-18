@@ -352,6 +352,47 @@ class ProxyRouteSignalPayload(BaseModel):
     last_seen: SnapshotLineReferencePayload
 
 
+class Fail2banServiceStatusPayload(BaseModel):
+    """Structured output from `fail2ban-client status`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    inspection_status: Literal["ok", "error", "unavailable"]
+    jail_count: int | None
+    jails: list[str]
+    error: str | None
+
+
+class Fail2banJailStatusPayload(BaseModel):
+    """Structured output from one allowlisted fail2ban jail status command."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    jail: str
+    inspection_status: Literal["ok", "error", "unavailable"]
+    currently_failed: int | None
+    total_failed: int | None
+    currently_banned: int | None
+    total_banned: int | None
+    banned_ips: list[str]
+    error: str | None
+
+
+class InspectLiveFail2banActivityPayload(BaseModel):
+    """TODO(post-MVP): response for live fail2ban runtime diagnostics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_live_fail2ban_activity"]
+    project_name: str
+    inspection_status: Literal["ok", "error", "unavailable"]
+    error_code: str | None
+    message: str | None
+    retry_tips: list[str]
+    service: Fail2banServiceStatusPayload
+    jails: list[Fail2banJailStatusPayload]
+
+
 class InspectProxyActivityPayload(BaseModel):
     """Structured response returned by `inspect_proxy_activity`."""
 

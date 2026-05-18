@@ -64,6 +64,16 @@ INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION = (
     "snapshot files only; it does not run live proxy or shell commands."
 )
 
+INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION = (
+    "Inspect live fail2ban runtime state for a project such as vps-security "
+    "through a fixed allowlist of fail2ban-client status commands. Returns "
+    "active jail names, per-jail ban counters, and currently banned IPs when "
+    "the fail2ban client and host socket are available to MCP. This tool does "
+    "not run caller-provided shell commands and does not collect historical "
+    "logs; use collect_logs plus the fail2ban source for historical incident "
+    "analysis."
+)
+
 INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION = (
     "Inspect Docker runtime status for all docker-backed sources in one project. "
     "Returns a compact per-source overview with container status, healthcheck "

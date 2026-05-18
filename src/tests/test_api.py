@@ -29,6 +29,7 @@ from services.docker_service import (
     ContainerPathStat,
     ContainerRestartPolicy,
 )
+from services.fail2ban_service import Fail2banActivity, Fail2banJailStatus, Fail2banServiceStatus
 from tests.conftest import (
     CustomJwtToken,
     FileBackedProjectContext,
@@ -82,6 +83,9 @@ CONTAINER_TOOL_CALLS: tuple[ToolCall, ...] = (
         {"project_name": "dockerpage", "source_key": "backend", "path": "/app"},
     ),
 )
+FAIL2BAN_TOOL_CALLS: tuple[ToolCall, ...] = (
+    ("inspect_live_fail2ban_activity", {"project_name": "landingpage"}),
+)
 ANALYSIS_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("group_errors", {"project_name": "landingpage"}),
     ("build_incident_bundle", {"project_name": "landingpage"}),
@@ -99,7 +103,11 @@ COLLECT_LOGS_TOOL_CALLS: tuple[ToolCall, ...] = (
     ),
 )
 PROJECT_PROTECTED_TOOL_CALL_ARGUMENTS: tuple[ToolCall, ...] = (
-    COLLECT_LOGS_TOOL_CALLS + SNAPSHOT_TOOL_CALLS + ANALYSIS_TOOL_CALLS + CONTAINER_TOOL_CALLS
+    COLLECT_LOGS_TOOL_CALLS
+    + SNAPSHOT_TOOL_CALLS
+    + ANALYSIS_TOOL_CALLS
+    + CONTAINER_TOOL_CALLS
+    + FAIL2BAN_TOOL_CALLS
 )
 CALLER_CONTEXT_LOG_TOOL_NAMES = {
     "collect_logs",
@@ -198,13 +206,19 @@ PROJECT_PROTECTED_CONTAINER_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [CONTAINER_FILES_READ_SCOPE])
     for tool_name, arguments in CONTAINER_TOOL_CALLS
 )
+PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
+    (tool_name, arguments, [MCP_STATUS_READ_SCOPE]) for tool_name, arguments in FAIL2BAN_TOOL_CALLS
+)
 PROJECT_PROTECTED_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
     PROJECT_PROTECTED_LOG_TOOL_CALLS
     + PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS
     + PROJECT_PROTECTED_CONTAINER_TOOL_CALLS
+    + PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS
 )
 PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
-    PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS + PROJECT_PROTECTED_CONTAINER_TOOL_CALLS
+    PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS
+    + PROJECT_PROTECTED_CONTAINER_TOOL_CALLS
+    + PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS
 )
 
 
@@ -1811,6 +1825,76 @@ async def test_list_projects_api_returns_multiple_manifest_backed_projects(
     assert payload[1]["project_summary"] == "Beta project summary."
     assert payload[0]["source_keys"] == ["app_file"]
     assert payload[1]["source_keys"] == ["app_file"]
+
+
+async def test_inspect_live_fail2ban_activity_api_returns_live_status(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify fail2ban diagnostics expose structured allowlisted live status."""
+
+    token: str = custom_jwt_token(
+        "agent",
+        [MCP_STATUS_READ_SCOPE],
+        "agent",
+        {"allowed_projects": ["landingpage"]},
+    )
+    mocker.patch(
+        "tools.fail2ban.fail2ban_service.inspect_activity",
+        return_value=Fail2banActivity(
+            inspection_status="ok",
+            service=Fail2banServiceStatus(
+                inspection_status="ok",
+                jail_count=2,
+                jails=["portfolio-nginx-probes", "portfolio-traefik-probes"],
+            ),
+            jails=[
+                Fail2banJailStatus(
+                    jail="portfolio-nginx-probes",
+                    inspection_status="ok",
+                    currently_failed=4,
+                    total_failed=11,
+                    currently_banned=2,
+                    total_banned=3,
+                    banned_ips=["203.0.113.10", "198.51.100.2"],
+                ),
+                Fail2banJailStatus(
+                    jail="portfolio-traefik-probes",
+                    inspection_status="ok",
+                    currently_failed=0,
+                    total_failed=5,
+                    currently_banned=0,
+                    total_banned=1,
+                    banned_ips=[],
+                ),
+            ],
+        ),
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-live-fail2ban-activity",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_live_fail2ban_activity",
+                "arguments": {"project_name": "landingpage"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_live_fail2ban_activity"
+    assert payload["project_name"] == "landingpage"
+    assert payload["inspection_status"] == "ok"
+    assert payload["service"]["jail_count"] == 2
+    assert payload["jails"][0]["jail"] == "portfolio-nginx-probes"
+    assert payload["jails"][0]["banned_ips"] == ["203.0.113.10", "198.51.100.2"]
 
 
 async def test_collect_logs_api_returns_agent_error_for_project_mismatch(
