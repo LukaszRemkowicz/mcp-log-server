@@ -30,6 +30,7 @@ services:
       db:
         condition: service_healthy
     environment:
+      ENVIRONMENT: prod
       MCP_HOST: 0.0.0.0
       MCP_PORT: ${MCP_PORT:-8001}
       PYTHONPATH: /app/src
@@ -46,6 +47,14 @@ services:
       # Must match the Compose project name and the `services.app` key.
       COMMANDS_COMPOSE_PROJECT_NAME: mcp-log-server
       COMMANDS_APP_SERVICE: app
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/log/fail2ban.log:/var/log/fail2ban.log:ro
+      - /var/log/portfolio/nginx/prod/access.log:/var/log/portfolio/nginx/prod/access.log:ro
+      - /var/log/portfolio/traefik/access.log:/var/log/portfolio/traefik/access.log:ro
+    group_add:
+      - "${DOCKER_SOCKET_GID:?DOCKER_SOCKET_GID is required}"
+      - "${FAIL2BAN_LOG_GID:?FAIL2BAN_LOG_GID is required}"
     ports:
       - "127.0.0.1:${MCP_PORT_HOST:-8001}:${MCP_PORT:-8001}"
     networks:

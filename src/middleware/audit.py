@@ -404,7 +404,7 @@ async def _authorize_mcp_client(
         return _client_has_no_allowed_projects_error(
             client_id=client_id,
             client_type=client_type,
-            workspace=workspace,
+            workspace=caller.workspace,
         )
     return AuthenticatedMcpCaller(
         caller_id=caller.id,
@@ -493,7 +493,7 @@ async def _authenticate_mcp_caller(
             client_id=client_id,
             client_type=client_type,
             workspace=workspace,
-            allow_empty_projects=tool_name == "get_mcp_service_status",
+            allow_empty_projects=tool_name in {"get_mcp_service_status", "list_projects"},
             allow_any_workspace=tool_name in WORKSPACE_AGNOSTIC_TOOLS,
         )
     except BaseORMException:
