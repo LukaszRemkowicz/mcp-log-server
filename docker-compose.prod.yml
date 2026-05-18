@@ -44,7 +44,23 @@ services:
       COMMANDS_APP_SERVICE: app
     ports:
       - "127.0.0.1:${MCP_PORT_HOST:-8001}:${MCP_PORT:-8001}"
+    networks:
+      - default
+      - traefik_proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mcp-log-server.rule=Host(`mcp.${SITE_DOMAIN:?SITE_DOMAIN is required}`)"
+      - "traefik.http.routers.mcp-log-server.entrypoints=websecure"
+      - "traefik.http.routers.mcp-log-server.tls=true"
+      - "traefik.http.routers.mcp-log-server.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.mcp-log-server.middlewares=mcp-api-security@file,rate-limit@file"
+      - "traefik.http.routers.mcp-log-server.service=mcp-log-server"
+      - "traefik.http.services.mcp-log-server.loadbalancer.server.port=${MCP_PORT:-8001}"
     command: ["uv", "run", "python", "-m", "main"]
 
 volumes:
   postgres-data:
+
+networks:
+  traefik_proxy:
+    external: true

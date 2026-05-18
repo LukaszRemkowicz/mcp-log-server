@@ -139,6 +139,8 @@ AUTO_APPROVE=true TAG=v1.2.3 infra/scripts/release/deploy.sh
 Deploy behavior:
 
 - verifies the local image `prod-mcp-log-server:<TAG>` exists
+- exposes the MCP HTTP endpoint through the existing Traefik stack at
+  `https://mcp.${SITE_DOMAIN}/mcp`
 - includes `docker-compose.fail2ban.yml` by default so the app container can
   talk to the host fail2ban socket on the VPS
 - asks for confirmation before mutating the target stack unless
