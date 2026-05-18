@@ -670,7 +670,7 @@ async def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
                         "source_key": "snapshot_text",
                         "grep": "match",
                         "match_offset": 1,
-                        "match_limit": 2,
+                        "max_matches": 2,
                     },
                 },
             },
@@ -704,7 +704,7 @@ async def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
     assert grep_payload["searched_source_keys"] == ["snapshot_text"]
     assert grep_payload["matched_source_keys"] == ["snapshot_text"]
     assert grep_payload["match_offset"] == 1
-    assert grep_payload["match_limit"] == 2
+    assert grep_payload["max_matches"] == 2
     assert grep_payload["match_count"] == 4
     assert grep_payload["returned_match_count"] == 2
     assert grep_payload["truncated"] is True
@@ -720,6 +720,49 @@ async def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
     assert read_payload["output_file"] == "workflow/landingpage/latest/snapshot_text.log"
     assert read_payload["returned_bytes"] == len(b"match one\nmatch two\n")
     assert read_payload["truncated"] is False
+
+
+async def test_grep_log_snapshot_api_accepts_max_matches(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify agents can use max_matches to cap grep results."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["snapshot_text"]),
+        )
+        grep_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "grep-max-matches",
+                "method": "tools/call",
+                "params": {
+                    "name": "grep_log_snapshot",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "snapshot_text",
+                        "grep": "match",
+                        "max_matches": 2,
+                    },
+                },
+            },
+        )
+
+    grep_payload = grep_response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert grep_response.status_code == 200
+    assert grep_response.json()["result"]["isError"] is False
+    assert grep_payload["max_matches"] == 2
+    assert grep_payload["match_count"] == 4
+    assert grep_payload["returned_match_count"] == 2
+    assert grep_payload["truncated"] is True
+    assert [match["line"] for match in grep_payload["matches"]] == ["match one", "match two"]
 
 
 async def test_snapshot_tools_api_support_all_source_keys_alias(
@@ -1100,14 +1143,14 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
             token=token,
             data={
                 "jsonrpc": "2.0",
-                "id": "grep-vps-security-ban-fixture",
+                "id": "grep-vps-security-regex-or-fixture",
                 "method": "tools/call",
                 "params": {
                     "name": "grep_log_snapshot",
                     "arguments": {
                         "project_name": "vps-security",
-                        "grep": "Ban",
-                        "source_keys": ["fail2ban"],
+                        "grep": "Ban|wp-login|502",
+                        "source_keys": ["fail2ban", "nginx_access", "traefik_access"],
                     },
                 },
             },
@@ -1160,7 +1203,12 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
     assert [source["line_count"] for source in collect_payload["sources"]] == [20, 12, 12]
     assert grep_response.status_code == 200
     assert grep_response.json()["result"]["isError"] is False
-    assert grep_payload["match_count"] == 4
+    assert grep_payload["match_count"] == 8
+    assert grep_payload["matched_source_keys"] == [
+        "fail2ban",
+        "nginx_access",
+        "traefik_access",
+    ]
     assert proxy_response.status_code == 200
     assert proxy_response.json()["result"]["isError"] is False
     assert proxy_payload["total_line_count"] == 24

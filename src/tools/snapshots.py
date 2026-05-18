@@ -422,14 +422,14 @@ async def grep_log_snapshot(
     source_keys: list[str] | None = None,
     source_key: str | None = None,
     match_offset: int = 0,
-    match_limit: int = DEFAULT_GREP_MATCH_LIMIT,
+    max_matches: int = DEFAULT_GREP_MATCH_LIMIT,
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
     """Search one persisted snapshot with controlled grep semantics.
 
     This is the snapshot search step for persisted logs. The caller provides a
-    bounded text pattern through `grep`, and the server searches only the files
-    that belong to the authorized snapshot.
+    bounded extended regex pattern through `grep`, and the server searches only
+    the files that belong to the authorized snapshot.
 
     Public arguments:
 
@@ -442,7 +442,8 @@ async def grep_log_snapshot(
       optional workflow archive folder name. Omit it to search the newest
       workflow artifact, or pass it to reopen one archived workflow run
     - `grep`
-      the text pattern to search for inside the persisted snapshot files.
+      the extended regex pattern to search for inside the persisted snapshot
+      files, for example `Ban|wp-login|502`.
     - `source_keys`
       optional file subset inside the snapshot. Omit it to search every saved
       source in the snapshot, or provide it to limit the search to specific
@@ -450,7 +451,7 @@ async def grep_log_snapshot(
     - `source_key`
       optional single-source alias. `source_key="backend"` is equivalent to
       `source_keys=["backend"]`.
-    - `match_offset` and `match_limit`
+    - `match_offset` and `max_matches`
       page through larger match sets in smaller windows.
 
     This tool is mainly intended for:
@@ -474,11 +475,11 @@ async def grep_log_snapshot(
             message="match_offset must be greater than or equal to 0.",
             retry_tips=["Retry with match_offset set to 0 or a positive integer."],
         )
-    if match_limit < 1 or match_limit > MAX_GREP_MATCHES:
+    if max_matches < 1 or max_matches > MAX_GREP_MATCHES:
         return build_snapshot_tool_error_result(
             error_code="invalid_match_window",
-            message=f"match_limit must be between 1 and {MAX_GREP_MATCHES}.",
-            retry_tips=[f"Retry with match_limit set between 1 and {MAX_GREP_MATCHES}."],
+            message=f"max_matches must be between 1 and {MAX_GREP_MATCHES}.",
+            retry_tips=[f"Retry with max_matches set between 1 and {MAX_GREP_MATCHES}."],
         )
 
     try:
@@ -534,7 +535,7 @@ async def grep_log_snapshot(
             grep=grep,
             source_keys=source_keys,
             match_offset=match_offset,
-            match_limit=match_limit,
+            max_matches=max_matches,
         )
     )
     if isinstance(grep_result, SnapshotGrepError):
@@ -582,7 +583,7 @@ async def grep_log_snapshot(
         searched_source_keys=searched_source_keys,
         matched_source_keys=matched_source_keys,
         match_offset=match_offset,
-        match_limit=match_limit,
+        max_matches=max_matches,
         match_count=total_match_count,
         returned_match_count=len(matches),
         next_step_tips=GREP_SNAPSHOT_NEXT_STEP_TIPS,

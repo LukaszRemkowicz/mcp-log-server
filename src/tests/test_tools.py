@@ -195,8 +195,9 @@ def test_application_registers_expected_mcp_components(
         assert app_grep_tool.description == GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION
         assert "source_key" in app_grep_tool.parameters["properties"]
         assert "source_keys" in app_grep_tool.parameters["properties"]
-        match_limit_property = app_grep_tool.parameters["properties"]["match_limit"]
-        assert match_limit_property["default"] == 100
+        assert "match_limit" not in app_grep_tool.parameters["properties"]
+        max_matches_property = app_grep_tool.parameters["properties"]["max_matches"]
+        assert max_matches_property["default"] == 100
         request_caller_tool_names = {
             "get_mcp_service_status",
             "list_projects",

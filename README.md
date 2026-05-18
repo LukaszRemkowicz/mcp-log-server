@@ -94,7 +94,8 @@ Doppler.
 Reference variables are listed in [.env.example](.env.example), but the runtime path should be Doppler rather than `env_file`.
 
 All settings currently have development defaults in code, so the server can
-start locally without explicitly setting every variable.
+start locally without explicitly setting every variable. Production startup
+rejects known local placeholder secrets.
 
 For real deployment, some values should still be treated as required.
 
@@ -608,6 +609,31 @@ examples.
 The local Compose stack also starts a `db` service and stores its data in the
 named `postgres-data` volume.
 
+The local `app` service mounts `/var/run/docker.sock` so MCP collection and
+inspection tools can read approved Docker metadata and logs. The app process
+still runs as the non-root `app` user (`uid=999`); Compose only adds the
+container process to the Docker socket's group through `DOCKER_SOCKET_GID`.
+
+On Linux hosts where `/var/run/docker.sock` is not group-readable by group `0`,
+discover the socket group id with:
+
+```bash
+stat -c '%g' /var/run/docker.sock
+```
+
+Then pass it into Compose:
+
+```bash
+DOCKER_SOCKET_GID="$(stat -c '%g' /var/run/docker.sock)" \
+  doppler run -- docker compose up --build
+```
+
+To see the group name as well:
+
+```bash
+getent group "$(stat -c '%g' /var/run/docker.sock)"
+```
+
 For a production-like container run without bind mounts or file watching, use
 the dedicated production compose file:
 
@@ -616,7 +642,7 @@ doppler run -- docker compose -f docker-compose.prod.yml up --build -d
 ```
 
 The production deploy script includes the fail2ban socket override by default,
-so the normal VPS path is still:
+so the normal VPS path is:
 
 ```bash
 doppler run -- TAG=v1.2.3 infra/scripts/release/deploy.sh
@@ -643,6 +669,11 @@ Production compose differences:
 - runs the `app` and `db` services
 - does not mount the local source tree
 - does not use `watchfiles`
+- builds the Dockerfile `production` stage with
+  `uv sync --frozen --no-dev --compile-bytecode`
+- sets `UV_NO_DEV=1`, `UV_FROZEN=1`, and `UV_NO_SYNC=1` inside the production
+  image so `uv run` commands use the already-built project environment instead
+  of installing or resyncing packages at runtime
 - starts the server with `uv run python -m main`
 
 The app container exposes the MCP HTTP endpoint on port `8001`:
@@ -1076,7 +1107,7 @@ curl -sS \
   http://127.0.0.1:8001/mcp | jq -r '.result.structuredContent.content'
 ```
 
-Search one saved snapshot with controlled grep semantics:
+Search one saved snapshot with controlled extended-regex grep semantics:
 
 ```bash
 curl -sS \
@@ -1091,8 +1122,9 @@ curl -sS \
       "name":"grep_log_snapshot",
       "arguments":{
         "project_name":"landingpage",
-        "grep":"/health",
-        "source_key":"backend"
+        "grep":"Ban|wp-login|502",
+        "source_keys":["fail2ban","nginx_access","traefik_access"],
+        "max_matches":100
       }
     }
   }' \
@@ -1100,7 +1132,8 @@ curl -sS \
 ```
 
 Use exactly one source selector: `source_key` for a single source, or
-`source_keys` for multiple sources such as `["backend","nginx"]`.
+`source_keys` for multiple sources such as `["backend","nginx"]`. Use
+`max_matches` with `match_offset` to page larger result sets.
 
 Create one deterministic cleaned view from a saved raw artifact:
 

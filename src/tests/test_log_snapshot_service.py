@@ -298,7 +298,7 @@ def test_grep_snapshot_returns_error_for_missing_db_source_file(tmp_path) -> Non
             grep="error",
             source_keys=["backend"],
             match_offset=0,
-            match_limit=10,
+            max_matches=10,
         )
 
     assert isinstance(result, SnapshotGrepError)
@@ -348,7 +348,7 @@ def test_grep_snapshot_returns_matches_from_db_source_files(tmp_path) -> None:
         grep="ERROR",
         source_keys=None,
         match_offset=0,
-        match_limit=10,
+        max_matches=10,
     )
 
     assert not isinstance(result, SnapshotGrepError)
@@ -360,6 +360,51 @@ def test_grep_snapshot_returns_matches_from_db_source_files(tmp_path) -> None:
         "workflow/landingpage/latest/nginx.log",
     ]
     assert [match.line_number for match in matches] == [2, 1]
+
+
+def test_grep_snapshot_supports_extended_regex_or_patterns(tmp_path) -> None:
+    service = LogSnapshotService()
+    backend_file = tmp_path / "workflow" / "landingpage" / "latest" / "backend.log"
+    backend_file.parent.mkdir(parents=True)
+    backend_file.write_text(
+        "INFO boot\nBan candidate\nGET /wp-login.php\nupstream returned 502\n",
+        encoding="utf-8",
+    )
+    source = build_collect_logs_source(
+        source_id=1,
+        source_key="backend",
+        file_name="workflow/landingpage/latest/backend.log",
+        storage_root=tmp_path,
+    )
+    context = SnapshotContext(
+        project_name="landingpage",
+        caller_id=1,
+        snapshot_dir=backend_file.parent,
+        metadata=LogSnapshotMetadata(
+            project_name="landingpage",
+            workspace=LogWorkspace.WORKFLOW,
+            collected_at="2026-05-06T10:00:00+00:00",
+            files=[service.source_to_file_payload(source)],
+        ),
+        sources=[source],
+    )
+
+    result = service.grep_snapshot(
+        context,
+        grep="Ban|wp-login|502",
+        source_keys=["backend"],
+        match_offset=0,
+        max_matches=10,
+    )
+
+    assert not isinstance(result, SnapshotGrepError)
+    matches, total_match_count = result
+    assert total_match_count == 3
+    assert [match.line for match in matches] == [
+        "Ban candidate",
+        "GET /wp-login.php",
+        "upstream returned 502",
+    ]
 
 
 def test_grep_snapshot_returns_error_for_unknown_source_key(tmp_path) -> None:
@@ -393,7 +438,7 @@ def test_grep_snapshot_returns_error_for_unknown_source_key(tmp_path) -> None:
         grep="ERROR",
         source_keys=["missing"],
         match_offset=0,
-        match_limit=10,
+        max_matches=10,
     )
 
     assert isinstance(result, SnapshotGrepError)

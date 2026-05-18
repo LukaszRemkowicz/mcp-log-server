@@ -16,7 +16,6 @@ __pycache__/
 docker-compose.yml
 docker-compose.prod.yml
 infra/
-uv.lock
 VERSION
 
 src/tests/

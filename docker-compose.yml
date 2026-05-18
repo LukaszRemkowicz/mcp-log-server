@@ -29,6 +29,7 @@ services:
     build:
       context: .
       dockerfile: docker/app/Dockerfile
+      target: development
     depends_on:
       db:
         condition: service_healthy
@@ -37,6 +38,8 @@ services:
       - ./migrations:/app/migrations
       - ${LOGS_DIR_HOST:-./logs}:${LOGS_DIR:-/app/logs}
       - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_SOCKET_GID:-0}"
     environment:
       LOGS_DIR: ${LOGS_DIR:-/app/logs}
       DATABASE_HOST: db
@@ -65,6 +68,7 @@ services:
     build:
       context: .
       dockerfile: docker/app/Dockerfile
+      target: development
     profiles: ["test"]
     depends_on:
       db:

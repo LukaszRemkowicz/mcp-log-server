@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "aiocache>=0.12.3",
+  "aerich>=0.9.2",
   "authlib>=1.6.0",
   "docker>=7.1.0",
   "factory-boy>=3.3.3",
@@ -29,7 +30,6 @@ test = "database.cli:test"
 
 [dependency-groups]
 dev = [
-  "aerich>=0.9.2",
   "black>=24.10.0",
   "isort>=5.13.0",
   "ipython>=9.0.0",

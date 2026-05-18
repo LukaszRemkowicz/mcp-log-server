@@ -24,6 +24,7 @@ services:
     build:
       context: .
       dockerfile: docker/app/Dockerfile
+      target: production
     restart: unless-stopped
     depends_on:
       db:
@@ -37,6 +38,9 @@ services:
       DATABASE_NAME: ${DATABASE_NAME:?DATABASE_NAME is required}
       DATABASE_USER: ${DATABASE_USER:?DATABASE_USER is required}
       DATABASE_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
+      JWT_SHARED_SECRET: ${JWT_SHARED_SECRET:?JWT_SHARED_SECRET is required}
+      JWT_ISSUER: ${JWT_ISSUER:?JWT_ISSUER is required}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:?JWT_AUDIENCE is required}
       FAIL2BAN_SOCKET_PATH: ${FAIL2BAN_SOCKET_PATH:-/var/run/fail2ban/fail2ban.sock}
       # Used by `uv run commands ...` to find this Compose app service.
       # Must match the Compose project name and the `services.app` key.
