@@ -66,7 +66,9 @@ class StructuredLogField(StrEnum):
     MSG = "msg"
     STATUS_CODE = "status_code"
     STATUS = "status"
+    DOWNSTREAM_STATUS = "DownstreamStatus"
     REQUEST_PATH = "request_path"
+    TRAEFIK_REQUEST_PATH = "RequestPath"
     PATH = "path"
     REQUEST = "request"
     TIMESTAMP = "timestamp"
@@ -746,6 +748,7 @@ class LogAnalysisService:
                 "request_host",
                 "http_host",
                 "server_name",
+                "RequestHost",
             ),
             method=method,
             path=path,
@@ -755,6 +758,7 @@ class LogAnalysisService:
                 "client_ip",
                 "ip",
                 "request_ip",
+                "ClientHost",
             ),
             user_agent=self._extract_first_string(
                 payload,
@@ -768,6 +772,8 @@ class LogAnalysisService:
                 "upstream",
                 "serviceName",
                 "routerName",
+                "ServiceName",
+                "RouterName",
             ),
         )
 
@@ -780,9 +786,13 @@ class LogAnalysisService:
             match = _REQUEST_METHOD_PATH_PATTERN.match(request.strip())
             if match is not None:
                 return match.group("method"), match.group("path")
-        path = _extract_request_path(
-            str(payload.get(StructuredLogField.REQUEST_PATH) or "")
-        ) or _extract_request_path(str(payload.get(StructuredLogField.PATH) or ""))
+        path = _extract_request_path(str(payload.get(StructuredLogField.REQUEST_PATH) or ""))
+        if path is None:
+            path = _extract_request_path(
+                str(payload.get(StructuredLogField.TRAEFIK_REQUEST_PATH) or "")
+            )
+        if path is None:
+            path = _extract_request_path(str(payload.get(StructuredLogField.PATH) or ""))
         method = payload.get("method") or payload.get("request_method")
         return str(method).upper() if method is not None else None, path
 
@@ -1011,8 +1021,10 @@ class LogAnalysisService:
     def _extract_status_code(payload: dict[str, Any]) -> int | None:
         """Extract one integer HTTP status code from supported structured fields."""
 
-        raw_value = payload.get(StructuredLogField.STATUS_CODE) or payload.get(
-            StructuredLogField.STATUS
+        raw_value = (
+            payload.get(StructuredLogField.STATUS_CODE)
+            or payload.get(StructuredLogField.STATUS)
+            or payload.get(StructuredLogField.DOWNSTREAM_STATUS)
         )
         if raw_value is None:
             return None

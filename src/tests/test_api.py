@@ -1072,6 +1072,118 @@ async def test_inspect_proxy_activity_api_groups_proxy_status_signals(
     assert payload["top_routes"][1]["is_upstream_error"] is True
 
 
+async def test_vps_security_fixture_logs_support_snapshot_analysis(
+    file_backed_project_context: FileBackedProjectContext,
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify vps-security fixture logs exercise fail2ban and proxy analysis tools."""
+
+    token = custom_jwt_token(
+        "all-project-workflow-client",
+        [LOGS_COLLECT_SCOPE],
+        "all-project-workflow-client",
+        {"client_type": "workflow_agent"},
+    )
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = await jsonrpc.post(
+            token=token,
+            data=build_collect_logs_request(
+                request_id="collect-vps-security-fixture",
+                project_names=["vps-security"],
+                source_keys=["all"],
+                since="30d",
+            ),
+        )
+        grep_response = await jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "grep-vps-security-ban-fixture",
+                "method": "tools/call",
+                "params": {
+                    "name": "grep_log_snapshot",
+                    "arguments": {
+                        "project_name": "vps-security",
+                        "grep": "Ban",
+                        "source_keys": ["fail2ban"],
+                    },
+                },
+            },
+        )
+        proxy_response = await jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "inspect-vps-security-proxy-fixture",
+                "method": "tools/call",
+                "params": {
+                    "name": "inspect_proxy_activity",
+                    "arguments": {
+                        "project_name": "vps-security",
+                        "source_keys": ["nginx_access", "traefik_access"],
+                        "max_groups": 30,
+                    },
+                },
+            },
+        )
+        group_response = await jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "group-vps-security-fixture",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_errors",
+                    "arguments": {
+                        "project_name": "vps-security",
+                        "source_keys": ["fail2ban", "nginx_access", "traefik_access"],
+                        "max_groups": 6,
+                    },
+                },
+            },
+        )
+
+    collect_payload = collect_response.json()["result"]["structuredContent"]["projects"][0]
+    grep_payload = grep_response.json()["result"]["structuredContent"]
+    proxy_payload = proxy_response.json()["result"]["structuredContent"]
+    group_payload = group_response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert collect_payload["resolved_source_keys"] == [
+        "fail2ban",
+        "nginx_access",
+        "traefik_access",
+    ]
+    assert [source["line_count"] for source in collect_payload["sources"]] == [20, 12, 12]
+    assert grep_response.status_code == 200
+    assert grep_response.json()["result"]["isError"] is False
+    assert grep_payload["match_count"] == 4
+    assert proxy_response.status_code == 200
+    assert proxy_response.json()["result"]["isError"] is False
+    assert proxy_payload["total_line_count"] == 24
+    assert proxy_payload["parsed_proxy_line_count"] == 24
+    assert proxy_payload["http_status_line_count"] == 24
+    assert proxy_payload["upstream_error_count"] == 3
+    assert proxy_payload["status_class_counts"] == [
+        {"status_class": "2xx", "count": 5},
+        {"status_class": "3xx", "count": 1},
+        {"status_class": "4xx", "count": 15},
+        {"status_class": "5xx", "count": 3},
+    ]
+    assert any(
+        route["path"] == "/travel"
+        and route["status_code"] == 504
+        and route["is_upstream_error"] is True
+        for route in proxy_payload["top_routes"]
+    )
+    assert group_response.status_code == 200
+    assert group_response.json()["result"]["isError"] is False
+    assert group_payload["matching_line_count"] == 19
+
+
 @pytest.mark.parametrize(
     "tool_name",
     ["group_errors", "build_incident_bundle", "create_filtered_view", "inspect_proxy_activity"],

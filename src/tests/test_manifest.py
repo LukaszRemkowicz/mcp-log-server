@@ -31,7 +31,7 @@ def test_manifest_loads_into_valid_source_manifest() -> None:
 def test_vps_security_manifest_declares_host_security_file_sources() -> None:
     """Verify the host-security manifest uses collectable file sources."""
 
-    manifest = load_manifest(Path("src/manifests/projects/vps-security.json"))
+    manifest = load_manifest(TEST_MANIFESTS_DIR / "vps-security.json")
 
     assert manifest.project_key == "vps-security"
     assert [source.source_key for source in manifest.sources] == [
@@ -41,9 +41,9 @@ def test_vps_security_manifest_declares_host_security_file_sources() -> None:
     ]
     assert {source.source_type for source in manifest.sources} == {"file"}
     assert [source.target for source in manifest.sources] == [
-        "/var/log/fail2ban.log",
-        "/var/log/portfolio/nginx/prod/access.log",
-        "/var/log/portfolio/traefik/access.log",
+        "/app/src/tests/fixtures/logs/vps-security/fail2ban.log",
+        "/app/src/tests/fixtures/logs/vps-security/nginx_access.log",
+        "/app/src/tests/fixtures/logs/vps-security/traefik_access.log",
     ]
 
 
