@@ -21,7 +21,7 @@ from auth.scopes import (
     WORKFLOW_BOOTSTRAP_SCOPE,
     WORKFLOW_SKILLS_READ_SCOPE,
 )
-from settings import Settings, get_settings
+from conf import Settings, get_settings
 
 DEFAULT_WORKFLOW_CLIENT_ID = "workflow-agent"
 DEFAULT_WORKFLOW_CLIENT_TYPE = "workflow_agent"

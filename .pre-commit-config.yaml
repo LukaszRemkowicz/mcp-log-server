@@ -66,7 +66,7 @@ repos:
           bash -c 'requirements_file="$(mktemp)" &&
           cleanup() { rm -f "$requirements_file"; } &&
           trap cleanup EXIT &&
-          uv export --no-hashes > "$requirements_file" &&
+          uv export --frozen --no-emit-project --no-hashes > "$requirements_file" &&
           grep -v "^pip==" "$requirements_file" > "$requirements_file.filtered" &&
           mv "$requirements_file.filtered" "$requirements_file" &&
           uv run pip-audit -r "$requirements_file" --no-deps --disable-pip'

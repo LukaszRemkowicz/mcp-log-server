@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from cache import cached_for_6_hours, clear_cache
+from cache import cached_for_6_hours_in_namespace
 from database.models import ProjectManifest
 from database.schemas import ProjectManifestCreate, ProjectManifestUpdate
 
@@ -28,16 +28,15 @@ class ProjectManifestService:
         """Create one project manifest row."""
 
         context = payload.model_dump(exclude={"pk"}, exclude_none=True)
-        obj = await self.model.objects.create(id=payload.pk, **context)
-        await clear_cache(self.all)
-        return obj
+        return await self.model.objects.create(id=payload.pk, **context)
 
+    @cached_for_6_hours_in_namespace(ProjectManifest.cache_namespace)
     async def get(self, project_key: str) -> ProjectManifest:
         """Return one persisted project manifest by project key."""
 
         return await self.model.objects.get(project_key=project_key)
 
-    @cached_for_6_hours
+    @cached_for_6_hours_in_namespace(ProjectManifest.cache_namespace)
     async def all(self) -> list[ProjectManifest]:
         """Return all persisted project manifests ordered by project key."""
 
@@ -51,5 +50,4 @@ class ProjectManifestService:
         for field_name, field_value in context.items():
             setattr(obj, field_name, field_value)
         await obj.save(update_fields=[*context, "updated_at"])
-        await clear_cache(self.all)
         return obj

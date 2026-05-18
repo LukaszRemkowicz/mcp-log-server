@@ -5,20 +5,25 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 from pathlib import Path
+from typing import cast
 
 from fastmcp.dependencies import CurrentAccessToken
 from fastmcp.server.auth import AccessToken, require_scopes
+from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
 
 from app import mcp
+from auth.mcp_authorized_manifests import AuthorizedProjectManifests
+from auth.mcp_caller_context import get_request_mcp_caller
 from auth.scopes import LOGS_COLLECT_SCOPE
 from core.types import LogWorkspace
 from decorators import project_authorized_tool, workflow_discoverable_tool
 from logging_config import get_logger
+from manifests.models import Manifest
 from services.log_analysis import LogAnalysisService
 from services.log_filtering import CreateFilteredViewError, LogFilteringService, SourceNoiseContext
 from services.log_snapshots import LogSnapshotService, SnapshotContext, SnapshotLookupError
-from services.project_manifest import ProjectManifestError, ProjectManifestService
+from services.project_manifest import ProjectManifestError
 from tools.agent_hints import (
     BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION,
     CREATE_FILTERED_VIEW_TOOL_DESCRIPTION,
@@ -27,24 +32,66 @@ from tools.agent_hints import (
     GROUP_ERRORS_NEXT_STEP_TIPS,
     GROUP_ERRORS_TOOL_DESCRIPTION,
     INCIDENT_BUNDLE_NEXT_STEP_TIPS,
+    INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
     LOG_ANALYSIS_CAUTIONS,
+    PROXY_ACTIVITY_NEXT_STEP_TIPS,
     SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION,
 )
 from tools.errors import build_invalid_source_key_arguments_result, build_snapshot_tool_error_result
-from tools.models import GroupedErrorPayload, GroupErrorsPayload, SuggestFollowupWindowPayload
-from tools.utils import SourceKeyArgumentError, resolve_source_keys_alias
-from utils.log_snapshots import format_followup_timestamp, parse_followup_timestamp
+from tools.models import (
+    FilteredViewMode,
+    GroupedErrorPayload,
+    GroupErrorsPayload,
+    SuggestFollowupWindowPayload,
+)
+from tools.utils import SourceKeyArgumentError, resolve_source_keys_for_snapshot
+from utils.log_snapshots import (
+    build_snapshot_not_found_retry_tips,
+    format_followup_timestamp,
+    parse_followup_timestamp,
+)
 from utils.types import JSONValue
 
 logger: logging.Logger = get_logger("tools.analysis")
 analysis_service = LogAnalysisService()
 filtering_service = LogFilteringService()
 snapshot_service = LogSnapshotService()
-manifest_service = ProjectManifestService()
 
 DEFAULT_MAX_ERROR_GROUPS = 50
+DEFAULT_MAX_PROXY_GROUPS = 50
 DEFAULT_FILTERED_VIEW_MAX_LINES = 200
 GROUP_ERRORS_SUMMARY_LIMIT = 5
+GROUP_ERRORS_SUMMARY_MESSAGE_MAX_CHARS = 120
+
+
+def _get_authorized_manifest(project_name: str) -> Manifest | None:
+    """Return one request-state manifest prepared by AuthorizedManifestsMiddleware."""
+
+    request = get_http_request()
+    authorized_manifests = cast(
+        AuthorizedProjectManifests,
+        request.state.authorized_manifests,
+    )
+    return authorized_manifests.manifests.get(project_name)
+
+
+def _build_unknown_project_manifest_error(project_name: str) -> ProjectManifestError:
+    """Return the standard missing-manifest error for this tool module."""
+
+    return ProjectManifestError(
+        message=(
+            f"Unknown project {project_name!r}. No persisted manifest was found for that project."
+        )
+    )
+
+
+def _summarize_group_message(message: str) -> str:
+    """Keep the human summary compact while preserving full details in groups."""
+
+    collapsed = " ".join(message.split())
+    if len(collapsed) <= GROUP_ERRORS_SUMMARY_MESSAGE_MAX_CHARS:
+        return collapsed
+    return f"{collapsed[: GROUP_ERRORS_SUMMARY_MESSAGE_MAX_CHARS - 3].rstrip()}..."
 
 
 def _build_group_errors_summary(
@@ -63,7 +110,8 @@ def _build_group_errors_summary(
     details = [
         (
             f"{group.count}x {group.severity} {group.category} in "
-            f"{', '.join(group.source_keys)}: {group.message_summary}"
+            f"{', '.join(group.source_keys)}: "
+            f"{_summarize_group_message(group.message_summary)}"
         )
         for group in groups[:GROUP_ERRORS_SUMMARY_LIMIT]
     ]
@@ -90,18 +138,85 @@ def _build_invalid_group_window_result(max_groups: int) -> ToolResult | None:
     return None
 
 
-async def _load_snapshot_for_analysis_tool(
+def _build_invalid_proxy_group_window_result(max_groups: int) -> ToolResult | None:
+    """Return a tool error when proxy group limits are outside the supported window."""
+
+    if max_groups < 1 or max_groups > 200:
+        return build_snapshot_tool_error_result(
+            error_code="invalid_proxy_group_window",
+            message="max_groups must be between 1 and 200.",
+            retry_tips=["Retry with max_groups set to a value between 1 and 200."],
+        )
+    return None
+
+
+def _build_requested_snapshot_error_result(
+    *,
+    tool_name: str,
+    lookup_error: SnapshotLookupError,
+    project_name: str,
+    session_id: str | None,
+    archive_name: str | None,
+) -> ToolResult:
+    """Build the common requested-snapshot lookup error response."""
+
+    logger.info(
+        "tool error",
+        extra={
+            "event": "tool_error",
+            "tool_name": tool_name,
+            "error_message": lookup_error.message,
+            "session_id": session_id,
+            "archive_name": archive_name,
+            "project_name": project_name,
+        },
+    )
+    return build_snapshot_tool_error_result(
+        error_code=lookup_error.error_code,
+        message=lookup_error.message,
+        retry_tips=lookup_error.retry_tips,
+        details={
+            "project_name": project_name,
+            "session_id": session_id,
+            "archive_name": archive_name,
+        },
+    )
+
+
+def _build_snapshot_owner_mismatch_result(
+    *,
+    tool_name: str,
+    context: SnapshotContext,
+    project_name: str,
+    session_id: str | None,
+    archive_name: str | None,
+) -> ToolResult:
+    """Return the same shape as a missing snapshot when caller ownership fails."""
+
+    workspace = context.metadata.workspace
+    return _build_requested_snapshot_error_result(
+        tool_name=tool_name,
+        lookup_error=SnapshotLookupError(
+            message=f"Requested {workspace} log snapshot was not found.",
+            error_code="snapshot_not_found",
+            retry_tips=build_snapshot_not_found_retry_tips(workspace),
+        ),
+        project_name=project_name,
+        session_id=session_id,
+        archive_name=archive_name,
+    )
+
+
+async def authorize_and_get_snapshot(
     *,
     tool_name: str,
     project_name: str,
     session_id: str | None,
     archive_name: str | None,
-    requested_source_keys: list[str] | None,
-    requested_source_keys_detail: list[JSONValue],
-    max_groups: int,
 ) -> SnapshotContext | ToolResult:
-    """Load the snapshot context or build the same MCP error shape used by analysis tools."""
+    """Load one requested snapshot and enforce request-caller ownership."""
 
+    caller = get_request_mcp_caller()
     context: SnapshotContext | SnapshotLookupError = await snapshot_service.load_snapshot(
         project_name=project_name,
         workspace=LogWorkspace.SESSION if session_id is not None else LogWorkspace.WORKFLOW,
@@ -109,31 +224,20 @@ async def _load_snapshot_for_analysis_tool(
         archive_name=archive_name,
     )
     if isinstance(context, SnapshotLookupError):
-        message = context.message
-        logger.info(
-            "tool error",
-            extra={
-                "event": "tool_error",
-                "tool_name": tool_name,
-                "error_message": message,
-                "session_id": session_id,
-                "archive_name": archive_name,
-                "project_name": project_name,
-                "source_keys": requested_source_keys,
-                "max_groups": max_groups,
-            },
+        return _build_requested_snapshot_error_result(
+            tool_name=tool_name,
+            lookup_error=context,
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
         )
-        return build_snapshot_tool_error_result(
-            error_code=context.error_code,
-            message=message,
-            retry_tips=context.retry_tips,
-            details={
-                "project_name": project_name,
-                "session_id": session_id,
-                "archive_name": archive_name,
-                "source_keys": requested_source_keys_detail,
-                "max_groups": max_groups,
-            },
+    if context.caller_id != caller.caller_id:
+        return _build_snapshot_owner_mismatch_result(
+            tool_name=tool_name,
+            context=context,
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
         )
     return context
 
@@ -146,7 +250,6 @@ def _build_analysis_source_key_error_result(
     session_id: str | None,
     archive_name: str | None,
     requested_source_keys: list[str] | None,
-    requested_source_keys_detail: list[JSONValue],
     max_groups: int,
 ) -> ToolResult:
     """Build the shared source-key validation error used by analysis tools."""
@@ -165,6 +268,7 @@ def _build_analysis_source_key_error_result(
             "max_groups": max_groups,
         },
     )
+    source_keys_detail: list[JSONValue] = list(requested_source_keys or [])
     return build_snapshot_tool_error_result(
         error_code="snapshot_source_key_not_found",
         message=message,
@@ -178,7 +282,7 @@ def _build_analysis_source_key_error_result(
             "project_name": project_name,
             "session_id": session_id,
             "archive_name": archive_name,
-            "source_keys": requested_source_keys_detail,
+            "source_keys": source_keys_detail,
             "max_groups": max_groups,
         },
     )
@@ -199,51 +303,26 @@ def _build_invalid_filtered_view_limit_result(
     return None
 
 
-async def _load_snapshot_for_filtered_view_tool(
-    *,
-    project_name: str,
-    session_id: str | None,
-    archive_name: str | None,
-    source_keys: list[str] | None,
-    source_keys_detail: list[JSONValue],
-    max_lines: int,
-) -> SnapshotContext | ToolResult:
-    """Load a snapshot or build the filtered-view snapshot lookup error response."""
+def _build_invalid_filtered_view_mode_result(view_mode: str) -> ToolResult | None:
+    """Return a tool error when the filtered-view response mode is unknown."""
 
-    context: SnapshotContext | SnapshotLookupError = await snapshot_service.load_snapshot(
-        project_name=project_name,
-        workspace=LogWorkspace.SESSION if session_id is not None else LogWorkspace.WORKFLOW,
-        session_id=session_id,
-        archive_name=archive_name,
+    valid_view_modes = {"head", "errors", "sample"}
+    if view_mode in valid_view_modes:
+        return None
+    valid_view_modes_detail: list[JSONValue] = [item for item in sorted(valid_view_modes)]
+    return build_snapshot_tool_error_result(
+        error_code="invalid_filtered_view_mode",
+        message="view_mode must be one of: head, errors, sample.",
+        retry_tips=[
+            "Use view_mode='head' for chronological cleaned lines.",
+            "Use view_mode='errors' for incident-oriented cleaned lines first.",
+            "Use view_mode='sample' to spread returned lines across selected sources.",
+        ],
+        details={
+            "view_mode": view_mode,
+            "valid_view_modes": valid_view_modes_detail,
+        },
     )
-    if isinstance(context, SnapshotLookupError):
-        message = context.message
-        logger.info(
-            "tool error",
-            extra={
-                "event": "tool_error",
-                "tool_name": "create_filtered_view",
-                "error_message": message,
-                "session_id": session_id,
-                "archive_name": archive_name,
-                "project_name": project_name,
-                "source_keys": source_keys,
-                "max_lines": max_lines,
-            },
-        )
-        return build_snapshot_tool_error_result(
-            error_code=context.error_code,
-            message=message,
-            retry_tips=context.retry_tips,
-            details={
-                "project_name": project_name,
-                "session_id": session_id,
-                "archive_name": archive_name,
-                "source_keys": source_keys_detail,
-                "max_lines": max_lines,
-            },
-        )
-    return context
 
 
 def _build_filtered_view_source_key_error_result(
@@ -255,6 +334,7 @@ def _build_filtered_view_source_key_error_result(
     source_keys: list[str] | None,
     source_keys_detail: list[JSONValue],
     max_lines: int,
+    view_mode: str,
 ) -> ToolResult:
     """Build the filtered-view source-key or manifest lookup error response."""
 
@@ -280,6 +360,7 @@ def _build_filtered_view_source_key_error_result(
             "archive_name": archive_name,
             "source_keys": source_keys_detail,
             "max_lines": max_lines,
+            "view_mode": view_mode,
         },
     )
 
@@ -314,30 +395,27 @@ async def group_errors(
     """
 
     assert access_token is not None
+    context = await authorize_and_get_snapshot(
+        tool_name="group_errors",
+        project_name=project_name,
+        session_id=session_id,
+        archive_name=archive_name,
+    )
+    if isinstance(context, ToolResult):
+        return context
+
     invalid_group_window_result = _build_invalid_group_window_result(max_groups)
     if invalid_group_window_result is not None:
         return invalid_group_window_result
 
     try:
-        source_keys = resolve_source_keys_alias(source_keys, source_key)
+        source_keys = resolve_source_keys_for_snapshot(source_keys, source_key)
     except SourceKeyArgumentError as error:
         return build_invalid_source_key_arguments_result(
             message=str(error),
             source_key=source_key,
             source_keys=source_keys,
         )
-    source_keys_detail: list[JSONValue] = list(source_keys or [])
-    context: SnapshotContext | ToolResult = await _load_snapshot_for_analysis_tool(
-        tool_name="group_errors",
-        project_name=project_name,
-        session_id=session_id,
-        archive_name=archive_name,
-        requested_source_keys=source_keys,
-        requested_source_keys_detail=source_keys_detail,
-        max_groups=max_groups,
-    )
-    if isinstance(context, ToolResult):
-        return context
 
     try:
         analysis = analysis_service.group_snapshot_errors(
@@ -353,7 +431,6 @@ async def group_errors(
             session_id=session_id,
             archive_name=archive_name,
             requested_source_keys=source_keys,
-            requested_source_keys_detail=source_keys_detail,
             max_groups=max_groups,
         )
 
@@ -401,6 +478,86 @@ async def group_errors(
 
 @mcp.tool(
     auth=require_scopes(LOGS_COLLECT_SCOPE),
+    description=INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
+)
+@project_authorized_tool
+async def inspect_proxy_activity(
+    project_name: str,
+    session_id: str | None = None,
+    archive_name: str | None = None,
+    source_keys: list[str] | None = None,
+    source_key: str | None = None,
+    max_groups: int = DEFAULT_MAX_PROXY_GROUPS,
+) -> ToolResult:
+    """Summarize deterministic ingress/proxy signals from one persisted snapshot."""
+
+    context = await authorize_and_get_snapshot(
+        tool_name="inspect_proxy_activity",
+        project_name=project_name,
+        session_id=session_id,
+        archive_name=archive_name,
+    )
+    if isinstance(context, ToolResult):
+        return context
+
+    invalid_group_window_result = _build_invalid_proxy_group_window_result(max_groups)
+    if invalid_group_window_result is not None:
+        return invalid_group_window_result
+
+    try:
+        source_keys = resolve_source_keys_for_snapshot(source_keys, source_key)
+    except SourceKeyArgumentError as error:
+        return build_invalid_source_key_arguments_result(
+            message=str(error),
+            source_key=source_key,
+            source_keys=source_keys,
+        )
+
+    try:
+        payload = analysis_service.inspect_proxy_activity(
+            context.metadata,
+            sources=context.sources,
+            requested_source_keys=source_keys,
+            max_groups=max_groups,
+            requested_project_name=project_name,
+            project_name=context.project_name,
+        )
+    except ValueError as error:
+        return _build_analysis_source_key_error_result(
+            tool_name="inspect_proxy_activity",
+            error=error,
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
+            requested_source_keys=source_keys,
+            max_groups=max_groups,
+        )
+
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_proxy_activity",
+            "session_id": payload.session_id,
+            "archive_name": archive_name,
+            "workspace": payload.workspace,
+            "searched_source_count": len(payload.searched_source_keys),
+            "http_status_line_count": payload.http_status_line_count,
+            "upstream_error_count": payload.upstream_error_count,
+            "top_route_count": len(payload.top_routes),
+            "truncated": payload.truncated,
+        },
+    )
+    response = dict(
+        analysis_cautions=LOG_ANALYSIS_CAUTIONS,
+        next_step_tips=PROXY_ACTIVITY_NEXT_STEP_TIPS,
+        **payload.model_dump(mode="json"),
+    )
+    return ToolResult(content=[], structured_content=response)
+
+
+@mcp.tool(
+    auth=require_scopes(LOGS_COLLECT_SCOPE),
     description=BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
@@ -411,6 +568,7 @@ async def build_incident_bundle(
     source_keys: list[str] | None = None,
     source_key: str | None = None,
     max_groups: int = DEFAULT_MAX_ERROR_GROUPS,
+    max_lines_per_source: int | None = None,
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
     """Build one compact incident summary, then confirm conclusions with raw snapshot context.
@@ -431,30 +589,33 @@ async def build_incident_bundle(
     """
 
     assert access_token is not None
+    context = await authorize_and_get_snapshot(
+        tool_name="build_incident_bundle",
+        project_name=project_name,
+        session_id=session_id,
+        archive_name=archive_name,
+    )
+    if isinstance(context, ToolResult):
+        return context
+
     invalid_group_window_result = _build_invalid_group_window_result(max_groups)
     if invalid_group_window_result is not None:
         return invalid_group_window_result
+    if max_lines_per_source is not None and max_lines_per_source < 1:
+        return build_snapshot_tool_error_result(
+            error_code="invalid_incident_bundle_line_limit",
+            message="max_lines_per_source must be a positive integer when provided.",
+            retry_tips=["Retry with max_lines_per_source >= 1, or omit it."],
+        )
 
     try:
-        source_keys = resolve_source_keys_alias(source_keys, source_key)
+        source_keys = resolve_source_keys_for_snapshot(source_keys, source_key)
     except SourceKeyArgumentError as error:
         return build_invalid_source_key_arguments_result(
             message=str(error),
             source_key=source_key,
             source_keys=source_keys,
         )
-    source_keys_detail: list[JSONValue] = list(source_keys or [])
-    context: SnapshotContext | ToolResult = await _load_snapshot_for_analysis_tool(
-        tool_name="build_incident_bundle",
-        project_name=project_name,
-        session_id=session_id,
-        archive_name=archive_name,
-        requested_source_keys=source_keys,
-        requested_source_keys_detail=source_keys_detail,
-        max_groups=max_groups,
-    )
-    if isinstance(context, ToolResult):
-        return context
 
     try:
         payload = analysis_service.build_incident_bundle(
@@ -475,7 +636,6 @@ async def build_incident_bundle(
             session_id=session_id,
             archive_name=archive_name,
             requested_source_keys=source_keys,
-            requested_source_keys_detail=source_keys_detail,
             max_groups=max_groups,
         )
 
@@ -509,6 +669,7 @@ async def create_filtered_view(
     archive_name: str | None = None,
     source_keys: list[str] | None = None,
     source_key: str | None = None,
+    view_mode: str = "head",
     max_lines: int = DEFAULT_FILTERED_VIEW_MAX_LINES,
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
@@ -521,14 +682,27 @@ async def create_filtered_view(
     """
 
     assert access_token is not None
+    context = await authorize_and_get_snapshot(
+        tool_name="create_filtered_view",
+        project_name=project_name,
+        session_id=session_id,
+        archive_name=archive_name,
+    )
+    if isinstance(context, ToolResult):
+        return context
+
     invalid_limit_result = _build_invalid_filtered_view_limit_result(
         max_lines=max_lines,
     )
     if invalid_limit_result is not None:
         return invalid_limit_result
+    invalid_mode_result = _build_invalid_filtered_view_mode_result(view_mode)
+    if invalid_mode_result is not None:
+        return invalid_mode_result
+    filtered_view_mode = cast(FilteredViewMode, view_mode)
 
     try:
-        source_keys = resolve_source_keys_alias(source_keys, source_key)
+        source_keys = resolve_source_keys_for_snapshot(source_keys, source_key)
     except SourceKeyArgumentError as error:
         return build_invalid_source_key_arguments_result(
             message=str(error),
@@ -536,22 +710,13 @@ async def create_filtered_view(
             source_keys=source_keys,
         )
     source_keys_detail: list[JSONValue] = list(source_keys or [])
-    context: SnapshotContext | ToolResult = await _load_snapshot_for_filtered_view_tool(
-        project_name=project_name,
-        session_id=session_id,
-        archive_name=archive_name,
-        source_keys=source_keys,
-        source_keys_detail=source_keys_detail,
-        max_lines=max_lines,
-    )
-    if isinstance(context, ToolResult):
-        return context
 
-    manifest_result = await manifest_service.get_or_error(project_name)
-    if isinstance(manifest_result, ProjectManifestError):
+    manifest = _get_authorized_manifest(project_name)
+    if manifest is None:
+        manifest_error = _build_unknown_project_manifest_error(project_name)
         return _build_filtered_view_source_key_error_result(
             error=CreateFilteredViewError(
-                message=manifest_result.message,
+                message=manifest_error.message,
                 error_code="snapshot_source_key_not_found",
                 retry_tips=[
                     "Retry with a valid archive_name and source_keys for the authorized project.",
@@ -563,9 +728,9 @@ async def create_filtered_view(
             source_keys=source_keys,
             source_keys_detail=source_keys_detail,
             max_lines=max_lines,
+            view_mode=view_mode,
         )
 
-    manifest = manifest_result.manifest
     source_contexts = {
         source.source_key: SourceNoiseContext(
             source_key=source.source_key,
@@ -585,6 +750,7 @@ async def create_filtered_view(
         max_lines=max_lines,
         requested_project_name=project_name,
         project_name=context.project_name,
+        view_mode=filtered_view_mode,
         next_step_tips=FILTERED_VIEW_NEXT_STEP_TIPS,
     )
     if isinstance(payload, CreateFilteredViewError):
@@ -596,6 +762,7 @@ async def create_filtered_view(
             source_keys=source_keys,
             source_keys_detail=source_keys_detail,
             max_lines=max_lines,
+            view_mode=view_mode,
         )
 
     logger.info(
@@ -610,6 +777,7 @@ async def create_filtered_view(
             "kept_line_count": payload.kept_line_count,
             "excluded_line_count": payload.excluded_line_count,
             "returned_line_count": payload.returned_line_count,
+            "view_mode": payload.view_mode,
             "truncated": payload.truncated,
         },
     )

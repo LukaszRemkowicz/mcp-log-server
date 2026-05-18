@@ -44,6 +44,9 @@ CREATE_FILTERED_VIEW_TOOL_DESCRIPTION = (
     "This keeps the raw snapshot as the source of truth while removing "
     "low-signal lines through manifest-selected noise profiles. "
     "Use source_key for one source or source_keys for multiple sources; do not pass both. "
+    "Use view_mode='head' for chronological cleaned lines, view_mode='errors' "
+    "for incident-oriented lines first, or view_mode='sample' for a broader "
+    "spread across selected sources. "
     "Use it when you want a smaller analysis view before reading or grepping "
     "raw files directly."
 )
@@ -55,6 +58,40 @@ GROUP_ERRORS_TOOL_DESCRIPTION = (
     "Use source_key for one source or source_keys for multiple sources, but not both, "
     "before deciding whether to grep, read files, or recollect a narrower "
     "since/until window."
+)
+
+INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION = (
+    "Inspect collected proxy-shaped snapshot sources for deterministic ingress "
+    "signals. Summarizes HTTP status classes, route/status clusters, and "
+    "upstream-style 502/503/504 errors from persisted logs. This tool reads "
+    "snapshot files only; it does not run live proxy or shell commands."
+)
+
+INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION = (
+    "Inspect live fail2ban runtime state for a project such as vps-security "
+    "through a fixed allowlist of fail2ban-client status commands. Returns "
+    "active jail names, per-jail ban counters, and currently banned IPs when "
+    "the fail2ban client and host socket are available to MCP. This tool does "
+    "not run caller-provided shell commands and does not collect historical "
+    "logs; use collect_logs plus the fail2ban source for historical incident "
+    "analysis."
+)
+
+INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION = (
+    "Inspect Docker runtime status for all docker-backed sources in one project. "
+    "Returns a compact per-source overview with container status, healthcheck "
+    "status when available, restart count, image, and lifecycle timestamps "
+    "without exposing raw docker ps output."
+)
+
+INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION = (
+    "Inspect curated Docker metadata for one manifest-approved source container. "
+    "Use this after inspect_containers_health points to a suspicious container. "
+    "Returns bounded docker-inspect-style details such as status, image, restart "
+    "policy, ports, command, entrypoint, working directory, runtime user, env var "
+    "names without values, label keys without values, selected safe Compose label "
+    "values, mounts without host source paths, networks and aliases, and recent "
+    "healthcheck log entries."
 )
 
 GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION = (
@@ -79,6 +116,13 @@ READ_CONTAINER_FILE_TOOL_DESCRIPTION = (
     "from the source's main project folder. The path argument is required and "
     "must be an absolute path inside the selected container. "
     "This tool rejects directories and bounds the returned content with max_bytes."
+)
+
+STAT_CONTAINER_PATH_TOOL_DESCRIPTION = (
+    "Return metadata for one explicit file or directory path inside a "
+    "manifest-approved docker source container without reading file contents. "
+    "Use this to check whether a path exists, whether it is a directory, its "
+    "size, mode, and modified timestamp before deciding whether to read or list it."
 )
 
 LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION = (
@@ -144,6 +188,18 @@ GROUP_ERRORS_NEXT_STEP_TIPS = [
     (
         "Call suggest_followup_window with the grouped timestamps, then "
         "recollect with collect_logs using the returned since/until values."
+    ),
+]
+
+PROXY_ACTIVITY_NEXT_STEP_TIPS = [
+    "Use top_routes to decide which host/path/status cluster needs raw context.",
+    (
+        "Reopen raw lines with read_log_snapshot_file before concluding whether "
+        "traffic failed at the edge proxy or upstream application."
+    ),
+    (
+        "If 502, 503, or 504 errors are clustered, inspect the related app "
+        "container logs for the same time window."
     ),
 ]
 

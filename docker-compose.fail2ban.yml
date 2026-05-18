@@ -1,0 +1,8 @@
+services:
+  app:
+    volumes:
+      - type: bind
+        source: ${FAIL2BAN_SOCKET_DIR_HOST:-/var/run/fail2ban}
+        target: ${FAIL2BAN_SOCKET_DIR:-/var/run/fail2ban}
+        bind:
+          create_host_path: false

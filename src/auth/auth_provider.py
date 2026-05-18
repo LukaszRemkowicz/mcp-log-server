@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastmcp.server.auth import AuthProvider, JWTVerifier
 
-from settings import Settings
+from conf import Settings
 
 
 def build_auth_provider(settings: Settings) -> AuthProvider | None:

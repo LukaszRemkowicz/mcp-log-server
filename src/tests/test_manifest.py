@@ -28,6 +28,25 @@ def test_manifest_loads_into_valid_source_manifest() -> None:
     assert manifest.sources[0].stream is None
 
 
+def test_vps_security_manifest_declares_host_security_file_sources() -> None:
+    """Verify the host-security manifest uses collectable file sources."""
+
+    manifest = load_manifest(TEST_MANIFESTS_DIR / "vps-security.json")
+
+    assert manifest.project_key == "vps-security"
+    assert [source.source_key for source in manifest.sources] == [
+        "fail2ban",
+        "nginx_access",
+        "traefik_access",
+    ]
+    assert {source.source_type for source in manifest.sources} == {"file"}
+    assert [source.target for source in manifest.sources] == [
+        "/app/src/tests/fixtures/logs/vps-security/fail2ban.log",
+        "/app/src/tests/fixtures/logs/vps-security/nginx_access.log",
+        "/app/src/tests/fixtures/logs/vps-security/traefik_access.log",
+    ]
+
+
 def test_manifest_loads_absolute_file_source_target(tmp_path: Path) -> None:
     """Verify production manifests may point at absolute log paths."""
 

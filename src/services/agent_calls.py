@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import UUID
 
-from fastmcp.server.auth import AccessToken
 from pydantic import BaseModel, Field
 from tortoise.exceptions import BaseORMException
 
@@ -39,16 +38,13 @@ class AgentCallAuditService:
     async def create_tool_call(
         self,
         *,
-        session_id: UUID,
-        workspace: str,
+        session: Any,
         event: str,
-        token: AccessToken | None,
         tool_name: str,
         arguments: dict[str, Any] | None,
     ) -> UUID | AgentCallCreateError:
         """Persist the initial AgentCall row for one MCP tool request."""
 
-        claims = token.claims if token is not None else {}
         project_name: str | None = None
         source_keys: list[str] | None = None
         if arguments is not None:
@@ -64,11 +60,9 @@ class AgentCallAuditService:
                 source_keys = [key for key in requested_source_keys if isinstance(key, str)]
 
         payload: dict[str, Any] = {
-            "session_id": session_id,
-            "workspace": workspace,
+            "session_id": session.id,
+            "caller": self._get_caller_id(session),
             "event": event,
-            "client_id": token.client_id if token is not None else None,
-            "client_type": claims.get("client_type"),
             "tool_name": tool_name,
             "project_name": project_name,
             "source_keys": source_keys,
@@ -82,22 +76,34 @@ class AgentCallAuditService:
                 extra={
                     "event": "agent_call_create_failed",
                     "tool_name": tool_name,
-                    "session_id": str(session_id),
+                    "session_id": session.name,
                 },
             )
             return AgentCallCreateError(
                 details={
                     "tool_name": tool_name,
-                    "session_id": str(session_id),
+                    "session_id": session.name,
                 }
             )
         return row.id
+
+    @staticmethod
+    def _get_caller_id(session: Any) -> int:
+        """Return caller id from a session context or Tortoise session model."""
+
+        caller_id = getattr(session, "caller_id", None)
+        if isinstance(caller_id, int):
+            return caller_id
+        caller = getattr(session, "caller", None)
+        caller_pk = getattr(caller, "id", None)
+        if isinstance(caller_pk, int):
+            return caller_pk
+        raise AttributeError("session does not expose caller id")
 
     async def complete_tool_call(
         self,
         *,
         agent_call_pk: UUID | None,
-        session_id: UUID | None,
         tool_name: str,
         duration_seconds: float,
         success: bool,
@@ -106,12 +112,11 @@ class AgentCallAuditService:
         """Update one AgentCall row with final request outcome metadata."""
 
         if agent_call_pk is None:
-            logger.warning(
-                "skipped completing agent call audit row without row pk",
+            logger.debug(
+                "skipped completing tool call without audit row",
                 extra={
-                    "event": "agent_call_complete_missing_pk",
+                    "event": "agent_call_complete_skipped_no_row",
                     "tool_name": tool_name,
-                    "session_id": str(session_id) if session_id is not None else None,
                     "duration_seconds": duration_seconds,
                     "success": success,
                     "error_code": error_code,
@@ -134,7 +139,6 @@ class AgentCallAuditService:
                 extra={
                     "event": "agent_call_complete_failed",
                     "tool_name": tool_name,
-                    "session_id": str(session_id) if session_id is not None else None,
                     "agent_call_pk": str(agent_call_pk),
                 },
             )

@@ -8,10 +8,10 @@ MANIFESTS_DIR="$TMP_ROOT/manifests"
 LOGS_DIR="$TMP_ROOT/logs"
 SERVER_LOG="$TMP_ROOT/server.log"
 TOKENS_FILE="$TMP_ROOT/dev_jwt_tokens.json"
-PORT="${PORT:-18081}"
-HOST="${HOST:-127.0.0.1}"
-BASE_URL="http://${HOST}:${PORT}/mcp"
-SESSION_ID="11111111-1111-4111-8111-111111111111"
+MCP_PORT="${MCP_PORT:-${PORT:-18081}}"
+MCP_HOST="${MCP_HOST:-${HOST:-127.0.0.1}}"
+BASE_URL="http://${MCP_HOST}:${MCP_PORT}/mcp"
+SESSION_ID="gentle-river-finds-a8f2"
 
 export DATABASE_HOST="${DATABASE_HOST:-127.0.0.1}"
 export DATABASE_PORT="${DATABASE_PORT:-${DATABASE_PORT_HOST:-5437}}"
@@ -144,7 +144,7 @@ async def main() -> None:
         ):
             await connection.execute(
                 """
-                INSERT INTO "authentications" (
+                INSERT INTO "mcp_callers" (
                     "client_id",
                     "client_type",
                     "workspace",
@@ -184,8 +184,8 @@ export CODEX_AGENT_JWT
 
 (
   cd "$REPO_ROOT/src"
-  PORT="$PORT" \
-  HOST="$HOST" \
+  MCP_PORT="$MCP_PORT" \
+  MCP_HOST="$MCP_HOST" \
   LOGS_DIR="$LOGS_DIR" \
   uv run python -m main >"$SERVER_LOG" 2>&1
 ) &
@@ -219,6 +219,9 @@ GREP_RESPONSE="$(
 )"
 FILTERED_VIEW_RESPONSE="$(
   json_post '{"jsonrpc":"2.0","id":"create-filtered-view","method":"tools/call","params":{"name":"create_filtered_view","arguments":{"project_name":"landingpage","source_keys":["app_first","app_second"],"max_lines":10}}}'
+)"
+GROUP_ERRORS_RESPONSE="$(
+  json_post '{"jsonrpc":"2.0","id":"group-errors","method":"tools/call","params":{"name":"group_errors","arguments":{"project_name":"landingpage","source_keys":["app_first","app_second"],"max_groups":10}}}'
 )"
 SESSION_RESPONSE="$(
   json_post_with_token "$CODEX_AGENT_JWT" '{"jsonrpc":"2.0","id":"collect-session","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_names":["landingpage"],"workspace":"session","session_id":"'"$SESSION_ID"'","source_keys":["app_first"]}}}'
@@ -288,6 +291,22 @@ assert_eq \
   "$(printf '%s' "$FILTERED_VIEW_RESPONSE" | jq -r '.result.structuredContent.excluded_line_count')" \
   "0" \
   "create_filtered_view should keep all plain-text lines for unknown noise profiles"
+if [[ "$(printf '%s' "$GROUP_ERRORS_RESPONSE" | jq -r '.result.isError')" != "false" ]]; then
+  echo "group_errors response:" >&2
+  printf '%s\n' "$GROUP_ERRORS_RESPONSE" | jq . >&2
+fi
+assert_eq \
+  "$(printf '%s' "$GROUP_ERRORS_RESPONSE" | jq -r '.result.isError')" \
+  "false" \
+  "group_errors should succeed for workflow collection"
+assert_eq \
+  "$(printf '%s' "$GROUP_ERRORS_RESPONSE" | jq -r '.result.structuredContent.action')" \
+  "group_errors" \
+  "group_errors should return the grouped-error payload"
+assert_eq \
+  "$(printf '%s' "$GROUP_ERRORS_RESPONSE" | jq -r '.result.structuredContent.matching_line_count')" \
+  "0" \
+  "group_errors should return zero matches for non-error fixture logs"
 
 assert_eq \
   "$(printf '%s' "$SESSION_RESPONSE" | jq -r '.result.structuredContent.session_id')" \

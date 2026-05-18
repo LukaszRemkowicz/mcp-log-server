@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from settings import Settings
+from conf import Settings
 from utils.types import JSONObject
 
 LOGGER_NAME = "mcp_log_server"

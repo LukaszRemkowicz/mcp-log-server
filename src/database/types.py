@@ -14,6 +14,13 @@ class AgentCallEvent(StrEnum):
     MCP_READ_RESOURCE = "mcp_read_resource"
 
 
+class AgentSessionStatus(StrEnum):
+    """Known interactive agent session lifecycle states."""
+
+    ACTIVE = "active"
+    CLOSED = "closed"
+
+
 class LogSourceType(StrEnum):
     """Known manifest source types that can produce persisted log files."""
 

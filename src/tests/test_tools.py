@@ -13,6 +13,7 @@ from auth.scopes import (
     WORKFLOW_BOOTSTRAP_SCOPE,
 )
 from middleware.audit import AccessAuditMiddleware
+from middleware.authorized_manifests import AuthorizedManifestsMiddleware
 from tests.conftest import CustomAccessToken
 from tools.agent_hints import (
     BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION,
@@ -21,8 +22,13 @@ from tools.agent_hints import (
     CREATE_FILTERED_VIEW_TOOL_DESCRIPTION,
     GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION,
     GROUP_ERRORS_TOOL_DESCRIPTION,
+    INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
+    INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
+    INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION,
+    INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
     READ_CONTAINER_FILE_TOOL_DESCRIPTION,
+    STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
     SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION,
 )
 from tools.workflow import build_workflow_bootstrap_payload, get_allowed_workflow_tool_metadata
@@ -38,6 +44,9 @@ def test_application_registers_expected_mcp_components(
         tools = await app._local_provider.list_tools()
         tool_names = [tool.name for tool in tools]
         assert any(isinstance(middleware, AccessAuditMiddleware) for middleware in app.middleware)
+        assert any(
+            isinstance(middleware, AuthorizedManifestsMiddleware) for middleware in app.middleware
+        )
 
         assert "analyze_daily_log_bundle" in tool_names
         assert "collect_logs" in tool_names
@@ -47,11 +56,16 @@ def test_application_registers_expected_mcp_components(
         assert "group_errors" in tool_names
         assert "build_incident_bundle" in tool_names
         assert "create_filtered_view" in tool_names
+        assert "inspect_proxy_activity" in tool_names
         assert "suggest_followup_window" in tool_names
         assert "list_projects" in tool_names
+        assert "inspect_containers_health" in tool_names
+        assert "inspect_container_detail" in tool_names
+        assert "stat_container_path" in tool_names
         assert "read_container_file" in tool_names
         assert "list_container_directory" in tool_names
         assert "close_agent_session" in tool_names
+        assert "inspect_live_fail2ban_activity" in tool_names
         assert "get_mcp_service_status" in tool_names
         assert "get_mcp_health_check" in tool_names
         assert "list_workflow_skills" not in tool_names
@@ -138,6 +152,18 @@ def test_application_registers_expected_mcp_components(
         assert app_incident_bundle_tool.description == BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION
         app_filtered_view_tool = next(tool for tool in tools if tool.name == "create_filtered_view")
         assert app_filtered_view_tool.description == CREATE_FILTERED_VIEW_TOOL_DESCRIPTION
+        app_proxy_activity_tool = next(
+            tool for tool in tools if tool.name == "inspect_proxy_activity"
+        )
+        assert app_proxy_activity_tool.description == INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION
+        app_container_health_tool = next(
+            tool for tool in tools if tool.name == "inspect_containers_health"
+        )
+        assert app_container_health_tool.description == INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION
+        app_container_detail_tool = next(
+            tool for tool in tools if tool.name == "inspect_container_detail"
+        )
+        assert app_container_detail_tool.description == INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION
         app_group_errors_tool = next(tool for tool in tools if tool.name == "group_errors")
         assert app_group_errors_tool.description == GROUP_ERRORS_TOOL_DESCRIPTION
         app_followup_tool = next(tool for tool in tools if tool.name == "suggest_followup_window")
@@ -146,11 +172,17 @@ def test_application_registers_expected_mcp_components(
         assert app_close_session_tool.description == CLOSE_AGENT_SESSION_TOOL_DESCRIPTION
         app_read_container_tool = next(tool for tool in tools if tool.name == "read_container_file")
         assert app_read_container_tool.description == READ_CONTAINER_FILE_TOOL_DESCRIPTION
+        app_stat_container_tool = next(tool for tool in tools if tool.name == "stat_container_path")
+        assert app_stat_container_tool.description == STAT_CONTAINER_PATH_TOOL_DESCRIPTION
         app_list_container_tool = next(
             tool for tool in tools if tool.name == "list_container_directory"
         )
         assert app_list_container_tool.description == LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION
         assert "path" not in app_list_container_tool.parameters["required"]
+        app_fail2ban_tool = next(
+            tool for tool in tools if tool.name == "inspect_live_fail2ban_activity"
+        )
+        assert app_fail2ban_tool.description == INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION
         workflow_followup_tool = next(
             item
             for item in bootstrap_text["tools"]
@@ -175,6 +207,9 @@ def test_application_registers_expected_mcp_components(
             "group_errors",
             "build_incident_bundle",
             "create_filtered_view",
+            "inspect_proxy_activity",
+            "inspect_containers_health",
+            "stat_container_path",
             "read_container_file",
             "list_container_directory",
         }

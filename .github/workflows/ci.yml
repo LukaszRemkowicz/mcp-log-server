@@ -34,6 +34,8 @@ jobs:
         run: uv sync --group dev
 
       - name: Run pre-commit
+        env:
+          SKIP: pytest-pre-commit
         run: uv run pre-commit run --all-files
 
   tests:

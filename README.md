@@ -32,11 +32,25 @@ under `src/agent_assets/`.
 
 Current MCP workflow surface includes:
 
-- tools: `analyze_daily_log_bundle`, `collect_logs`, `close_agent_session`, `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`, `create_filtered_view`, `group_errors`, `build_incident_bundle`, `suggest_followup_window`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `read_container_file`, `list_container_directory`
+- tools: `analyze_daily_log_bundle`, `collect_logs`, `close_agent_session`, `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`, `create_filtered_view`, `group_errors`, `build_incident_bundle`, `inspect_proxy_activity`, `suggest_followup_window`, `list_projects`, `get_mcp_service_status`, `get_mcp_health_check`, `inspect_containers_health`, `inspect_container_detail`, `stat_container_path`, `read_container_file`, `list_container_directory`
 - resources: concrete workflow skill resources such as
   `skill://workflow/project_context`, `skill://workflow/severity_guide`,
   `skill://workflow/bot_detection`
 - prompts: none exposed right now
+
+### Tool Groups
+
+The tool surface is easier to understand as purpose-based groups. These groups
+are documentation categories, not auth scopes.
+
+| Group | Tools | Purpose |
+| --- | --- | --- |
+| Workflow bootstrap and discovery | `analyze_daily_log_bundle`, `list_projects` | Prepare the daily workflow prompt/tool inventory and expose authorized project/source inventory. |
+| Log collection and session lifecycle | `collect_logs`, `close_agent_session` | Collect raw logs into workflow or session artifacts and close interactive session audit metadata. |
+| Snapshot inventory and raw inspection | `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot` | List, read, and search persisted raw snapshot files after collection. |
+| Snapshot analysis and derived views | `create_filtered_view`, `group_errors`, `build_incident_bundle`, `inspect_proxy_activity`, `suggest_followup_window` | Build deterministic cleaned views, grouped summaries, proxy activity diagnostics, incident bundles, and recollection windows from an already-collected snapshot. |
+| Container inspection | `inspect_containers_health`, `inspect_container_detail`, `stat_container_path`, `read_container_file`, `list_container_directory` | Inspect approved manifest-bounded containers and paths without mutating container state. |
+| MCP service diagnostics | `get_mcp_service_status`, `get_mcp_health_check` | Check MCP server/runtime health during development and operations. |
 
 The daily workflow mirrors the current `landingpage` monitoring pattern:
 `analyze_daily_log_bundle` returns structured workflow data with:
@@ -87,14 +101,11 @@ For real deployment, some values should still be treated as required.
 Production-required secrets/config:
 
 - `ENVIRONMENT`
-- `HOST`
-- `PORT`
+- `MCP_HOST`
+- `MCP_PORT`
 - `JWT_SHARED_SECRET`
 - `JWT_ISSUER`
 - `JWT_AUDIENCE`
-- `MCP_PATH`
-- `MCP_STATELESS_HTTP`
-- `MCP_JSON_RESPONSE`
 - `DATABASE_HOST`
 - `DATABASE_PORT`
 - `DATABASE_NAME`
@@ -105,9 +116,6 @@ Production-required secrets/config:
 Production-recommended runtime config:
 
 - `LOG_LEVEL`
-- `LOG_FORMAT`
-- `JWT_ALGORITHM`
-- `JWT_EXPIRATION_SECONDS`
 - `MCP_PORT_HOST` when the host-side MCP port should differ from `8001`
 
 Local development defaults:
@@ -155,6 +163,21 @@ are reviewed and approved.
   PostgreSQL application password.
   Default: `mcp-log-server-local-password`
 
+- `FAIL2BAN_SOCKET_PATH`
+  Path where the MCP app expects the fail2ban Unix socket inside the app
+  container.
+  Default: `/var/run/fail2ban/fail2ban.sock`
+
+Live `inspect_live_fail2ban_activity` diagnostics call
+`fail2ban-client -s "$FAIL2BAN_SOCKET_PATH" ...`. This is separate from
+collected fail2ban logs; the live command only works when the host socket is
+intentionally mounted into the MCP container.
+
+- `FAIL2BAN_SOCKET_DIR_HOST`
+  Host path to the fail2ban Unix socket directory when using the optional fail2ban Compose
+  override.
+  Default: `/var/run/fail2ban`
+
 The Compose files run PostgreSQL through the official `postgres:18` image.
 Database files are stored in the named `postgres-data` Docker volume, so data
 persists when containers are recreated.
@@ -180,6 +203,10 @@ Start the local database and app together:
 ```bash
 doppler run -- docker compose up --build
 ```
+
+The local `app` service applies committed Aerich migrations with
+`uv run migrate` before starting the FastMCP server. If migrations fail, the
+app exits instead of starting against a stale schema.
 
 Start only the local database:
 
@@ -230,7 +257,7 @@ port `127.0.0.1:${DATABASE_PORT_HOST:-5437}` when `DATABASE_HOST` and
 
 ```bash
 docker compose up -d db
-uv run makemigrations --name initial
+uv run makemigrations initial
 uv run migrate
 ```
 
@@ -240,11 +267,20 @@ files. On the first run against a fresh database, it falls back to
 `uv run migrate` delegates to `aerich upgrade` and applies already generated
 migration files.
 
-For later model changes:
+For later model changes, pass a short custom name as the positional suffix:
 
 ```bash
-uv run makemigrations --name <short_name>
+uv run makemigrations remove_agent_call_redundant_fields
 uv run migrate
+```
+
+The wrapper slugifies the suffix, passes it to Aerich as `--name`, and
+normalizes Aerich timestamp filenames into the project style, for example
+`003_rename_agent_call_client_to_caller.py`. Aerich's native name option still
+works too:
+
+```bash
+uv run makemigrations --name "rename agent call client to caller"
 ```
 
 Review generated files under `migrations/` before committing them. Production
@@ -340,7 +376,7 @@ operator-controlled run.
 The server now uses FastMCP's HTTP auth layer, so tool visibility and tool
 calls are evaluated per bearer token, not once at process startup.
 
-Tool calls also pass through the `authentications` database allowlist. FastMCP
+Tool calls also pass through the `mcp_callers` database allowlist. FastMCP
 still validates the JWT signature, issuer, audience, expiration, and scopes
 first. After that, middleware checks for one manual row matching:
 
@@ -351,12 +387,15 @@ first. After that, middleware checks for one manual row matching:
 The row also stores `allowed_projects` as a JSON list of project names. That
 database list becomes the effective project allowlist for the tool call, so a
 valid JWT is not enough by itself; the caller must also have a matching
-`authentications` row for the requested workspace and projects.
+`mcp_callers` row for the requested workspace and projects.
+
+The concrete caller authorization model is resolved through `CALLER_AUTH`, which
+defaults to `database.models.McpCaller`.
 
 Example manual row:
 
 ```sql
-INSERT INTO authentications (
+INSERT INTO mcp_callers (
     client_id,
     client_type,
     workspace,
@@ -370,25 +409,25 @@ VALUES (
 );
 ```
 
-- `JWT_ALGORITHM`
-  Signing algorithm for local example JWTs.
-  Default: `HS256`
+The local JWT signing algorithm is fixed in [src/settings.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/settings.py:1)
+as `HS256`.
 
 - `JWT_SHARED_SECRET`
   Shared secret used to sign and verify local example JWTs.
   Default: `change-me-local-dev-secret`
 
 - `JWT_ISSUER`
-  Required `iss` claim for local example JWTs.
+  Required `iss` claim for local example JWTs. This is not a secret; it is a
+  public token issuer identifier that the server validates.
   Default: `mcp-log-server-dev`
 
 - `JWT_AUDIENCE`
-  Required `aud` claim for local example JWTs.
+  Required `aud` claim for local example JWTs. This is not a secret; it is the
+  public audience identifier expected by the server.
   Default: `mcp-log-server`
 
-- `JWT_EXPIRATION_SECONDS`
-  Lifetime of locally generated example JWTs.
-  Default: `86400`
+The local example JWT lifetime is fixed in [src/settings.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/settings.py:1)
+as `86400` seconds.
 
 Generate example JWTs locally:
 
@@ -458,6 +497,8 @@ Current example JWT capabilities:
   - `list_projects`
   - `get_mcp_service_status`
   - `get_mcp_health_check`
+  - `inspect_containers_health`
+  - `inspect_container_detail`
   - `read_container_file`
   - `list_container_directory`
   - `close_agent_session`
@@ -486,16 +527,7 @@ own HTTP server logging.
   - `WARNING`
   - `ERROR`
 
-- `LOG_FORMAT`
-  Controls the project log output format.
-  Default: `text`
-
-  Supported values:
-
-  - `text`
-    human-readable development logs
-  - `json`
-    one JSON object per line for easier ingestion by log pipelines later
+The project log output format is fixed to JSON in [src/settings.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/settings.py:1), so every project log line is emitted as one JSON object.
 
 Current project logs include:
 
@@ -509,12 +541,12 @@ Current project logs include:
 Example:
 
 ```bash
-LOG_LEVEL=DEBUG LOG_FORMAT=text doppler run -- docker compose up --build
+LOG_LEVEL=DEBUG doppler run -- docker compose up --build
 ```
 
 ### MCP Configuration
 
-These variables control how the local FastMCP HTTP server starts.
+These settings control how the local FastMCP HTTP server starts.
 
 Manifests and logs are intentionally separate:
 
@@ -524,17 +556,24 @@ Manifests and logs are intentionally separate:
 - file-backed manifest source targets must be absolute paths, so each source
   declares exactly where its log file lives
 
+- `MCP_HOST`
+  Host address the FastMCP service binds inside the running process.
+  Default: `127.0.0.1`
+
+  Docker Compose injects `0.0.0.0` inside app containers so the service is
+  reachable through the loopback-only host port binding.
+
+- `MCP_PORT`
+  Port the FastMCP service binds inside the running process.
+  Default: `8001`
+
 - `MCP_PATH`
   HTTP path where the FastMCP endpoint is exposed.
   Default: `/mcp`
 
-  If this is set to `/mcp`, MCP JSON-RPC requests go to:
+  MCP JSON-RPC requests go to:
 
   - `http://127.0.0.1:8001/mcp`
-
-  If changed to `/api/mcp`, the endpoint becomes:
-
-  - `http://127.0.0.1:8001/api/mcp`
 
 - `MCP_STATELESS_HTTP`
   Enables stateless HTTP mode for the FastMCP transport.
@@ -561,9 +600,10 @@ Run the service through Docker Compose with Doppler:
 doppler run -- docker compose up --build
 ```
 
-The `app` service mounts `./src` into the container and reloads automatically
-when files under `src/` change, including copied workflow assets such as
-prompts, skills, schemas, and examples.
+The local `app` service applies committed migrations on startup, then mounts
+`./src` into the container and reloads automatically when files under `src/`
+change, including copied workflow assets such as prompts, skills, schemas, and
+examples.
 
 The local Compose stack also starts a `db` service and stores its data in the
 named `postgres-data` volume.
@@ -573,6 +613,29 @@ the dedicated production compose file:
 
 ```bash
 doppler run -- docker compose -f docker-compose.prod.yml up --build -d
+```
+
+The production deploy script includes the fail2ban socket override by default,
+so the normal VPS path is still:
+
+```bash
+doppler run -- TAG=v1.2.3 infra/scripts/release/deploy.sh
+```
+
+If the VPS should deploy without live fail2ban socket access, disable the
+override explicitly:
+
+```bash
+doppler run -- ENABLE_FAIL2BAN_SOCKET=false TAG=v1.2.3 infra/scripts/release/deploy.sh
+```
+
+Then verify from inside the app container:
+
+```bash
+docker compose \
+  -f docker-compose.prod.yml \
+  -f docker-compose.fail2ban.yml \
+  exec app fail2ban-client -s /var/run/fail2ban/fail2ban.sock status
 ```
 
 Production compose differences:
@@ -696,6 +759,8 @@ What it returns right now for the codex token:
 - `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
+- `inspect_containers_health`
+- `inspect_container_detail`
 - `read_container_file`
 - `list_container_directory`
 

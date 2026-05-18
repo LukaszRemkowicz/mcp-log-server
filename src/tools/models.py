@@ -92,13 +92,11 @@ class LogSnapshotFilePayload(BaseModel):
 
 
 class LogSnapshotMetadata(BaseModel):
-    """Represent the metadata JSON stored beside one persisted log snapshot.
+    """Represent resolved metadata for one persisted log snapshot.
 
-    This model is used for the on-disk `snapshot_metadata.json` file. It is the
-    durable bridge between:
-
-    - the original `collect_logs` call
-    - later follow-up calls such as listing, reading, or grepping the snapshot
+    Runtime snapshot lookup is DB-backed. This model is the in-memory contract
+    passed from snapshot lookup to follow-up tools such as listing, reading,
+    grepping, filtering, and grouped analysis.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -235,6 +233,8 @@ class ReadLogSnapshotFilePayload(BaseModel):
     next_step_tips: list[str]
     truncated: bool
     content: str
+    output_file: str
+    returned_bytes: int
     file: LogSnapshotFilePayload
 
 
@@ -324,6 +324,95 @@ class GroupedErrorPayload(BaseModel):
     last_timestamp: str | None
     first_seen: SnapshotLineReferencePayload
     last_seen: SnapshotLineReferencePayload
+
+
+class ProxyStatusClassCountPayload(BaseModel):
+    """Count HTTP proxy lines by status class."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status_class: Literal["1xx", "2xx", "3xx", "4xx", "5xx"]
+    count: int
+
+
+class ProxyRouteSignalPayload(BaseModel):
+    """Describe one grouped proxy route/status signal."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str | None
+    host: str | None
+    method: str | None
+    status_code: int
+    status_class: Literal["1xx", "2xx", "3xx", "4xx", "5xx"]
+    count: int
+    source_keys: list[str]
+    is_upstream_error: bool
+    first_seen: SnapshotLineReferencePayload
+    last_seen: SnapshotLineReferencePayload
+
+
+class Fail2banServiceStatusPayload(BaseModel):
+    """Structured output from `fail2ban-client status`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    inspection_status: Literal["ok", "error", "unavailable"]
+    jail_count: int | None
+    jails: list[str]
+    error: str | None
+
+
+class Fail2banJailStatusPayload(BaseModel):
+    """Structured output from one allowlisted fail2ban jail status command."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    jail: str
+    inspection_status: Literal["ok", "error", "unavailable"]
+    currently_failed: int | None
+    total_failed: int | None
+    currently_banned: int | None
+    total_banned: int | None
+    banned_ips: list[str]
+    error: str | None
+
+
+class InspectLiveFail2banActivityPayload(BaseModel):
+    """TODO(post-MVP): response for live fail2ban runtime diagnostics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_live_fail2ban_activity"]
+    project_name: str
+    inspection_status: Literal["ok", "error", "unavailable"]
+    error_code: str | None
+    message: str | None
+    retry_tips: list[str]
+    service: Fail2banServiceStatusPayload
+    jails: list[Fail2banJailStatusPayload]
+
+
+class InspectProxyActivityPayload(BaseModel):
+    """Structured response returned by `inspect_proxy_activity`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_proxy_activity"]
+    requested_project_name: str | None
+    project_name: str
+    workspace: SnapshotWorkspace
+    session_id: str | None
+    snapshot_dir: str
+    searched_source_keys: list[str]
+    total_line_count: int
+    parsed_proxy_line_count: int
+    http_status_line_count: int
+    upstream_error_count: int
+    max_groups: int
+    truncated: bool
+    status_class_counts: list[ProxyStatusClassCountPayload]
+    top_routes: list[ProxyRouteSignalPayload]
 
 
 class GroupErrorsPayload(BaseModel):
@@ -429,6 +518,9 @@ class FilteredViewSourceSummaryPayload(BaseModel):
     top_exclusion_reasons: list[str]
 
 
+FilteredViewMode = Literal["head", "errors", "sample"]
+
+
 class CreateFilteredViewPayload(BaseModel):
     """Structured response returned by `create_filtered_view`."""
 
@@ -441,6 +533,7 @@ class CreateFilteredViewPayload(BaseModel):
     session_id: str | None
     snapshot_dir: str
     searched_source_keys: list[str]
+    view_mode: FilteredViewMode
     max_lines: int
     total_line_count: int
     kept_line_count: int
@@ -475,6 +568,105 @@ class ContainerPathMetadataPayload(BaseModel):
         return getattr(self, key)
 
 
+class ContainerHealthPayload(BaseModel):
+    """One container health item returned by container diagnostics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_key: str
+    inspection_status: Literal["ok", "error"]
+    inspection_error: str | None
+    container_name: str
+    container_id: str
+    image: str | None
+    docker_status: str | None
+    health_status: str | None
+    running: bool
+    restarting: bool
+    paused: bool
+    dead: bool
+    exit_code: int | None
+    error: str | None
+    restart_count: int | None
+    started_at: str | None
+    finished_at: str | None
+
+
+class InspectContainersHealthPayload(BaseModel):
+    """Structured project-level success payload returned by `inspect_containers_health`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_containers_health"]
+    project_name: str
+    resolved_source_keys: list[str]
+    containers: list[ContainerHealthPayload]
+
+
+class ContainerDetailMountPayload(BaseModel):
+    """Curated mount metadata returned by `inspect_container_detail`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str | None
+    destination: str | None
+    mode: str | None
+    rw: bool | None
+
+
+class ContainerDetailNetworkPayload(BaseModel):
+    """Curated network metadata returned by `inspect_container_detail`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    ip_address: str | None
+    aliases: list[str]
+
+
+class ContainerDetailPortPayload(BaseModel):
+    """Curated port metadata returned by `inspect_container_detail`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    private_port: str
+    host_ip: str | None
+    host_port: str | None
+
+
+class ContainerRestartPolicyPayload(BaseModel):
+    """Curated restart-policy metadata returned by `inspect_container_detail`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None
+    maximum_retry_count: int | None
+
+
+class InspectContainerDetailPayload(BaseModel):
+    """Structured success payload returned by `inspect_container_detail`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_container_detail"]
+    project_name: str
+    source_key: str
+    container: ContainerHealthPayload
+    created_at: str | None
+    env_var_names: list[str]
+    label_keys: list[str]
+    compose_labels: dict[str, str]
+    restart_policy: ContainerRestartPolicyPayload
+    command: list[str]
+    entrypoint: list[str]
+    working_dir: str | None
+    user: str | None
+    ports: list[ContainerDetailPortPayload]
+    mounts: list[ContainerDetailMountPayload]
+    networks: list[ContainerDetailNetworkPayload]
+    health_log: list[dict[str, object]]
+
+
 class ReadContainerFilePayload(BaseModel):
     """Structured success payload returned by `read_container_file`.
 
@@ -498,6 +690,24 @@ class ReadContainerFilePayload(BaseModel):
     max_bytes: int
     truncated: bool
     content: str
+    file: ContainerPathMetadataPayload
+
+
+class StatContainerPathPayload(BaseModel):
+    """Structured success payload returned by `stat_container_path`.
+
+    It returns metadata for an approved file or directory without reading file
+    contents or recursively listing children.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["stat_container_path"]
+    requested_project_name: str | None
+    project_name: str
+    source_key: str
+    container_name: str
+    path: str
     file: ContainerPathMetadataPayload
 
 

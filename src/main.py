@@ -23,14 +23,14 @@ def main() -> None:
     app: FastMCP = create_application(auth_provider=auth_provider)
     logger.info(
         "starting FastMCP HTTP service on %s:%s%s",
-        settings.HOST,
-        settings.PORT,
+        settings.MCP_HOST,
+        settings.MCP_PORT,
         settings.MCP_PATH,
     )
     app.run(
         transport="http",
-        host=settings.HOST,
-        port=settings.PORT,
+        host=settings.MCP_HOST,
+        port=settings.MCP_PORT,
         log_level=settings.LOG_LEVEL,
         path=settings.MCP_PATH,
         stateless_http=settings.MCP_STATELESS_HTTP,

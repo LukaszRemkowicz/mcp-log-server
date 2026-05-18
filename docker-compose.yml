@@ -44,15 +44,22 @@ services:
       DATABASE_NAME: ${DATABASE_NAME:-mcp_log_server}
       DATABASE_USER: ${DATABASE_USER:-mcp_log_server}
       DATABASE_PASSWORD: ${DATABASE_PASSWORD:-mcp-log-server-local-password}
-      HOST: 0.0.0.0
+      FAIL2BAN_SOCKET_PATH: ${FAIL2BAN_SOCKET_PATH:-/var/run/fail2ban/fail2ban.sock}
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: ${MCP_PORT:-8001}
       PYTHONPATH: /app/src
       # Used by `uv run commands ...` to find this Compose app service.
       # Must match the Compose project name and the `services.app` key.
       COMMANDS_COMPOSE_PROJECT_NAME: mcp-log-server
       COMMANDS_APP_SERVICE: app
     ports:
-      - "127.0.0.1:${MCP_PORT_HOST:-8001}:8001"
-    command: ["uv", "run", "watchfiles", "--filter", "all", "python -m main", "/app/src"]
+      - "127.0.0.1:${MCP_PORT_HOST:-8001}:${MCP_PORT:-8001}"
+    command:
+      [
+        "sh",
+        "-lc",
+        "uv run migrate && uv run watchfiles --filter all 'python -m main' /app/src",
+      ]
 
   test:
     build:
@@ -73,7 +80,8 @@ services:
       DATABASE_NAME: mcp_log_server_test
       DATABASE_USER: mcp_log_server
       DATABASE_PASSWORD: mcp-log-server-local-password
-      HOST: 0.0.0.0
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: 8001
       PYTHONPATH: /app/src
       # Used by command tests when they execute through the Compose test service.
       # Must match the Compose project name and the `services.app` key.

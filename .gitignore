@@ -215,5 +215,6 @@ __marimo__/
 .safety-policy.yml
 /logs/
 /docker-logs/
+src/manifests/projects/
 
 infra/docs/analysis/

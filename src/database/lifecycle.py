@@ -9,12 +9,14 @@ from typing import Any
 from tortoise import Tortoise
 
 from database.config import TORTOISE_ORM
+from database.signals import register_database_signals
 
 
 async def initialize_database(config: dict[str, Any]) -> None:
     """Initialize Tortoise ORM for the configured database."""
 
     await Tortoise.init(config=config)
+    register_database_signals()
 
 
 async def close_database() -> None:

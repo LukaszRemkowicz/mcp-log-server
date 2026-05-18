@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from core.types import LogWorkspace
 
@@ -18,21 +18,26 @@ class AuthenticatedMcpCaller:
     client_type: str
     workspace: LogWorkspace
     allowed_projects: frozenset[str]
+    caller_id: int
 
 
-def get_request_mcp_caller(request: Any | None = None) -> AuthenticatedMcpCaller | None:
+@dataclass(frozen=True, slots=True)
+class AuthenticatedAgentSession:
+    """Database-backed agent session resolved during one MCP request."""
+
+    id: int
+    name: str
+    caller_id: int
+
+
+def get_request_mcp_caller(request: Any | None = None) -> AuthenticatedMcpCaller:
     """Return the DB-backed caller stored on the active FastMCP request."""
 
     if request is None:
-        try:
-            from fastmcp.server.dependencies import get_http_request
+        from fastmcp.server.dependencies import get_http_request
 
-            request = get_http_request()
-        except RuntimeError:
-            return None
-    state = getattr(request, "state", None)
-    caller = getattr(state, MCP_CALLER_REQUEST_STATE_ATTR, None)
-    return caller if isinstance(caller, AuthenticatedMcpCaller) else None
+        request = get_http_request()
+    return cast(AuthenticatedMcpCaller, request.state.caller)
 
 
 def set_request_mcp_caller(

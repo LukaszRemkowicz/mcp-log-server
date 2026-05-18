@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import logging
-from typing import cast
 
 from fastmcp.dependencies import CurrentAccessToken
 from fastmcp.server.auth import AccessToken
 
-from auth.mcp_caller_context import AuthenticatedMcpCaller, get_request_mcp_caller
+from auth.mcp_caller_context import get_request_mcp_caller
 from auth.scopes import MCP_HEALTH_READ_SCOPE, MCP_STATUS_READ_SCOPE
 from conf import settings
 from decorators import workflow_discoverable_tool
@@ -45,7 +44,7 @@ def get_mcp_service_status(
         },
     )
     claims = access_token.claims if access_token is not None else {}
-    caller = cast(AuthenticatedMcpCaller, get_request_mcp_caller())
+    caller = get_request_mcp_caller()
     payload: JSONObject = {
         "name": "mcp-log-server",
         "status": "ok",
@@ -53,8 +52,8 @@ def get_mcp_service_status(
         "client_id": caller.client_id,
         "client_type": caller.client_type,
         "environment": settings.ENVIRONMENT,
-        "host": settings.HOST,
-        "port": settings.PORT,
+        "host": settings.MCP_HOST,
+        "port": settings.MCP_PORT,
         "log_level": settings.LOG_LEVEL,
     }
     logger.info(

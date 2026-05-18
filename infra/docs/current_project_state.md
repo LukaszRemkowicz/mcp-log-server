@@ -122,10 +122,14 @@ Currently implemented tools:
 - `create_filtered_view`
 - `group_errors`
 - `build_incident_bundle`
+- `inspect_proxy_activity`
 - `suggest_followup_window`
 - `list_projects`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
+- `inspect_containers_health`
+- `inspect_container_detail`
+- `stat_container_path`
 - `read_container_file`
 - `list_container_directory`
 
@@ -217,10 +221,12 @@ Current implemented shape:
 
 - `JWTVerifier` validates incoming bearer tokens
 - tool/resource visibility is enforced with per-component `auth=` checks
-- tool calls require one manual `authentications` database row matching
+- tool calls require one manual `mcp_callers` database row matching
   `client_id`, `client_type`, and `workspace`
-- `authentications.allowed_projects` is a JSON list and becomes the effective
+- `mcp_callers.allowed_projects` is a JSON list and becomes the effective
   project allowlist for the tool call
+- the concrete caller model is resolved from `MCP_CALLER_MODEL`, currently
+  `database.models.McpCaller`
 - local development uses example JWTs signed with the local shared secret
 
 This is a development-ready JWT flow, not a final Keycloak production rollout.
@@ -244,7 +250,7 @@ It is not a prompt and not a workflow payload.
 Characteristics:
 
 - bind-mounts `./src`
-- uses `watchfiles`
+- applies committed migrations with `uv run migrate`, then uses `watchfiles`
 - includes `app`, `db`, and `tests` services
 - uses the official `postgres:18` image for the `db` service
 - persists local database data in the named `postgres-data` Docker volume

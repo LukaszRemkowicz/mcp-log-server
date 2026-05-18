@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
-from uuid import UUID, uuid4
 
 from docker.errors import APIError, DockerException
 from pydantic import BaseModel
@@ -18,11 +17,13 @@ import docker
 from conf import settings
 from core.types import LogWorkspace
 from database.schemas import (
+    AgentSessionOut,
     CollectLogsCreate,
     CollectLogsOut,
     CollectLogsSourceCreate,
     CollectLogsWithSourcesOut,
 )
+from database.services.agent_sessions import AgentSessionService as AgentSessionDBService
 from database.services.collect_logs import CollectLogsService as CollectLogsDBService
 from database.services.collect_logs import CollectLogsSourceService as CollectLogsSourceDBService
 from exception import InvalidTimeFilterError, MissingSessionIdError
@@ -35,6 +36,7 @@ from tools.models import (
 )
 
 from .log_snapshots import LogSnapshotService
+from .session_ids import SESSION_ID_MAX_LENGTH, generate_session_id
 
 if TYPE_CHECKING:
     from docker.client import DockerClient  # type: ignore[import-not-found]
@@ -118,12 +120,14 @@ class LogCollectionService:
         *,
         collect_logs_db_service: CollectLogsDBService | None = None,
         collect_logs_source_db_service: CollectLogsSourceDBService | None = None,
+        agent_session_db_service: AgentSessionDBService | None = None,
     ) -> None:
         self.snapshot_service = LogSnapshotService()
         self.collect_logs_db_service = collect_logs_db_service or CollectLogsDBService()
         self.collect_logs_source_db_service = (
             collect_logs_source_db_service or CollectLogsSourceDBService()
         )
+        self.agent_session_db_service = agent_session_db_service or AgentSessionDBService()
 
     @staticmethod
     def normalize_params(
@@ -138,14 +142,15 @@ class LogCollectionService:
         )
 
     @staticmethod
-    def resolve_session_id(session_id: object) -> UUID:
+    def resolve_session_id(session_id: object) -> str:
         """Return the effective collect_logs session id for the request."""
 
-        if isinstance(session_id, UUID):
-            return session_id
         if isinstance(session_id, str) and session_id.strip():
-            return UUID(session_id.strip())
-        return uuid4()
+            normalized_session_id = session_id.strip()
+            if len(normalized_session_id) > SESSION_ID_MAX_LENGTH:
+                raise ValueError(f"session_id must be {SESSION_ID_MAX_LENGTH} characters or fewer.")
+            return normalized_session_id
+        return generate_session_id()
 
     async def build_logs(
         self,
@@ -182,16 +187,20 @@ class LogCollectionService:
         except InvalidTimeFilterError as error:
             return self._build_invalid_time_filter_error(error)
 
+        agent_session = await self.resolve_agent_session(session_id)
+        if isinstance(agent_session, BuildLogsError):
+            return agent_session
+
         if workspace == LogWorkspace.SESSION:
             return await self.build_session_logs(
                 manifest=manifest,
                 sources=sources,
                 missing_source_keys=missing_source_keys,
                 source_keys=source_keys,
-                session_id=session_id,
                 since=since,
                 until=until,
                 time_filters=time_filters,
+                agent_session=agent_session,
             )
         if workspace == LogWorkspace.WORKFLOW:
             return await self.build_workflow_logs(
@@ -199,12 +208,41 @@ class LogCollectionService:
                 sources=sources,
                 missing_source_keys=missing_source_keys,
                 source_keys=source_keys,
-                session_id=session_id,
                 since=since,
                 until=until,
                 time_filters=time_filters,
+                agent_session=agent_session,
             )
         raise RuntimeError(f"Unsupported collect_logs workspace: {workspace}")
+
+    async def resolve_agent_session(
+        self,
+        session_id: str | None,
+    ) -> AgentSessionOut | BuildLogsError:
+        """Load the DB-backed session row from the agent-facing session id."""
+
+        if not session_id or not session_id.strip():
+            return BuildLogsError(
+                message=(
+                    "Session is unavailable because MCP did not provide the required session_id."
+                ),
+                error_code="missing_session_id",
+                retry_tips=[
+                    "This is a system error, not something the agent can fix with tool arguments.",
+                    "Ask administrator to check MCP middleware and session propagation.",
+                ],
+            )
+        agent_session = await self.agent_session_db_service.get_by_name(session_id.strip())
+        if agent_session is None:
+            return BuildLogsError(
+                message="Session is unavailable because its DB row was not found.",
+                error_code="session_not_found",
+                retry_tips=[
+                    "This is a system error, not something the agent can fix with tool arguments.",
+                    "Ask administrator to check MCP middleware and session persistence.",
+                ],
+            )
+        return agent_session
 
     async def build_session_logs(
         self,
@@ -213,21 +251,20 @@ class LogCollectionService:
         sources: list[SourceDefinition],
         missing_source_keys: list[str],
         source_keys: list[str],
-        session_id: str | None,
         since: str | None,
         until: str | None,
         time_filters: DockerTimeFilters,
+        agent_session: AgentSessionOut,
     ) -> ProjectCollectLogsPayload | BuildLogsError:
         """Collect one session snapshot and persist its DB metadata."""
 
         project_name = manifest.project_key
         warnings, retry_tips = self._build_feedback(missing_source_keys=missing_source_keys)
-        normalized_session_id: str | None = session_id.strip() if session_id is not None else None
         try:
             snapshot_dir = self.snapshot_service.prepare_workspace(
                 project_name=project_name,
                 workspace=LogWorkspace.SESSION,
-                session_id=normalized_session_id,
+                session_id=agent_session.name,
                 snapshot_dir=None,
             )
         except MissingSessionIdError:
@@ -254,10 +291,8 @@ class LogCollectionService:
         requested_source_keys = [*source_keys, *missing_source_keys]
         collect_logs_obj = await self.save_logs_to_db(
             collect_logs_payload=CollectLogsCreate(
-                session_id=(
-                    UUID(normalized_session_id) if normalized_session_id is not None else None
-                ),
                 workspace=LogWorkspace.SESSION,
+                session_id=agent_session.id,
                 project_name=project_name,
                 collected_at=datetime.now(UTC),
                 snapshot_dir=snapshot_dir.as_posix(),
@@ -281,19 +316,17 @@ class LogCollectionService:
         sources: list[SourceDefinition],
         missing_source_keys: list[str],
         source_keys: list[str],
-        session_id: str | None,
         since: str | None,
         until: str | None,
         time_filters: DockerTimeFilters,
+        agent_session: AgentSessionOut,
     ) -> ProjectCollectLogsPayload | BuildLogsError:
         """Collect the latest workflow snapshot and persist its DB metadata."""
 
         project_name = manifest.project_key
         warnings, retry_tips = self._build_feedback(missing_source_keys=missing_source_keys)
-        normalized_session_id: str | None = session_id.strip() if session_id is not None else None
 
         workflow_collect_logs_obj = await self.create_workflow_collect_logs_obj(
-            session_id=normalized_session_id,
             project_name=project_name,
             source_keys=source_keys,
             missing_source_keys=missing_source_keys,
@@ -301,11 +334,12 @@ class LogCollectionService:
             until=until,
             warnings=warnings,
             retry_tips=retry_tips,
+            agent_session=agent_session,
         )
         snapshot_dir = self.snapshot_service.prepare_workspace(
             project_name=project_name,
             workspace=LogWorkspace.WORKFLOW,
-            session_id=normalized_session_id,
+            session_id=None,
             snapshot_dir=workflow_collect_logs_obj.snapshot_dir,
         )
         collected_results = self.collect_sources(
@@ -396,7 +430,6 @@ class LogCollectionService:
     async def create_workflow_collect_logs_obj(
         self,
         *,
-        session_id: str | None,
         project_name: str,
         source_keys: list[str],
         missing_source_keys: list[str],
@@ -404,14 +437,15 @@ class LogCollectionService:
         until: str | None,
         warnings: list[str],
         retry_tips: list[str],
+        agent_session: AgentSessionOut,
     ) -> CollectLogsOut:
         """Archive previous latest and create the DB object that owns workflow snapshot_dir."""
 
         await self.archive_latest_for_project(project_name)
         return await self.collect_logs_db_service.create(
             CollectLogsCreate(
-                session_id=UUID(session_id) if session_id is not None else None,
                 workspace=LogWorkspace.WORKFLOW,
+                session_id=agent_session.id,
                 project_name=project_name,
                 collected_at=datetime.now(UTC),
                 snapshot_dir=self.snapshot_service.storage.workflow_latest_dir(

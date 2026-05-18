@@ -20,19 +20,25 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
+from database.fields import FileReference
 from database.schemas import CollectLogsSourceOut
 from services.log_snapshots import LogSnapshotService
 from tools.models import (
     GroupedErrorPayload,
     IncidentBundlePayload,
     IncidentSourceSummaryPayload,
+    InspectProxyActivityPayload,
     LogSnapshotMetadata,
+    ProxyRouteSignalPayload,
+    ProxyStatusClassCountPayload,
     SnapshotLineReferencePayload,
 )
 
 MAX_ANALYSIS_LINE_BYTES = 2000
+StatusClass = Literal["1xx", "2xx", "3xx", "4xx", "5xx"]
+STATUS_CLASSES: tuple[StatusClass, ...] = ("1xx", "2xx", "3xx", "4xx", "5xx")
 
 _UUID_PATTERN = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
@@ -41,6 +47,7 @@ _LONG_HEX_PATTERN = re.compile(r"\b[0-9a-fA-F]{12,}\b")
 _LONG_NUMBER_PATTERN = re.compile(r"\b\d{2,}\b")
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 _REQUEST_LINE_PATTERN = re.compile(r"^[A-Z]+\s+(\S+)\s+HTTP/\d(?:\.\d)?$")
+_REQUEST_METHOD_PATH_PATTERN = re.compile(r"^(?P<method>[A-Z]+)\s+(?P<path>\S+)")
 _DOCKER_JSON_LINE_PATTERN = re.compile(r"^\S+\s+({.*})\s*$")
 
 
@@ -59,7 +66,9 @@ class StructuredLogField(StrEnum):
     MSG = "msg"
     STATUS_CODE = "status_code"
     STATUS = "status"
+    DOWNSTREAM_STATUS = "DownstreamStatus"
     REQUEST_PATH = "request_path"
+    TRAEFIK_REQUEST_PATH = "RequestPath"
     PATH = "path"
     REQUEST = "request"
     TIMESTAMP = "timestamp"
@@ -118,7 +127,7 @@ def _extract_request_path(value: str | None) -> str | None:
 
 
 def _snapshot_dir_from_metadata(metadata: LogSnapshotMetadata) -> str:
-    """Return the relative snapshot directory represented by metadata files."""
+    """Return the relative snapshot directory represented by snapshot metadata."""
 
     if not metadata.files:
         return ""
@@ -221,6 +230,75 @@ class ErrorGroupAccumulator:
         )
 
 
+@dataclass(slots=True)
+class ProxyLineEvent:
+    """One parsed proxy-like snapshot line before aggregation."""
+
+    source_key: str
+    output_file: str
+    line_number: int
+    line: str
+    line_truncated: bool
+    timestamp: str | None
+    status_code: int | None
+    status_class: StatusClass | None
+    host: str | None
+    method: str | None
+    path: str | None
+    client_ip: str | None
+    user_agent: str | None
+    upstream: str | None
+
+
+@dataclass(slots=True)
+class ProxyRouteAccumulator:
+    """Mutable route/status grouping state for proxy diagnostics."""
+
+    path: str | None
+    host: str | None
+    method: str | None
+    status_code: int
+    status_class: StatusClass
+    count: int = 0
+    source_keys: set[str] = field(default_factory=set)
+    first_seen: SnapshotLineReferencePayload | None = None
+    last_seen: SnapshotLineReferencePayload | None = None
+
+    def add(self, event: ProxyLineEvent) -> None:
+        """Merge one proxy event into this route/status group."""
+
+        self.count += 1
+        self.source_keys.add(event.source_key)
+        reference = SnapshotLineReferencePayload(
+            source_key=event.source_key,
+            output_file=event.output_file,
+            line_number=event.line_number,
+            line=event.line,
+            line_truncated=event.line_truncated,
+        )
+        if self.first_seen is None:
+            self.first_seen = reference
+        self.last_seen = reference
+
+    def to_payload(self) -> ProxyRouteSignalPayload:
+        """Convert accumulated state into the public proxy route payload."""
+
+        assert self.first_seen is not None
+        assert self.last_seen is not None
+        return ProxyRouteSignalPayload(
+            path=self.path,
+            host=self.host,
+            method=self.method,
+            status_code=self.status_code,
+            status_class=self.status_class,
+            count=self.count,
+            source_keys=sorted(self.source_keys),
+            is_upstream_error=self.status_code in {502, 503, 504},
+            first_seen=self.first_seen,
+            last_seen=self.last_seen,
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class GroupedSnapshotAnalysis:
     """Grouped-error analysis result before tool-specific response shaping.
@@ -238,6 +316,20 @@ class GroupedSnapshotAnalysis:
     matching_line_count: int
     searched_source_keys: list[str]
     total_group_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class ProxyActivityAnalysis:
+    """Aggregated proxy diagnostics before tool-specific response shaping."""
+
+    searched_source_keys: list[str]
+    total_line_count: int
+    parsed_proxy_line_count: int
+    http_status_line_count: int
+    upstream_error_count: int
+    status_class_counts: list[ProxyStatusClassCountPayload]
+    top_routes: list[ProxyRouteSignalPayload]
+    total_route_group_count: int
 
 
 class LogAnalysisService:
@@ -285,13 +377,13 @@ class LogAnalysisService:
         matching_line_count = 0
 
         for item in selected_files:
-            assert item.file is not None
+            file_ref = cast(FileReference, item.file)
             try:
-                with open(item.file.path, encoding="utf-8", errors="replace") as file:
+                with open(file_ref.path, encoding="utf-8", errors="replace") as file:
                     for line_number, raw_line in enumerate(file, start=1):
                         event = self._classify_line(
                             source_key=item.source_key,
-                            output_file=item.file.name,
+                            output_file=file_ref.name,
                             line_number=line_number,
                             raw_line=raw_line.rstrip("\n"),
                         )
@@ -391,6 +483,177 @@ class LogAnalysisService:
             suggested_next_steps=suggested_next_steps,
         )
 
+    def inspect_proxy_activity(
+        self,
+        metadata: LogSnapshotMetadata,
+        *,
+        sources: list[CollectLogsSourceOut],
+        requested_source_keys: list[str] | None,
+        max_groups: int,
+        requested_project_name: str | None,
+        project_name: str,
+    ) -> InspectProxyActivityPayload:
+        """Build deterministic ingress/proxy diagnostics from persisted snapshots."""
+
+        selected_sources = self._select_proxy_snapshot_files(
+            requested_source_keys,
+            sources=sources,
+        )
+        analysis = self._analyze_proxy_activity(
+            sources=selected_sources,
+            max_groups=max_groups,
+        )
+        return InspectProxyActivityPayload(
+            action="inspect_proxy_activity",
+            requested_project_name=requested_project_name,
+            project_name=project_name,
+            workspace=metadata.workspace,
+            session_id=metadata.session_id,
+            snapshot_dir=_snapshot_dir_from_metadata(metadata),
+            searched_source_keys=analysis.searched_source_keys,
+            total_line_count=analysis.total_line_count,
+            parsed_proxy_line_count=analysis.parsed_proxy_line_count,
+            http_status_line_count=analysis.http_status_line_count,
+            upstream_error_count=analysis.upstream_error_count,
+            max_groups=max_groups,
+            truncated=analysis.total_route_group_count > max_groups,
+            status_class_counts=analysis.status_class_counts,
+            top_routes=analysis.top_routes,
+        )
+
+    def _analyze_proxy_activity(
+        self,
+        *,
+        sources: list[CollectLogsSourceOut],
+        max_groups: int,
+    ) -> ProxyActivityAnalysis:
+        """Aggregate status classes and route/status clusters for proxy logs."""
+
+        route_groups: dict[
+            tuple[str | None, str | None, str | None, int],
+            ProxyRouteAccumulator,
+        ] = {}
+        route_group_overflowed = False
+        status_counts: dict[StatusClass, int] = defaultdict(int)
+        total_line_count = 0
+        parsed_proxy_line_count = 0
+        http_status_line_count = 0
+        upstream_error_count = 0
+
+        for item in sources:
+            file_ref = cast(FileReference, item.file)
+            try:
+                with open(file_ref.path, encoding="utf-8", errors="replace") as file:
+                    for line_number, raw_line in enumerate(file, start=1):
+                        total_line_count += 1
+                        line = raw_line.rstrip("\n")
+                        payload = self._parse_json_line(line)
+                        if payload is None:
+                            continue
+                        event = self._parse_proxy_line(
+                            source_key=item.source_key,
+                            output_file=file_ref.name,
+                            line_number=line_number,
+                            raw_line=line,
+                            payload=payload,
+                        )
+                        parsed_proxy_line_count += 1
+                        status_code = event.status_code
+                        status_class = event.status_class
+                        if status_code is None or status_class is None:
+                            continue
+                        http_status_line_count += 1
+                        status_counts[status_class] += 1
+                        if status_code in {502, 503, 504}:
+                            upstream_error_count += 1
+                        route_key = (
+                            event.host,
+                            event.method,
+                            event.path,
+                            status_code,
+                        )
+                        route_group = route_groups.get(route_key)
+                        if route_group is None:
+                            if len(route_groups) >= max_groups:
+                                route_group_overflowed = True
+                                continue
+                            route_group = ProxyRouteAccumulator(
+                                path=event.path,
+                                host=event.host,
+                                method=event.method,
+                                status_code=status_code,
+                                status_class=status_class,
+                            )
+                            route_groups[route_key] = route_group
+                        route_group.add(event)
+            except ValueError as error:
+                raise ValueError("Requested persisted source file reference is invalid.") from error
+            except OSError as error:
+                raise ValueError("Requested log snapshot file was not found on disk.") from error
+
+        sorted_routes = sorted(
+            (group.to_payload() for group in route_groups.values()),
+            key=lambda route: (
+                -route.count,
+                not route.is_upstream_error,
+                -route.status_code,
+                route.path or "",
+            ),
+        )
+        total_route_group_count = len(sorted_routes) + int(route_group_overflowed)
+        return ProxyActivityAnalysis(
+            searched_source_keys=[item.source_key for item in sources],
+            total_line_count=total_line_count,
+            parsed_proxy_line_count=parsed_proxy_line_count,
+            http_status_line_count=http_status_line_count,
+            upstream_error_count=upstream_error_count,
+            status_class_counts=[
+                ProxyStatusClassCountPayload(
+                    status_class=status_class,
+                    count=status_counts[status_class],
+                )
+                for status_class in STATUS_CLASSES
+                if status_counts[status_class] > 0
+            ],
+            top_routes=sorted_routes[:max_groups],
+            total_route_group_count=total_route_group_count,
+        )
+
+    @staticmethod
+    def _select_proxy_snapshot_files(
+        requested_source_keys: list[str] | None,
+        *,
+        sources: list[CollectLogsSourceOut],
+    ) -> list[CollectLogsSourceOut]:
+        """Validate requested source keys and return proxy sources for analysis."""
+
+        available_sources = [
+            source for source in sources if source.status == "collected" and source.file is not None
+        ]
+        if requested_source_keys:
+            available_source_keys = {item.source_key for item in available_sources}
+            unknown_source_keys = sorted(set(requested_source_keys) - available_source_keys)
+            if unknown_source_keys:
+                raise ValueError(
+                    "Requested log snapshot source_keys were not found: "
+                    + ", ".join(unknown_source_keys)
+                )
+            return [item for item in available_sources if item.source_key in requested_source_keys]
+        return [item for item in available_sources if LogAnalysisService._is_proxy_source(item)]
+
+    @staticmethod
+    def _is_proxy_source(source: CollectLogsSourceOut) -> bool:
+        """Return whether one collected source looks proxy/ingress-shaped."""
+
+        source_key = source.source_key.lower()
+        normalization_profile = (source.normalization_profile or "").lower()
+        return (
+            normalization_profile in {"proxy_access", "web_logs"}
+            or "proxy" in source_key
+            or "nginx" in source_key
+            or "traefik" in source_key
+        )
+
     @staticmethod
     def _select_snapshot_files(
         requested_source_keys: list[str] | None,
@@ -455,6 +718,114 @@ class LogAnalysisService:
             )
             for source_key in sorted(source_group_counts)
         ]
+
+    def _parse_proxy_line(
+        self,
+        *,
+        source_key: str,
+        output_file: str,
+        line_number: int,
+        raw_line: str,
+        payload: dict[str, Any],
+    ) -> ProxyLineEvent:
+        """Build one proxy event from an already parsed structured log payload."""
+
+        status_code = self._extract_status_code(payload)
+        method, path = self._extract_proxy_method_path(payload)
+        line, line_truncated = _truncate_line(raw_line)
+        return ProxyLineEvent(
+            source_key=source_key,
+            output_file=output_file,
+            line_number=line_number,
+            line=line,
+            line_truncated=line_truncated,
+            timestamp=self._extract_timestamp(payload),
+            status_code=status_code,
+            status_class=self._status_class(status_code),
+            host=self._extract_first_string(
+                payload,
+                "host",
+                "request_host",
+                "http_host",
+                "server_name",
+                "RequestHost",
+            ),
+            method=method,
+            path=path,
+            client_ip=self._extract_first_string(
+                payload,
+                "remote_addr",
+                "client_ip",
+                "ip",
+                "request_ip",
+                "ClientHost",
+            ),
+            user_agent=self._extract_first_string(
+                payload,
+                "user_agent",
+                "http_user_agent",
+                "request_user_agent",
+            ),
+            upstream=self._extract_first_string(
+                payload,
+                "upstream_addr",
+                "upstream",
+                "serviceName",
+                "routerName",
+                "ServiceName",
+                "RouterName",
+            ),
+        )
+
+    @staticmethod
+    def _extract_proxy_method_path(payload: dict[str, Any]) -> tuple[str | None, str | None]:
+        """Extract method/path from supported proxy request fields."""
+
+        request = payload.get(StructuredLogField.REQUEST)
+        if isinstance(request, str):
+            match = _REQUEST_METHOD_PATH_PATTERN.match(request.strip())
+            if match is not None:
+                return match.group("method"), match.group("path")
+        path = _extract_request_path(str(payload.get(StructuredLogField.REQUEST_PATH) or ""))
+        if path is None:
+            path = _extract_request_path(
+                str(payload.get(StructuredLogField.TRAEFIK_REQUEST_PATH) or "")
+            )
+        if path is None:
+            path = _extract_request_path(str(payload.get(StructuredLogField.PATH) or ""))
+        method = payload.get("method") or payload.get("request_method")
+        return str(method).upper() if method is not None else None, path
+
+    @staticmethod
+    def _extract_first_string(payload: dict[str, Any], *keys: str) -> str | None:
+        """Return the first non-empty string-ish payload value for ordered keys."""
+
+        for key in keys:
+            value = payload.get(key)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return None
+
+    @staticmethod
+    def _status_class(
+        status_code: int | None,
+    ) -> StatusClass | None:
+        """Return the HTTP status class for supported proxy status codes."""
+
+        if status_code is None or status_code < 100 or status_code > 599:
+            return None
+        if status_code < 200:
+            return "1xx"
+        if status_code < 300:
+            return "2xx"
+        if status_code < 400:
+            return "3xx"
+        if status_code < 500:
+            return "4xx"
+        return "5xx"
 
     @staticmethod
     def _severity_rank(severity: str) -> int:
@@ -650,8 +1021,10 @@ class LogAnalysisService:
     def _extract_status_code(payload: dict[str, Any]) -> int | None:
         """Extract one integer HTTP status code from supported structured fields."""
 
-        raw_value = payload.get(StructuredLogField.STATUS_CODE) or payload.get(
-            StructuredLogField.STATUS
+        raw_value = (
+            payload.get(StructuredLogField.STATUS_CODE)
+            or payload.get(StructuredLogField.STATUS)
+            or payload.get(StructuredLogField.DOWNSTREAM_STATUS)
         )
         if raw_value is None:
             return None

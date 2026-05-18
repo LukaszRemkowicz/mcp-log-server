@@ -7,14 +7,16 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from pydantic import BaseModel
 
+from database.fields import FileReference
 from database.schemas import CollectLogsSourceOut
 from services.log_snapshots import LogSnapshotService
 from tools.models import (
     CreateFilteredViewPayload,
+    FilteredViewMode,
     FilteredViewSourceSummaryPayload,
     LogSnapshotMetadata,
     SnapshotLineReferencePayload,
@@ -24,10 +26,24 @@ MAX_FILTERED_LINE_BYTES = 2000
 HTTP_NOT_MODIFIED_STATUS = 304
 _HEALTH_PATHS = {"/health", "/healthz", "/ping", "/ready", "/readyz", "/live", "/livez"}
 _DOCKER_JSON_LINE_PATTERN = re.compile(r"^\S+\s+({.*})\s*$")
+_COMBINED_LOG_STATUS_PATTERN = re.compile(r'"\S+\s+\S+\s+HTTP/[^"]+"\s+(\d{3})\b')
+_INCIDENT_KEYWORDS = (
+    "error",
+    "exception",
+    "traceback",
+    "failed",
+    "failure",
+    "critical",
+    "fatal",
+    "panic",
+    "banned",
+    "blocked",
+    "forbidden",
+)
 
 
 def _snapshot_dir_from_metadata(metadata: LogSnapshotMetadata) -> str:
-    """Return the relative snapshot directory represented by metadata files."""
+    """Return the relative snapshot directory represented by snapshot metadata."""
 
     if not metadata.files:
         return ""
@@ -113,6 +129,16 @@ class SourceFilteredSummary:
         self.exclusion_reasons = Counter()
 
 
+@dataclass(slots=True)
+class FilteredLineCandidates:
+    """Bounded candidate line storage for non-chronological filtered views."""
+
+    head_lines: list[SnapshotLineReferencePayload]
+    incident_lines: list[SnapshotLineReferencePayload]
+    regular_lines: list[SnapshotLineReferencePayload]
+    sample_lines_by_source: dict[str, list[SnapshotLineReferencePayload]]
+
+
 class CreateFilteredViewError(BaseModel):
     """Service-level error returned when a filtered view cannot be built."""
 
@@ -143,6 +169,7 @@ class LogFilteringService:
         max_lines: int,
         requested_project_name: str | None,
         project_name: str,
+        view_mode: FilteredViewMode,
         next_step_tips: list[str],
     ) -> CreateFilteredViewPayload | CreateFilteredViewError:
         """Create one deterministic cleaned view from persisted snapshot metadata.
@@ -183,7 +210,12 @@ class LogFilteringService:
             if source_keys is None or item.source_key in source_keys
         ]
         searched_source_keys = [item.source_key for item in selected_items]
-        cleaned_lines: list[SnapshotLineReferencePayload] = []
+        candidates = FilteredLineCandidates(
+            head_lines=[],
+            incident_lines=[],
+            regular_lines=[],
+            sample_lines_by_source={},
+        )
         source_summaries: dict[str, SourceFilteredSummary] = {}
         total_line_count = 0
         kept_line_count = 0
@@ -200,9 +232,9 @@ class LogFilteringService:
                 ),
             )
             summary = source_summaries.setdefault(item.source_key, SourceFilteredSummary(context))
-            assert item.file is not None
+            file_ref = cast(FileReference, item.file)
             try:
-                with open(item.file.path, encoding="utf-8", errors="replace") as file:
+                with open(file_ref.path, encoding="utf-8", errors="replace") as file:
                     for line_number, raw_line in enumerate(file, start=1):
                         line = raw_line.rstrip("\n")
                         total_line_count += 1
@@ -212,16 +244,21 @@ class LogFilteringService:
                         if decision.keep:
                             kept_line_count += 1
                             summary.kept_line_count += 1
-                            if len(cleaned_lines) < max_lines:
-                                cleaned_lines.append(
-                                    SnapshotLineReferencePayload(
-                                        source_key=item.source_key,
-                                        output_file=item.file.name,
-                                        line_number=line_number,
-                                        line=truncated_line,
-                                        line_truncated=line_truncated,
-                                    )
-                                )
+                            line_reference = SnapshotLineReferencePayload(
+                                source_key=item.source_key,
+                                output_file=file_ref.name,
+                                line_number=line_number,
+                                line=truncated_line,
+                                line_truncated=line_truncated,
+                            )
+                            self._store_filtered_line_candidate(
+                                candidates=candidates,
+                                source_key=item.source_key,
+                                line=line,
+                                line_reference=line_reference,
+                                max_lines=max_lines,
+                                view_mode=view_mode,
+                            )
                         else:
                             excluded_line_count += 1
                             summary.excluded_line_count += 1
@@ -244,6 +281,12 @@ class LogFilteringService:
                     ],
                 )
 
+        cleaned_lines = self._select_filtered_lines(
+            candidates=candidates,
+            selected_source_keys=searched_source_keys,
+            max_lines=max_lines,
+            view_mode=view_mode,
+        )
         payload_source_summaries = [
             FilteredViewSourceSummaryPayload(
                 source_key=source_key,
@@ -266,6 +309,7 @@ class LogFilteringService:
             session_id=metadata.session_id,
             snapshot_dir=_snapshot_dir_from_metadata(metadata),
             searched_source_keys=searched_source_keys,
+            view_mode=view_mode,
             max_lines=max_lines,
             total_line_count=total_line_count,
             kept_line_count=kept_line_count,
@@ -277,6 +321,67 @@ class LogFilteringService:
             source_summaries=payload_source_summaries,
         )
 
+    def _store_filtered_line_candidate(
+        self,
+        *,
+        candidates: FilteredLineCandidates,
+        source_key: str,
+        line: str,
+        line_reference: SnapshotLineReferencePayload,
+        max_lines: int,
+        view_mode: FilteredViewMode,
+    ) -> None:
+        """Store only the candidate lines needed for the requested view mode."""
+
+        if view_mode == "head":
+            if len(candidates.head_lines) < max_lines:
+                candidates.head_lines.append(line_reference)
+            return
+
+        if view_mode == "errors":
+            if self._is_incident_line(line):
+                if len(candidates.incident_lines) < max_lines:
+                    candidates.incident_lines.append(line_reference)
+            elif len(candidates.regular_lines) < max_lines:
+                candidates.regular_lines.append(line_reference)
+            return
+
+        source_lines = candidates.sample_lines_by_source.setdefault(source_key, [])
+        if len(source_lines) < max_lines:
+            source_lines.append(line_reference)
+
+    @staticmethod
+    def _select_filtered_lines(
+        *,
+        candidates: FilteredLineCandidates,
+        selected_source_keys: list[str],
+        max_lines: int,
+        view_mode: FilteredViewMode,
+    ) -> list[SnapshotLineReferencePayload]:
+        """Return the final bounded filtered line list for one response mode."""
+
+        if view_mode == "head":
+            return candidates.head_lines[:max_lines]
+
+        if view_mode == "errors":
+            return (candidates.incident_lines + candidates.regular_lines)[:max_lines]
+
+        sampled_lines: list[SnapshotLineReferencePayload] = []
+        next_index = 0
+        while len(sampled_lines) < max_lines:
+            added_line = False
+            for source_key in selected_source_keys:
+                source_lines = candidates.sample_lines_by_source.get(source_key, [])
+                if next_index < len(source_lines):
+                    sampled_lines.append(source_lines[next_index])
+                    added_line = True
+                    if len(sampled_lines) >= max_lines:
+                        break
+            if not added_line:
+                break
+            next_index += 1
+        return sampled_lines
+
     def _apply_noise_profile(self, context: SourceNoiseContext, raw_line: str) -> FilterDecision:
         """Apply the manifest-selected noise profile to one raw line."""
 
@@ -286,7 +391,7 @@ class LogFilteringService:
 
         parsed = self._parse_json_line(raw_line)
         request_path = self._extract_request_path(parsed, raw_line)
-        status_code = self._extract_status_code(parsed)
+        status_code = self._extract_status_code(parsed, raw_line)
         level = self._extract_level(parsed)
 
         if profile_name == "web_noise":
@@ -379,7 +484,7 @@ class LogFilteringService:
     @staticmethod
     def _extract_request_path(parsed: dict[str, Any] | None, raw_line: str) -> str | None:
         if parsed is not None:
-            for key in ("request_path", "path", "url_path", "uri"):
+            for key in ("request_path", "path", "url_path", "uri", "RequestPath"):
                 value = parsed.get(key)
                 if isinstance(value, str) and value.startswith("/"):
                     return value
@@ -394,15 +499,29 @@ class LogFilteringService:
         return None
 
     @staticmethod
-    def _extract_status_code(parsed: dict[str, Any] | None) -> int | None:
-        if parsed is None:
-            return None
-        for key in ("status", "status_code", "statusCode"):
-            value = parsed.get(key)
-            if isinstance(value, int):
-                return value
-            if isinstance(value, str) and value.isdigit():
-                return int(value)
+    def _extract_status_code(
+        parsed: dict[str, Any] | None,
+        raw_line: str | None = None,
+    ) -> int | None:
+        if parsed is not None:
+            for key in (
+                "status",
+                "status_code",
+                "statusCode",
+                "DownstreamStatus",
+                "OriginStatus",
+                "downstream_status",
+                "origin_status",
+            ):
+                value = parsed.get(key)
+                if isinstance(value, int):
+                    return value
+                if isinstance(value, str) and value.isdigit():
+                    return int(value)
+        if raw_line is not None:
+            status_match = _COMBINED_LOG_STATUS_PATTERN.search(raw_line)
+            if status_match is not None:
+                return int(status_match.group(1))
         return None
 
     @staticmethod
@@ -413,6 +532,21 @@ class LogFilteringService:
         if isinstance(value, str):
             return value.strip().lower()
         return None
+
+    def _is_incident_line(self, raw_line: str) -> bool:
+        """Return whether one kept line is likely useful for incident-first review."""
+
+        parsed = self._parse_json_line(raw_line)
+        status_code = self._extract_status_code(parsed, raw_line)
+        if status_code is not None and status_code >= 400:
+            return True
+
+        level = self._extract_level(parsed)
+        if level in {"warning", "warn", "error", "critical", "exception", "fatal"}:
+            return True
+
+        lowered_line = raw_line.lower()
+        return any(keyword in lowered_line for keyword in _INCIDENT_KEYWORDS)
 
     @staticmethod
     def _truncate_line(value: str) -> tuple[str, bool]:

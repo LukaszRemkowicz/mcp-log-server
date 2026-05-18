@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from pytest_mock import MockerFixture
@@ -19,7 +20,16 @@ from auth.scopes import (
     WORKFLOW_BOOTSTRAP_SCOPE,
     WORKFLOW_SKILLS_READ_SCOPE,
 )
-from services.docker_service import ContainerPathStat
+from services.docker_service import (
+    ContainerDetail,
+    ContainerDetailMount,
+    ContainerDetailNetwork,
+    ContainerDetailPort,
+    ContainerHealth,
+    ContainerPathStat,
+    ContainerRestartPolicy,
+)
+from services.fail2ban_service import Fail2banActivity, Fail2banJailStatus, Fail2banServiceStatus
 from tests.conftest import (
     CustomJwtToken,
     FileBackedProjectContext,
@@ -32,11 +42,15 @@ from tests.conftest import (
 )
 from tools import collection as collection_tools
 
+SESSION_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+){2,}-[a-f0-9]{4}$")
+
 ToolCall = tuple[str, dict[str, object]]
 ProtectedToolCall = tuple[str, dict[str, object], list[str]]
 CallerContextToolCall = tuple[str, dict[str, object], list[str], list[str], bool]
 ProjectProtectedInvalidTokenFactory = Callable[["CustomJwtToken", list[str]], str]
 InvalidTokenFactory = Callable[["CustomJwtToken"], str]
+
+pytestmark = pytest.mark.anyio
 
 
 SNAPSHOT_TOOL_CALLS: tuple[ToolCall, ...] = (
@@ -49,6 +63,18 @@ SNAPSHOT_TOOL_CALLS: tuple[ToolCall, ...] = (
 )
 CONTAINER_TOOL_CALLS: tuple[ToolCall, ...] = (
     (
+        "inspect_containers_health",
+        {"project_name": "dockerpage"},
+    ),
+    (
+        "inspect_container_detail",
+        {"project_name": "dockerpage", "source_key": "backend"},
+    ),
+    (
+        "stat_container_path",
+        {"project_name": "dockerpage", "source_key": "backend", "path": "/app/VERSION"},
+    ),
+    (
         "read_container_file",
         {"project_name": "dockerpage", "source_key": "backend", "path": "/app/VERSION"},
     ),
@@ -57,10 +83,14 @@ CONTAINER_TOOL_CALLS: tuple[ToolCall, ...] = (
         {"project_name": "dockerpage", "source_key": "backend", "path": "/app"},
     ),
 )
+FAIL2BAN_TOOL_CALLS: tuple[ToolCall, ...] = (
+    ("inspect_live_fail2ban_activity", {"project_name": "landingpage"}),
+)
 ANALYSIS_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("group_errors", {"project_name": "landingpage"}),
     ("build_incident_bundle", {"project_name": "landingpage"}),
     ("create_filtered_view", {"project_name": "landingpage"}),
+    ("inspect_proxy_activity", {"project_name": "landingpage"}),
 )
 COLLECT_LOGS_TOOL_CALLS: tuple[ToolCall, ...] = (
     (
@@ -73,7 +103,11 @@ COLLECT_LOGS_TOOL_CALLS: tuple[ToolCall, ...] = (
     ),
 )
 PROJECT_PROTECTED_TOOL_CALL_ARGUMENTS: tuple[ToolCall, ...] = (
-    COLLECT_LOGS_TOOL_CALLS + SNAPSHOT_TOOL_CALLS + ANALYSIS_TOOL_CALLS + CONTAINER_TOOL_CALLS
+    COLLECT_LOGS_TOOL_CALLS
+    + SNAPSHOT_TOOL_CALLS
+    + ANALYSIS_TOOL_CALLS
+    + CONTAINER_TOOL_CALLS
+    + FAIL2BAN_TOOL_CALLS
 )
 CALLER_CONTEXT_LOG_TOOL_NAMES = {
     "collect_logs",
@@ -125,6 +159,27 @@ CALLER_CONTEXT_TOOL_CALLS: tuple[CallerContextToolCall, ...] = (
         True,
     ),
     (
+        "inspect_containers_health",
+        {"project_name": "dockerpage"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["dockerpage"],
+        False,
+    ),
+    (
+        "inspect_container_detail",
+        {"project_name": "dockerpage", "source_key": "backend"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["dockerpage"],
+        False,
+    ),
+    (
+        "stat_container_path",
+        {"project_name": "dockerpage", "source_key": "backend", "path": "/app/VERSION"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["dockerpage"],
+        False,
+    ),
+    (
         "read_container_file",
         {"project_name": "dockerpage", "source_key": "backend", "path": "/app/VERSION"},
         [CONTAINER_FILES_READ_SCOPE],
@@ -151,13 +206,19 @@ PROJECT_PROTECTED_CONTAINER_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [CONTAINER_FILES_READ_SCOPE])
     for tool_name, arguments in CONTAINER_TOOL_CALLS
 )
+PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
+    (tool_name, arguments, [MCP_STATUS_READ_SCOPE]) for tool_name, arguments in FAIL2BAN_TOOL_CALLS
+)
 PROJECT_PROTECTED_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
     PROJECT_PROTECTED_LOG_TOOL_CALLS
     + PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS
     + PROJECT_PROTECTED_CONTAINER_TOOL_CALLS
+    + PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS
 )
 PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
-    PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS + PROJECT_PROTECTED_CONTAINER_TOOL_CALLS
+    PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS
+    + PROJECT_PROTECTED_CONTAINER_TOOL_CALLS
+    + PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS
 )
 
 
@@ -184,12 +245,16 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "group_errors",
                 "build_incident_bundle",
                 "create_filtered_view",
+                "inspect_proxy_activity",
                 "suggest_followup_window",
                 "list_projects",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
             },
             {
+                "inspect_containers_health",
+                "inspect_container_detail",
+                "stat_container_path",
                 "read_container_file",
                 "list_container_directory",
                 "close_agent_session",
@@ -214,8 +279,12 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "group_errors",
                 "build_incident_bundle",
                 "create_filtered_view",
+                "inspect_proxy_activity",
                 "suggest_followup_window",
                 "list_projects",
+                "inspect_containers_health",
+                "inspect_container_detail",
+                "stat_container_path",
                 "read_container_file",
                 "list_container_directory",
                 "close_agent_session",
@@ -228,7 +297,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
         ),
     ],
 )
-def test_tools_list_filters_visible_tools_per_jwt(
+async def test_tools_list_filters_visible_tools_per_jwt(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     subject: str,
@@ -245,7 +314,7 @@ def test_tools_list_filters_visible_tools_per_jwt(
         client_id,
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={"jsonrpc": "2.0", "id": "2", "method": "tools/list", "params": {}},
     )
@@ -256,7 +325,7 @@ def test_tools_list_filters_visible_tools_per_jwt(
     assert tool_names.isdisjoint(expected_absent)
 
 
-def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
+async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -275,7 +344,7 @@ def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
         "workflow-agent",
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=workflow_token,
         data={
             "jsonrpc": "2.0",
@@ -319,7 +388,7 @@ def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
     assert any(argument["name"] == "session_id" for argument in collect_logs_tool["arguments"])
 
 
-def test_service_status_api_does_not_report_project_access(
+async def test_service_status_api_does_not_report_project_access(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -336,7 +405,7 @@ def test_service_status_api_does_not_report_project_access(
         },
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -360,7 +429,7 @@ def test_service_status_api_does_not_report_project_access(
     ("tool_name", "arguments", "scopes", "allowed_projects", "needs_snapshot"),
     CALLER_CONTEXT_TOOL_CALLS,
 )
-def test_mcp_tools_api_use_database_caller_context_for_project_access(
+async def test_mcp_tools_api_use_database_caller_context_for_project_access(
     file_backed_project_context: FileBackedProjectContext,
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
@@ -382,7 +451,7 @@ def test_mcp_tools_api_use_database_caller_context_for_project_access(
         {"allowed_projects": wrong_projects, "client_type": "codex"},
     )
 
-    if tool_name == "read_container_file":
+    if tool_name in {"read_container_file", "stat_container_path"}:
         mocker.patch(
             "tools.container_inspection.docker_service.stat_container_path",
             return_value=ContainerPathStat(
@@ -396,6 +465,64 @@ def test_mcp_tools_api_use_database_caller_context_for_project_access(
         mocker.patch(
             "tools.container_inspection.docker_service.read_container_file",
             return_value=("release-123\n", False),
+        )
+    if tool_name == "inspect_containers_health":
+        mocker.patch(
+            "tools.container_inspection.docker_service.inspect_container_health",
+            return_value=ContainerHealth(
+                container_id="abc123def456",
+                container_name="app-container",
+                image="portfolio/backend:2026-05-16",
+                docker_status="running",
+                health_status="healthy",
+                running=True,
+                restarting=False,
+                paused=False,
+                dead=False,
+                exit_code=0,
+                error="",
+                restart_count=2,
+                started_at="2026-05-16T10:00:00.000000000Z",
+                finished_at="0001-01-01T00:00:00Z",
+            ),
+        )
+    if tool_name == "inspect_container_detail":
+        mocker.patch(
+            "tools.container_inspection.docker_service.inspect_container_detail",
+            return_value=ContainerDetail(
+                health=ContainerHealth(
+                    container_id="abc123def456",
+                    container_name="app-container",
+                    image="portfolio/backend:2026-05-16",
+                    docker_status="running",
+                    health_status="healthy",
+                    running=True,
+                    restarting=False,
+                    paused=False,
+                    dead=False,
+                    exit_code=0,
+                    error="",
+                    restart_count=2,
+                    started_at="2026-05-16T10:00:00.000000000Z",
+                    finished_at=None,
+                ),
+                created_at="2026-05-16T09:55:00.000000000Z",
+                env_var_names=[],
+                label_keys=[],
+                compose_labels={},
+                restart_policy=ContainerRestartPolicy(
+                    name=None,
+                    maximum_retry_count=None,
+                ),
+                command=[],
+                entrypoint=[],
+                working_dir=None,
+                user=None,
+                ports=[],
+                mounts=[],
+                networks=[],
+                health_log=[],
+            ),
         )
     if tool_name == "list_container_directory":
         mocker.patch(
@@ -423,15 +550,15 @@ def test_mcp_tools_api_use_database_caller_context_for_project_access(
     if tool_name in CALLER_CONTEXT_LOG_TOOL_NAMES:
         with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
             if needs_snapshot:
-                collect_response = jsonrpc.post(
+                collect_response = await jsonrpc.post(
                     token=token,
                     data=build_collect_logs_request(source_keys=["app_file"]),
                 )
                 assert collect_response.status_code == 200
                 assert collect_response.json()["result"]["isError"] is False
-            response = jsonrpc.post(token=token, data=request_data)
+            response = await jsonrpc.post(token=token, data=request_data)
     else:
-        response = jsonrpc.post(token=token, data=request_data)
+        response = await jsonrpc.post(token=token, data=request_data)
 
     assert response.status_code == 200
     assert response.json()["result"]["isError"] is False
@@ -445,7 +572,7 @@ def test_mcp_tools_api_use_database_caller_context_for_project_access(
     assert payload["project_name"] == allowed_projects[0]
 
 
-def test_collect_logs_api_returns_requested_and_resolved_file_sources(
+async def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -453,7 +580,7 @@ def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     """Verify collect_logs persists requested file sources and reports unknown keys."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(
                 source_keys=["app_file", "missing_source"],
@@ -491,7 +618,34 @@ def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     assert project_payload["sources"][0]["line_count"] == 3
 
 
-def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
+async def test_collect_logs_api_errors_when_all_requested_sources_are_unknown(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify collect_logs does not look successful when no source can be collected."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["missing_source"]),
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "unknown_source_keys"
+    assert payload["message"] == "No requested source_keys were found in the configured manifest."
+    assert payload["details"] == {
+        "project_name": "landingpage",
+        "requested_source_keys": ["missing_source"],
+        "unknown_requested_source_keys": ["missing_source"],
+    }
+
+
+async def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -499,11 +653,11 @@ def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
     """Verify snapshot grep/read edge cases through the real JSON-RPC path."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["snapshot_text"]),
         )
-        grep_response = jsonrpc.post(
+        grep_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -521,7 +675,7 @@ def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
                 },
             },
         )
-        read_response = jsonrpc.post(
+        read_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -563,10 +717,144 @@ def test_snapshot_tools_api_support_single_source_alias_and_match_windows(
     assert read_payload["start_line"] == 2
     assert read_payload["line_count"] == 2
     assert read_payload["content"] == "match one\nmatch two\n"
+    assert read_payload["output_file"] == "workflow/landingpage/latest/snapshot_text.log"
+    assert read_payload["returned_bytes"] == len(b"match one\nmatch two\n")
     assert read_payload["truncated"] is False
 
 
-def test_grep_log_snapshot_api_truncates_large_matching_lines(
+async def test_snapshot_tools_api_support_all_source_keys_alias(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify snapshot and analysis follow-up tools accept source_keys=["all"]."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["all"]),
+        )
+        list_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "list-all-source-keys",
+                "method": "tools/call",
+                "params": {
+                    "name": "list_log_snapshot_files",
+                    "arguments": {"project_name": "landingpage"},
+                },
+            },
+        )
+        grep_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "grep-all-source-keys",
+                "method": "tools/call",
+                "params": {
+                    "name": "grep_log_snapshot",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_keys": ["all"],
+                        "grep": "Database connection failed",
+                    },
+                },
+            },
+        )
+        filtered_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "filtered-all-source-keys",
+                "method": "tools/call",
+                "params": {
+                    "name": "create_filtered_view",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_keys": ["all"],
+                        "max_lines": 10,
+                    },
+                },
+            },
+        )
+        group_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "group-all-source-keys",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_errors",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_keys": ["all"],
+                        "max_groups": 5,
+                    },
+                },
+            },
+        )
+        bundle_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "bundle-all-source-keys",
+                "method": "tools/call",
+                "params": {
+                    "name": "build_incident_bundle",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_keys": ["all"],
+                        "max_groups": 5,
+                        "max_lines_per_source": 5,
+                    },
+                },
+            },
+        )
+
+    expected_source_keys = [
+        "backend",
+        "nginx",
+        "app_file",
+        "app_first",
+        "app_second",
+        "snapshot_text",
+        "traefik",
+    ]
+    collect_payload = collect_response.json()["result"]["structuredContent"]["projects"][0]
+    list_payload = list_response.json()["result"]["structuredContent"]
+    grep_payload = grep_response.json()["result"]["structuredContent"]
+    filtered_payload = filtered_response.json()["result"]["structuredContent"]
+    group_payload = group_response.json()["result"]["structuredContent"]
+    bundle_payload = bundle_response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert collect_payload["resolved_source_keys"] == expected_source_keys
+    assert list_response.status_code == 200
+    assert list_response.json()["result"]["isError"] is False
+    assert list_payload["workspace"] == "workflow"
+    assert (
+        list_payload["session_id"]
+        == collect_response.json()["result"]["structuredContent"]["session_id"]
+    )
+    assert [item["source_key"] for item in list_payload["files"]] == expected_source_keys
+    assert grep_response.status_code == 200
+    assert grep_response.json()["result"]["isError"] is False
+    assert grep_payload["searched_source_keys"] == expected_source_keys
+    assert grep_payload["matched_source_keys"] == ["app_file", "backend"]
+    assert filtered_response.status_code == 200
+    assert filtered_response.json()["result"]["isError"] is False
+    assert filtered_payload["searched_source_keys"] == expected_source_keys
+    assert group_response.status_code == 200
+    assert group_response.json()["result"]["isError"] is False
+    assert group_payload["searched_source_keys"] == expected_source_keys
+    assert bundle_response.status_code == 200
+    assert bundle_response.json()["result"]["isError"] is False
+    assert bundle_payload["searched_source_keys"] == expected_source_keys
+
+
+async def test_grep_log_snapshot_api_truncates_large_matching_lines(
     tmp_path: Path,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -579,16 +867,15 @@ def test_grep_log_snapshot_api_truncates_large_matching_lines(
         f"{long_line}\n",
         encoding="utf-8",
     )
-    assert jsonrpc.api_client.portal is not None
-    jsonrpc.api_client.portal.call(_seed_project_manifests, fixture_root / "manifests")
+    await _seed_project_manifests(fixture_root / "manifests")
     logs_dir = tmp_path / "collected-logs"
 
     with override_settings(LOGS_DIR=logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
         )
-        grep_response = jsonrpc.post(
+        grep_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -618,7 +905,7 @@ def test_grep_log_snapshot_api_truncates_large_matching_lines(
     assert match["line"] == long_line[:2_000]
 
 
-def test_snapshot_tools_api_reject_conflicting_source_key_arguments(
+async def test_snapshot_tools_api_reject_conflicting_source_key_arguments(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -626,11 +913,11 @@ def test_snapshot_tools_api_reject_conflicting_source_key_arguments(
     """Verify source_key/source_keys conflicts are rejected at the MCP boundary."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["snapshot_text"]),
         )
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -669,7 +956,7 @@ def test_snapshot_tools_api_reject_conflicting_source_key_arguments(
         ("build_incident_bundle", "build_incident_bundle"),
     ],
 )
-def test_analysis_tools_api_read_collected_snapshot(
+async def test_analysis_tools_api_read_collected_snapshot(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -679,11 +966,11 @@ def test_analysis_tools_api_read_collected_snapshot(
     """Verify grouped analysis tools read the latest collected workflow snapshot."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
         )
-        analysis_response = jsonrpc.post(
+        analysis_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -721,13 +1008,187 @@ def test_analysis_tools_api_read_collected_snapshot(
         and group["first_seen"]["output_file"] == "workflow/landingpage/latest/app_file.log"
         for group in groups
     )
+    if tool_name == "group_errors":
+        assert payload["summary"].startswith("Found 2 error-like lines in 2 groups.")
+        assert "Database connection failed" in payload["summary"]
+        assert len(payload["summary"]) < 260
+
+
+async def test_inspect_proxy_activity_api_groups_proxy_status_signals(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify proxy diagnostics summarize collected ingress/proxy snapshot sources."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["nginx", "traefik"]),
+        )
+        response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "inspect-proxy-activity",
+                "method": "tools/call",
+                "params": {
+                    "name": "inspect_proxy_activity",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_keys": ["all"],
+                        "max_groups": 10,
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_proxy_activity"
+    assert payload["project_name"] == "landingpage"
+    assert payload["workspace"] == "workflow"
+    assert payload["snapshot_dir"] == "workflow/landingpage/latest"
+    assert payload["searched_source_keys"] == ["nginx", "traefik"]
+    assert payload["total_line_count"] == 8
+    assert payload["parsed_proxy_line_count"] == 8
+    assert payload["http_status_line_count"] == 6
+    assert payload["upstream_error_count"] == 1
+    assert payload["status_class_counts"] == [
+        {"status_class": "2xx", "count": 1},
+        {"status_class": "3xx", "count": 2},
+        {"status_class": "4xx", "count": 2},
+        {"status_class": "5xx", "count": 1},
+    ]
+    assert payload["top_routes"][0]["path"] == "/admin"
+    assert payload["top_routes"][0]["status_code"] == 404
+    assert payload["top_routes"][0]["count"] == 2
+    assert payload["top_routes"][1]["path"] == "/api/orders"
+    assert payload["top_routes"][1]["status_code"] == 502
+    assert payload["top_routes"][1]["is_upstream_error"] is True
+
+
+async def test_vps_security_fixture_logs_support_snapshot_analysis(
+    file_backed_project_context: FileBackedProjectContext,
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify vps-security fixture logs exercise fail2ban and proxy analysis tools."""
+
+    token = custom_jwt_token(
+        "all-project-workflow-client",
+        [LOGS_COLLECT_SCOPE],
+        "all-project-workflow-client",
+        {"client_type": "workflow_agent"},
+    )
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = await jsonrpc.post(
+            token=token,
+            data=build_collect_logs_request(
+                request_id="collect-vps-security-fixture",
+                project_names=["vps-security"],
+                source_keys=["all"],
+                since="30d",
+            ),
+        )
+        grep_response = await jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "grep-vps-security-ban-fixture",
+                "method": "tools/call",
+                "params": {
+                    "name": "grep_log_snapshot",
+                    "arguments": {
+                        "project_name": "vps-security",
+                        "grep": "Ban",
+                        "source_keys": ["fail2ban"],
+                    },
+                },
+            },
+        )
+        proxy_response = await jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "inspect-vps-security-proxy-fixture",
+                "method": "tools/call",
+                "params": {
+                    "name": "inspect_proxy_activity",
+                    "arguments": {
+                        "project_name": "vps-security",
+                        "source_keys": ["nginx_access", "traefik_access"],
+                        "max_groups": 30,
+                    },
+                },
+            },
+        )
+        group_response = await jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "group-vps-security-fixture",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_errors",
+                    "arguments": {
+                        "project_name": "vps-security",
+                        "source_keys": ["fail2ban", "nginx_access", "traefik_access"],
+                        "max_groups": 6,
+                    },
+                },
+            },
+        )
+
+    collect_payload = collect_response.json()["result"]["structuredContent"]["projects"][0]
+    grep_payload = grep_response.json()["result"]["structuredContent"]
+    proxy_payload = proxy_response.json()["result"]["structuredContent"]
+    group_payload = group_response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert collect_payload["resolved_source_keys"] == [
+        "fail2ban",
+        "nginx_access",
+        "traefik_access",
+    ]
+    assert [source["line_count"] for source in collect_payload["sources"]] == [20, 12, 12]
+    assert grep_response.status_code == 200
+    assert grep_response.json()["result"]["isError"] is False
+    assert grep_payload["match_count"] == 4
+    assert proxy_response.status_code == 200
+    assert proxy_response.json()["result"]["isError"] is False
+    assert proxy_payload["total_line_count"] == 24
+    assert proxy_payload["parsed_proxy_line_count"] == 24
+    assert proxy_payload["http_status_line_count"] == 24
+    assert proxy_payload["upstream_error_count"] == 3
+    assert proxy_payload["status_class_counts"] == [
+        {"status_class": "2xx", "count": 5},
+        {"status_class": "3xx", "count": 1},
+        {"status_class": "4xx", "count": 15},
+        {"status_class": "5xx", "count": 3},
+    ]
+    assert any(
+        route["path"] == "/travel"
+        and route["status_code"] == 504
+        and route["is_upstream_error"] is True
+        for route in proxy_payload["top_routes"]
+    )
+    assert group_response.status_code == 200
+    assert group_response.json()["result"]["isError"] is False
+    assert group_payload["matching_line_count"] == 19
 
 
 @pytest.mark.parametrize(
     "tool_name",
-    ["group_errors", "build_incident_bundle", "create_filtered_view"],
+    ["group_errors", "build_incident_bundle", "create_filtered_view", "inspect_proxy_activity"],
 )
-def test_analysis_tools_api_support_single_source_alias(
+async def test_analysis_tools_api_support_single_source_alias(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -736,11 +1197,11 @@ def test_analysis_tools_api_support_single_source_alias(
     """Verify analysis tools accept source_key as the single-source alias."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
         )
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -767,9 +1228,9 @@ def test_analysis_tools_api_support_single_source_alias(
 
 @pytest.mark.parametrize(
     "tool_name",
-    ["group_errors", "build_incident_bundle", "create_filtered_view"],
+    ["group_errors", "build_incident_bundle", "create_filtered_view", "inspect_proxy_activity"],
 )
-def test_analysis_tools_api_reject_conflicting_source_key_arguments(
+async def test_analysis_tools_api_reject_conflicting_source_key_arguments(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -778,11 +1239,11 @@ def test_analysis_tools_api_reject_conflicting_source_key_arguments(
     """Verify analysis tools reject source_key and source_keys together."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
         )
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -813,7 +1274,50 @@ def test_analysis_tools_api_reject_conflicting_source_key_arguments(
     }
 
 
-def test_create_filtered_view_api_reads_collected_snapshot(
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("group_errors", {"max_groups": 0}),
+        ("build_incident_bundle", {"max_groups": 0}),
+        ("create_filtered_view", {"max_lines": 0}),
+        ("inspect_proxy_activity", {"max_groups": 0}),
+    ],
+)
+async def test_analysis_tools_api_validate_requested_snapshot_before_tool_arguments(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+    tool_name: str,
+    arguments: dict[str, object],
+) -> None:
+    """Verify snapshot lookup runs before analysis-specific argument validation."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": f"{tool_name}-snapshot-first",
+                "method": "tools/call",
+                "params": {
+                    "name": tool_name,
+                    "arguments": {
+                        "project_name": "landingpage",
+                        **arguments,
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["error_code"] == "snapshot_not_found"
+    assert payload["message"] == "Requested workflow log snapshot was not found."
+
+
+async def test_create_filtered_view_api_reads_collected_snapshot(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -821,11 +1325,11 @@ def test_create_filtered_view_api_reads_collected_snapshot(
     """Verify create_filtered_view reads a collected snapshot through JSON-RPC."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
         )
-        filtered_response = jsonrpc.post(
+        filtered_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -836,6 +1340,7 @@ def test_create_filtered_view_api_reads_collected_snapshot(
                     "arguments": {
                         "project_name": "landingpage",
                         "source_keys": ["app_file"],
+                        "view_mode": "head",
                         "max_lines": 10,
                     },
                 },
@@ -852,21 +1357,65 @@ def test_create_filtered_view_api_reads_collected_snapshot(
     assert payload["project_name"] == "landingpage"
     assert payload["snapshot_dir"] == "workflow/landingpage/latest"
     assert payload["searched_source_keys"] == ["app_file"]
+    assert payload["view_mode"] == "head"
     assert payload["total_line_count"] == 3
     assert payload["kept_line_count"] == 3
     assert payload["excluded_line_count"] == 0
     assert payload["cleaned_lines"][0]["output_file"] == "workflow/landingpage/latest/app_file.log"
 
 
+async def test_create_filtered_view_api_rejects_unknown_view_mode(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify create_filtered_view returns agent-facing mode validation errors."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["app_file"]),
+        )
+        filtered_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "create-filtered-view-invalid-mode-api",
+                "method": "tools/call",
+                "params": {
+                    "name": "create_filtered_view",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_keys": ["app_file"],
+                        "view_mode": "latest",
+                    },
+                },
+            },
+        )
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert filtered_response.status_code == 200
+    assert filtered_response.json()["result"]["isError"] is True
+
+    payload = filtered_response.json()["result"]["structuredContent"]
+    assert payload["status"] == "error"
+    assert payload["error_code"] == "invalid_filtered_view_mode"
+    assert payload["details"] == {
+        "view_mode": "latest",
+        "valid_view_modes": ["errors", "head", "sample"],
+    }
+
+
 @pytest.mark.parametrize(("tool_name", "arguments"), PROJECT_PROTECTED_TOOL_CALL_ARGUMENTS)
-def test_project_protected_tools_api_require_bearer_token(
+async def test_project_protected_tools_api_require_bearer_token(
     jsonrpc: JsonRpcClient,
     tool_name: str,
     arguments: dict[str, object],
 ) -> None:
     """Verify every project-protected tool rejects missing bearer tokens."""
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=None,
         data={
             "jsonrpc": "2.0",
@@ -908,7 +1457,7 @@ def test_project_protected_tools_api_require_bearer_token(
         ),
     ],
 )
-def test_project_protected_tools_api_reject_invalid_bearer_tokens(
+async def test_project_protected_tools_api_reject_invalid_bearer_tokens(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     tool_name: str,
@@ -919,7 +1468,7 @@ def test_project_protected_tools_api_reject_invalid_bearer_tokens(
 ) -> None:
     """Verify project-protected tools reject malformed, expired, or bad tokens."""
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token_factory(custom_jwt_token, scopes),
         data={
             "jsonrpc": "2.0",
@@ -937,7 +1486,7 @@ def test_project_protected_tools_api_reject_invalid_bearer_tokens(
     ("tool_name", "arguments", "scopes"),
     PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS,
 )
-def test_project_protected_tools_api_reject_project_access_mismatch(
+async def test_project_protected_tools_api_reject_project_access_mismatch(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     tool_name: str,
@@ -949,7 +1498,7 @@ def test_project_protected_tools_api_reject_project_access_mismatch(
     token: str = custom_jwt_token("agent", scopes, "agent")
     mismatched_arguments: dict[str, object] = {**arguments, "project_name": "other-project"}
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -969,7 +1518,7 @@ def test_project_protected_tools_api_reject_project_access_mismatch(
 
 
 @pytest.mark.parametrize(("tool_name", "arguments"), SNAPSHOT_TOOL_CALLS)
-def test_snapshot_tools_api_accept_valid_bearer_token(
+async def test_snapshot_tools_api_accept_valid_bearer_token(
     file_backed_project_context: FileBackedProjectContext,
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
@@ -979,11 +1528,11 @@ def test_snapshot_tools_api_accept_valid_bearer_token(
     """Verify snapshot tools accept valid tokens after a workflow snapshot exists."""
 
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        collect_response = jsonrpc.post(
+        collect_response = await jsonrpc.post(
             token=valid_jwt_token,
             data=build_collect_logs_request(source_keys=["app_file"]),
         )
-        tool_response = jsonrpc.post(
+        tool_response = await jsonrpc.post(
             token=valid_jwt_token,
             data={
                 "jsonrpc": "2.0",
@@ -1003,7 +1552,7 @@ def test_snapshot_tools_api_accept_valid_bearer_token(
     assert payload["project_name"] == "landingpage"
 
 
-def test_list_projects_api_returns_manifest_backed_projects(
+async def test_list_projects_api_returns_manifest_backed_projects(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -1016,7 +1565,7 @@ def test_list_projects_api_returns_manifest_backed_projects(
         {"projects_access": "all"},
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -1035,7 +1584,7 @@ def test_list_projects_api_returns_manifest_backed_projects(
     assert "backend" in landingpage["source_keys"]
 
 
-def test_read_container_file_api_returns_file_contents(
+async def test_read_container_file_api_returns_file_contents(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
@@ -1064,7 +1613,7 @@ def test_read_container_file_api_returns_file_contents(
         return_value=("release-123\n", False),
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -1089,10 +1638,264 @@ def test_read_container_file_api_returns_file_contents(
     assert payload["file"]["name"] == "VERSION"
 
 
-def test_list_container_directory_api_returns_entries(
+async def test_inspect_containers_health_api_returns_container_status(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
+) -> None:
+    """Verify inspect_containers_health returns all project docker source states."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+
+    mocker.patch(
+        "tools.container_inspection.docker_service.inspect_container_health",
+        return_value=ContainerHealth(
+            container_id="abc123def456",
+            container_name="app-container",
+            image="portfolio/backend:2026-05-16",
+            docker_status="running",
+            health_status="healthy",
+            running=True,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=2,
+            started_at="2026-05-16T10:00:00.000000000Z",
+            finished_at="0001-01-01T00:00:00Z",
+        ),
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-container-health",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_containers_health",
+                "arguments": {
+                    "project_name": "dockerpage",
+                },
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_containers_health"
+    assert payload["project_name"] == "dockerpage"
+    assert payload["resolved_source_keys"] == ["backend", "frontend", "nginx"]
+    assert len(payload["containers"]) == 3
+    backend_payload = payload["containers"][0]
+    assert backend_payload["source_key"] == "backend"
+    assert backend_payload["container_name"] == "app-container"
+    assert backend_payload["docker_status"] == "running"
+    assert backend_payload["health_status"] == "healthy"
+    assert backend_payload["running"] is True
+    assert backend_payload["restart_count"] == 2
+    assert backend_payload["image"] == "portfolio/backend:2026-05-16"
+
+
+async def test_inspect_container_detail_api_returns_curated_container_metadata(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify inspect_container_detail returns one bounded docker-inspect view."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+
+    mocker.patch(
+        "tools.container_inspection.docker_service.inspect_container_detail",
+        return_value=ContainerDetail(
+            health=ContainerHealth(
+                container_id="abc123def456",
+                container_name="app-container",
+                image="portfolio/backend:2026-05-16",
+                docker_status="running",
+                health_status="healthy",
+                running=True,
+                restarting=False,
+                paused=False,
+                dead=False,
+                exit_code=0,
+                error="",
+                restart_count=2,
+                started_at="2026-05-16T10:00:00.000000000Z",
+                finished_at=None,
+            ),
+            created_at="2026-05-16T09:55:00.000000000Z",
+            env_var_names=["SECRET_KEY", "DJANGO_SETTINGS_MODULE"],
+            label_keys=["com.docker.compose.service"],
+            compose_labels={"com.docker.compose.service": "backend"},
+            restart_policy=ContainerRestartPolicy(
+                name="unless-stopped",
+                maximum_retry_count=3,
+            ),
+            command=["gunicorn", "app.wsgi:application"],
+            entrypoint=["/entrypoint.sh"],
+            working_dir="/app",
+            user="app",
+            ports=[
+                ContainerDetailPort(
+                    private_port="8000/tcp",
+                    host_ip="127.0.0.1",
+                    host_port="18080",
+                )
+            ],
+            mounts=[
+                ContainerDetailMount(
+                    type="bind",
+                    destination="/app",
+                    mode="rw",
+                    rw=True,
+                )
+            ],
+            networks=[
+                ContainerDetailNetwork(
+                    name="web",
+                    ip_address="172.20.0.10",
+                    aliases=["backend", "api"],
+                )
+            ],
+            health_log=[
+                {
+                    "start": "2026-05-16T10:01:00.000000000Z",
+                    "end": "2026-05-16T10:01:01.000000000Z",
+                    "exit_code": 0,
+                    "output": "ok\n",
+                }
+            ],
+        ),
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-container-detail",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_container_detail",
+                "arguments": {
+                    "project_name": "dockerpage",
+                    "source_key": "backend",
+                },
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_container_detail"
+    assert payload["project_name"] == "dockerpage"
+    assert payload["source_key"] == "backend"
+    assert payload["container"]["container_name"] == "app-container"
+    assert payload["created_at"] == "2026-05-16T09:55:00.000000000Z"
+    assert payload["env_var_names"] == ["SECRET_KEY", "DJANGO_SETTINGS_MODULE"]
+    assert payload["label_keys"] == ["com.docker.compose.service"]
+    assert payload["compose_labels"] == {"com.docker.compose.service": "backend"}
+    assert payload["restart_policy"] == {
+        "name": "unless-stopped",
+        "maximum_retry_count": 3,
+    }
+    assert payload["command"] == ["gunicorn", "app.wsgi:application"]
+    assert payload["entrypoint"] == ["/entrypoint.sh"]
+    assert payload["working_dir"] == "/app"
+    assert payload["user"] == "app"
+    assert payload["ports"] == [
+        {"private_port": "8000/tcp", "host_ip": "127.0.0.1", "host_port": "18080"}
+    ]
+    assert payload["mounts"] == [{"type": "bind", "destination": "/app", "mode": "rw", "rw": True}]
+    assert payload["networks"] == [
+        {"name": "web", "ip_address": "172.20.0.10", "aliases": ["backend", "api"]}
+    ]
+    assert payload["health_log"][0]["output"] == "ok\n"
+
+
+async def test_stat_container_path_api_returns_file_metadata(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify stat_container_path returns whitelisted container path metadata."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+
+    mocker.patch(
+        "tools.container_inspection.docker_service.stat_container_path",
+        return_value=ContainerPathStat(
+            path="/app/VERSION",
+            is_dir=False,
+            size=12,
+            mode=0o100644,
+            modified_at="2026-04-26T10:00:00+00:00",
+        ),
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "stat-container-path",
+            "method": "tools/call",
+            "params": {
+                "name": "stat_container_path",
+                "arguments": {
+                    "project_name": "dockerpage",
+                    "source_key": "backend",
+                    "path": "/app/VERSION",
+                },
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert payload["action"] == "stat_container_path"
+    assert payload["project_name"] == "dockerpage"
+    assert payload["source_key"] == "backend"
+    assert payload["container_name"] == "app-container"
+    assert payload["path"] == "/app/VERSION"
+    assert payload["file"]["name"] == "VERSION"
+    assert payload["file"]["size"] == 12
+
+
+@pytest.mark.parametrize(
+    ("arguments", "expected_path"),
+    [
+        ({"project_name": "dockerpage", "source_key": "backend", "path": "/app"}, "/app"),
+        ({"project_name": "dockerpage", "source_key": "backend"}, "/app"),
+    ],
+)
+async def test_list_container_directory_api_returns_entries(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+    arguments: dict[str, object],
+    expected_path: str,
 ) -> None:
     """Verify list_container_directory returns whitelisted container entries."""
 
@@ -1103,7 +1906,7 @@ def test_list_container_directory_api_returns_entries(
         {"allowed_projects": ["dockerpage"]},
     )
 
-    mocker.patch(
+    list_directory = mocker.patch(
         "tools.container_inspection.docker_service.list_container_directory",
         return_value=(
             [
@@ -1119,7 +1922,7 @@ def test_list_container_directory_api_returns_entries(
         ),
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -1127,11 +1930,7 @@ def test_list_container_directory_api_returns_entries(
             "method": "tools/call",
             "params": {
                 "name": "list_container_directory",
-                "arguments": {
-                    "project_name": "dockerpage",
-                    "source_key": "backend",
-                    "path": "/app",
-                },
+                "arguments": arguments,
             },
         },
     )
@@ -1142,10 +1941,12 @@ def test_list_container_directory_api_returns_entries(
     assert response.json()["result"]["isError"] is False
     assert payload["action"] == "list_container_directory"
     assert payload["project_name"] == "dockerpage"
+    assert payload["path"] == expected_path
     assert payload["entries"][0]["name"] == "VERSION"
+    list_directory.assert_called_once_with("app-container", expected_path)
 
 
-def test_list_projects_api_returns_multiple_manifest_backed_projects(
+async def test_list_projects_api_returns_multiple_manifest_backed_projects(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -1157,7 +1958,7 @@ def test_list_projects_api_returns_multiple_manifest_backed_projects(
         "all-project-workflow-client",
         {"client_type": "workflow_agent", "projects_access": "all"},
     )
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -1176,6 +1977,7 @@ def test_list_projects_api_returns_multiple_manifest_backed_projects(
         "landingpage",
         "other",
         "shop",
+        "vps-security",
     ]
     assert payload[0]["project_summary"] == "Alpha project summary."
     assert payload[1]["project_summary"] == "Beta project summary."
@@ -1183,13 +1985,83 @@ def test_list_projects_api_returns_multiple_manifest_backed_projects(
     assert payload[1]["source_keys"] == ["app_file"]
 
 
-def test_collect_logs_api_returns_agent_error_for_project_mismatch(
+async def test_inspect_live_fail2ban_activity_api_returns_live_status(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify fail2ban diagnostics expose structured allowlisted live status."""
+
+    token: str = custom_jwt_token(
+        "agent",
+        [MCP_STATUS_READ_SCOPE],
+        "agent",
+        {"allowed_projects": ["landingpage"]},
+    )
+    mocker.patch(
+        "tools.fail2ban.fail2ban_service.inspect_activity",
+        return_value=Fail2banActivity(
+            inspection_status="ok",
+            service=Fail2banServiceStatus(
+                inspection_status="ok",
+                jail_count=2,
+                jails=["portfolio-nginx-probes", "portfolio-traefik-probes"],
+            ),
+            jails=[
+                Fail2banJailStatus(
+                    jail="portfolio-nginx-probes",
+                    inspection_status="ok",
+                    currently_failed=4,
+                    total_failed=11,
+                    currently_banned=2,
+                    total_banned=3,
+                    banned_ips=["203.0.113.10", "198.51.100.2"],
+                ),
+                Fail2banJailStatus(
+                    jail="portfolio-traefik-probes",
+                    inspection_status="ok",
+                    currently_failed=0,
+                    total_failed=5,
+                    currently_banned=0,
+                    total_banned=1,
+                    banned_ips=[],
+                ),
+            ],
+        ),
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-live-fail2ban-activity",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_live_fail2ban_activity",
+                "arguments": {"project_name": "landingpage"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_live_fail2ban_activity"
+    assert payload["project_name"] == "landingpage"
+    assert payload["inspection_status"] == "ok"
+    assert payload["service"]["jail_count"] == 2
+    assert payload["jails"][0]["jail"] == "portfolio-nginx-probes"
+    assert payload["jails"][0]["banned_ips"] == ["203.0.113.10", "198.51.100.2"]
+
+
+async def test_collect_logs_api_returns_agent_error_for_project_mismatch(
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
 ) -> None:
     """Verify collect_logs returns a structured project mismatch error."""
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=valid_jwt_token,
         data=build_collect_logs_request(project_names=["other-project"]),
     )
@@ -1207,7 +2079,7 @@ def test_collect_logs_api_returns_agent_error_for_project_mismatch(
 
 
 @pytest.mark.parametrize("project_names", [None, []])
-def test_collect_logs_api_uses_all_accessible_projects_when_project_names_not_provided(
+async def test_collect_logs_api_uses_all_accessible_projects_when_project_names_not_provided(
     multi_project_collect_context: MultiProjectCollectContext,
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
@@ -1232,7 +2104,7 @@ def test_collect_logs_api_uses_all_accessible_projects_when_project_names_not_pr
     )
 
     with override_settings(LOGS_DIR=multi_project_collect_context.logs_dir):
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=token,
             data=request_data,
         )
@@ -1263,7 +2135,7 @@ def test_collect_logs_api_uses_all_accessible_projects_when_project_names_not_pr
     ).exists()
 
 
-def test_collect_logs_api_generates_session_id_before_tool_call(
+async def test_collect_logs_api_generates_session_id_before_tool_call(
     file_backed_project_context: FileBackedProjectContext,
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
@@ -1286,7 +2158,7 @@ def test_collect_logs_api_generates_session_id_before_tool_call(
         new=mocker.AsyncMock(),
     )
     with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
-        response = jsonrpc.post(
+        response = await jsonrpc.post(
             token=token,
             data=build_collect_logs_request(
                 source_keys=["app_file"],
@@ -1300,7 +2172,8 @@ def test_collect_logs_api_generates_session_id_before_tool_call(
 
     assert response.status_code == 200
     assert response.json()["result"]["isError"] is False
-    assert str(UUID(session_id)) == session_id
+    assert SESSION_ID_PATTERN.fullmatch(session_id)
+    assert len(session_id) <= 24
     assert payload["workspace"] == "session"
     assert (
         file_backed_project_context.logs_dir
@@ -1311,7 +2184,72 @@ def test_collect_logs_api_generates_session_id_before_tool_call(
     ).exists()
 
 
-def test_collect_logs_api_blocks_workflow_agent_session_workspace(
+async def test_analysis_tool_rejects_snapshot_owned_by_other_caller(
+    file_backed_project_context: FileBackedProjectContext,
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify tools compare loaded snapshot caller_id against the request caller."""
+
+    owner_token = custom_jwt_token(
+        "codex-agent",
+        [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
+        "codex-agent",
+        {"client_type": "codex"},
+    )
+    other_token = custom_jwt_token(
+        "codex-agent",
+        [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
+        "codex-client",
+        {"client_type": "codex"},
+    )
+    mocker.patch(
+        "middleware.audit.agent_call_audit_service.create_tool_call",
+        new=mocker.AsyncMock(return_value=uuid4()),
+    )
+    mocker.patch(
+        "middleware.audit.agent_call_audit_service.complete_tool_call",
+        new=mocker.AsyncMock(),
+    )
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = await jsonrpc.post(
+            token=owner_token,
+            data=build_collect_logs_request(
+                source_keys=["app_file"],
+                workspace="session",
+                session_id=None,
+            ),
+        )
+        session_id = collect_response.json()["result"]["structuredContent"]["session_id"]
+        response = await jsonrpc.post(
+            token=other_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "group-errors-other-caller-snapshot",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_errors",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "session_id": session_id,
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is True
+    assert payload["error_code"] == "snapshot_not_found"
+    assert payload["message"] == "Requested session log snapshot was not found."
+
+
+async def test_collect_logs_api_blocks_workflow_agent_session_workspace(
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
@@ -1323,7 +2261,7 @@ def test_collect_logs_api_blocks_workflow_agent_session_workspace(
         new=mocker.AsyncMock(),
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=valid_jwt_token,
         data=build_collect_logs_request(
             source_keys=["app_file"],
@@ -1346,7 +2284,7 @@ def test_collect_logs_api_blocks_workflow_agent_session_workspace(
     create_spy.assert_not_called()
 
 
-def test_workflow_skill_resource_read_api_returns_skill_contents(
+async def test_workflow_skill_resource_read_api_returns_skill_contents(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -1358,7 +2296,7 @@ def test_workflow_skill_resource_read_api_returns_skill_contents(
         "workflow-agent",
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=workflow_token,
         data={
             "jsonrpc": "2.0",
@@ -1375,7 +2313,7 @@ def test_workflow_skill_resource_read_api_returns_skill_contents(
     assert "SEVERITY CLASSIFICATION" in contents[0]["text"]
 
 
-def test_resources_list_shows_concrete_workflow_skill_resources(
+async def test_resources_list_shows_concrete_workflow_skill_resources(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -1387,7 +2325,7 @@ def test_resources_list_shows_concrete_workflow_skill_resources(
         "workflow-agent",
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=workflow_token,
         data={
             "jsonrpc": "2.0",
@@ -1406,7 +2344,7 @@ def test_resources_list_shows_concrete_workflow_skill_resources(
     assert "skill://workflow/bot_detection" in resource_uris
 
 
-def test_resource_templates_list_exposes_workflow_skill_template(
+async def test_resource_templates_list_exposes_workflow_skill_template(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -1418,7 +2356,7 @@ def test_resource_templates_list_exposes_workflow_skill_template(
         "workflow-agent",
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=workflow_token,
         data={
             "jsonrpc": "2.0",
@@ -1442,7 +2380,7 @@ def test_resource_templates_list_exposes_workflow_skill_template(
     ]
 
 
-def test_invalid_workflow_skill_resource_returns_agent_guidance(
+async def test_invalid_workflow_skill_resource_returns_agent_guidance(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -1454,7 +2392,7 @@ def test_invalid_workflow_skill_resource_returns_agent_guidance(
         "workflow-agent",
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=workflow_token,
         data={
             "jsonrpc": "2.0",
@@ -1477,7 +2415,7 @@ def test_invalid_workflow_skill_resource_returns_agent_guidance(
     ]
 
 
-def test_codex_cannot_access_workflow_components(
+async def test_codex_cannot_access_workflow_components(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -1489,7 +2427,7 @@ def test_codex_cannot_access_workflow_components(
         "codex-agent",
     )
 
-    tool_response = jsonrpc.post(
+    tool_response = await jsonrpc.post(
         token=codex_token,
         data={
             "jsonrpc": "2.0",
@@ -1498,7 +2436,7 @@ def test_codex_cannot_access_workflow_components(
             "params": {"name": "analyze_daily_log_bundle", "arguments": {}},
         },
     )
-    resource_response = jsonrpc.post(
+    resource_response = await jsonrpc.post(
         token=codex_token,
         data={
             "jsonrpc": "2.0",
@@ -1517,6 +2455,89 @@ def test_codex_cannot_access_workflow_components(
     assert "Unknown resource" in resource_response.json()["error"]["message"]
 
 
+async def test_api_returns_structured_error_for_unknown_tool(
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify unknown tools include a stable structured error payload."""
+
+    response = await jsonrpc.post(
+        token=valid_jwt_token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "unknown-tool",
+            "method": "tools/call",
+            "params": {"name": "does_not_exist", "arguments": {}},
+        },
+    )
+
+    result = response.json()["result"]
+
+    assert response.status_code == 200
+    assert result["isError"] is True
+    assert result["structuredContent"]["error_code"] == "unknown_tool"
+    assert result["structuredContent"]["details"] == {"tool_name": "does_not_exist"}
+
+
+async def test_api_returns_structured_error_for_tool_argument_type_mismatch(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify FastMCP validation errors are normalized for agents."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "bad-source-keys-type",
+                "method": "tools/call",
+                "params": {
+                    "name": "grep_log_snapshot",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_keys": "frontend",
+                        "grep": "GET",
+                    },
+                },
+            },
+        )
+
+    result = response.json()["result"]
+    payload = result["structuredContent"]
+
+    assert response.status_code == 200
+    assert result["isError"] is True
+    assert payload["error_code"] == "invalid_tool_arguments"
+    assert payload["message"] == "Tool arguments failed validation."
+    assert payload["details"]["tool_name"] == "grep_log_snapshot"
+    assert payload["details"]["invalid_arguments"] == ["source_keys"]
+
+
+async def test_api_returns_fastmcp_error_for_unknown_jsonrpc_method(
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify unknown JSON-RPC methods use FastMCP's native error body."""
+
+    response = await jsonrpc.post(
+        token=valid_jwt_token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "unknown-method",
+            "method": "tools/nope",
+            "params": {},
+        },
+    )
+
+    payload = response.json()["error"]
+
+    assert response.status_code == 200
+    assert payload["code"] == -32602
+    assert payload["message"] == "Invalid request parameters"
+
+
 @pytest.mark.parametrize(
     ("method", "params"),
     [
@@ -1525,14 +2546,14 @@ def test_codex_cannot_access_workflow_components(
         ("resources/read", {"uri": "skill://workflow/severity_guide"}),
     ],
 )
-def test_api_requires_bearer_token(
+async def test_api_requires_bearer_token(
     jsonrpc: JsonRpcClient,
     method: str,
     params: dict[str, object],
 ) -> None:
     """Verify protected MCP methods require a bearer token."""
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=None,
         data={"jsonrpc": "2.0", "id": "7", "method": method, "params": params},
     )
@@ -1586,7 +2607,7 @@ def test_api_requires_bearer_token(
         ),
     ],
 )
-def test_api_rejects_invalid_bearer_tokens(
+async def test_api_rejects_invalid_bearer_tokens(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     token_factory: InvalidTokenFactory,
@@ -1594,7 +2615,7 @@ def test_api_rejects_invalid_bearer_tokens(
 ) -> None:
     """Verify protected MCP methods reject invalid bearer tokens."""
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token_factory(custom_jwt_token),
         data={"jsonrpc": "2.0", "id": f"invalid-{label}", "method": "tools/list", "params": {}},
     )
@@ -1603,7 +2624,7 @@ def test_api_rejects_invalid_bearer_tokens(
     assert response.json()["error"] == "invalid_token"
 
 
-def test_tool_call_api_rejects_jwt_without_client_id(
+async def test_tool_call_api_rejects_jwt_without_client_id(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
@@ -1616,7 +2637,7 @@ def test_tool_call_api_rejects_jwt_without_client_id(
         {"client_id": ""},
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -1624,7 +2645,7 @@ def test_tool_call_api_rejects_jwt_without_client_id(
             "method": "tools/call",
             "params": {
                 "name": "close_agent_session",
-                "arguments": {"session_id": "ef5e1daa-d06b-479c-926d-8107639bd467"},
+                "arguments": {"session_id": "gentle-river-finds-a8f2"},
             },
         },
     )
@@ -1636,11 +2657,11 @@ def test_tool_call_api_rejects_jwt_without_client_id(
     assert payload["error_code"] == "invalid_client_id"
 
 
-def test_tool_call_api_rejects_jwt_for_unregistered_client(
+async def test_tool_call_api_rejects_jwt_for_unregistered_client(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
-    """Verify tool calls require a matching Authentication row."""
+    """Verify tool calls require a matching McpCaller row."""
 
     token = custom_jwt_token(
         "unregistered-agent",
@@ -1649,7 +2670,7 @@ def test_tool_call_api_rejects_jwt_for_unregistered_client(
         {"client_type": "codex"},
     )
 
-    response = jsonrpc.post(
+    response = await jsonrpc.post(
         token=token,
         data={
             "jsonrpc": "2.0",
@@ -1657,7 +2678,7 @@ def test_tool_call_api_rejects_jwt_for_unregistered_client(
             "method": "tools/call",
             "params": {
                 "name": "close_agent_session",
-                "arguments": {"session_id": "ef5e1daa-d06b-479c-926d-8107639bd467"},
+                "arguments": {"session_id": "gentle-river-finds-a8f2"},
             },
         },
     )

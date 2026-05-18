@@ -9,6 +9,7 @@ from fastmcp.server.auth import AuthProvider
 
 from database.lifecycle import database_lifespan
 from middleware.audit import AccessAuditMiddleware
+from middleware.authorized_manifests import AuthorizedManifestsMiddleware
 
 mcp: FastMCP = FastMCP(name="mcp-log-server", lifespan=database_lifespan)
 
@@ -21,6 +22,7 @@ def register_mcp_components() -> None:
     import tools.analysis  # noqa: F401
     import tools.collection  # noqa: F401
     import tools.container_inspection  # noqa: F401
+    import tools.fail2ban  # noqa: F401
     import tools.sessions  # noqa: F401
     import tools.snapshots  # noqa: F401
     import tools.system  # noqa: F401
@@ -32,6 +34,7 @@ def register_mcp_middleware() -> None:
     """Attach application middleware once."""
 
     mcp.add_middleware(AccessAuditMiddleware())
+    mcp.add_middleware(AuthorizedManifestsMiddleware())
 
 
 def create_application(

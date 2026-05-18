@@ -16,27 +16,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from tools.models import LogSnapshotMetadata
-from tools.utils import SNAPSHOT_METADATA_FILE_NAME, load_snapshot_metadata_from_json
-
-
-def read_snapshot_metadata(snapshot_dir: Path) -> LogSnapshotMetadata:
-    """Load `snapshot_metadata.json` from one session snapshot directory.
-
-    Session snapshots store their metadata beside the collected source files.
-    Callers should use this helper only when they already have a concrete
-    directory that is expected to contain `snapshot_metadata.json`.
-
-    Raises:
-        ValueError: When the metadata file is missing or cannot be parsed into
-            the public snapshot metadata model.
-    """
-
-    metadata_file = snapshot_dir / SNAPSHOT_METADATA_FILE_NAME
-    if not metadata_file.exists():
-        raise ValueError("Requested log snapshot metadata was not found.")
-    return load_snapshot_metadata_from_json(metadata_file.read_text(encoding="utf-8"))
-
 
 def resolve_workflow_snapshot_dir(project_output_dir: Path, archive_name: str | None) -> Path:
     """Resolve a workflow snapshot directory from latest/archive request inputs.

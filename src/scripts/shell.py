@@ -6,11 +6,14 @@ import asyncio
 import os
 from typing import Any
 
+os.environ.setdefault("DATABASE_HOST", "127.0.0.1")
+os.environ.setdefault("DATABASE_PORT", os.environ.get("DATABASE_PORT_HOST", "5437"))
+
 from conf import settings
 from core.types import LogWorkspace
 from database.config import TORTOISE_ORM
 from database.lifecycle import close_database, initialize_database
-from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest
+from database.models import AgentCall, CollectLogs, CollectLogsSource, McpCaller, ProjectManifest
 from database.schemas import AgentCallCreate, AgentCallFilter, AgentCallUpdate
 from database.services.agent_calls import AgentCallService
 from database.services.project_manifests import ProjectManifestService
@@ -23,7 +26,10 @@ SHELL_EXIT_AFTER_BOOT_ENV = "MCP_SHELL_EXIT_AFTER_BOOT"
 SHELL_IMPORT_LINES = [
     "from conf import settings",
     "from database.config import TORTOISE_ORM",
-    "from database.models import AgentCall, CollectLogs, CollectLogsSource, ProjectManifest",
+    (
+        "from database.models import McpCaller, AgentCall, CollectLogs, "
+        "CollectLogsSource, ProjectManifest"
+    ),
     "from database.schemas import AgentCallCreate, AgentCallFilter, AgentCallUpdate",
     "from core.types import LogWorkspace",
     (
@@ -43,6 +49,7 @@ def build_shell_namespace() -> dict[str, Any]:
     return {
         "settings": settings,
         "TORTOISE_ORM": TORTOISE_ORM,
+        "McpCaller": McpCaller,
         "AgentCall": AgentCall,
         "AgentCallEvent": AgentCallEvent,
         "AgentCallService": AgentCallService,
@@ -83,6 +90,16 @@ def print_shell_imports() -> None:
         print(import_line)
 
 
+def close_shell_database() -> None:
+    """Close shell database connections, ignoring IPython loop ownership noise."""
+
+    try:
+        asyncio.run(close_database())
+    except RuntimeError as exc:
+        if "attached to a different loop" not in str(exc):
+            raise
+
+
 async def _initialize_shell() -> dict[str, Any]:
     """Initialize the database and return the shell namespace."""
 
@@ -104,7 +121,7 @@ def run_shell(*, start_repl: bool = True) -> int:
         _start_ipython(user_ns)
         return 0
     finally:
-        asyncio.run(close_database())
+        close_shell_database()
 
 
 def main() -> None:

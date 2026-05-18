@@ -19,7 +19,7 @@ from typing import Any
 from fastmcp.tools.base import ToolResult
 from mcp.types import TextContent
 
-from settings import Settings
+from conf import Settings
 from storage import storage
 from tools.models import SnapshotWorkspace
 from utils.mcp_errors import (
@@ -393,7 +393,6 @@ def build_container_inspection_error_result(
     source_key: str | None,
     path: str | None,
     settings: Settings,
-    shape_defaults: dict[str, Any] | None = None,
 ) -> ToolResult:
     """Map one inspection failure into a stable, agent-facing MCP error result."""
 
@@ -408,7 +407,6 @@ def build_container_inspection_error_result(
 
     payload = {
         "action": action,
-        **(shape_defaults or {}),
         **build_agent_error_payload(
             error_code=error_code,
             message=message,
