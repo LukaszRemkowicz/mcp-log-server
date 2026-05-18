@@ -148,9 +148,11 @@ Deploy behavior:
 - creates a database backup unless `SKIP_BACKUP=true`
 - starts the database service
 - applies committed migrations with `uv run migrate` unless `SKIP_MIGRATE=true`
+  using the production image's `UV_NO_DEV`, `UV_FROZEN`, and `UV_NO_SYNC`
+  settings so the already-built no-dev environment is reused
 - starts the app service with `--force-recreate` so the selected image is rerun
-- checks that the app accepts TCP connections on port `8001` inside the app
-  container
+- checks that the app accepts an authenticated MCP `tools/list` request and
+  exposes `get_mcp_health_check`
 - records the deployed tag under the script state directory after health passes
 
 Dry run:

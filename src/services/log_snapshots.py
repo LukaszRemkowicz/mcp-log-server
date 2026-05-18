@@ -372,14 +372,14 @@ class LogSnapshotService:
         grep: str,
         source_keys: list[str] | None,
         match_offset: int,
-        match_limit: int,
+        max_matches: int,
     ) -> tuple[list[GrepLogSnapshotMatchPayload], int] | SnapshotGrepError:
         """Search persisted snapshot files with a controlled grep invocation.
 
         Source keys are validated against DB-backed source contracts before any
         file is opened. File paths are read from the source file reference. The
         grep process is bounded by
-        `match_offset` and `match_limit` for the returned page, while still
+        `match_offset` and `max_matches` for the returned page, while still
         reporting the total match count.
 
         The returned tuple contains:
@@ -453,6 +453,7 @@ class LogSnapshotService:
 
         grep_command: list[str] = [
             "grep",
+            "-E",
             "-H",
             "-n",
             "--",
@@ -483,7 +484,7 @@ class LogSnapshotService:
 
         all_match_lines: list[str] = completed.stdout.splitlines()
         total_match_count: int = len(all_match_lines)
-        selected_match_lines: list[str] = all_match_lines[match_offset : match_offset + match_limit]
+        selected_match_lines: list[str] = all_match_lines[match_offset : match_offset + max_matches]
 
         matches: list[GrepLogSnapshotMatchPayload] = []
         for raw_line in selected_match_lines:

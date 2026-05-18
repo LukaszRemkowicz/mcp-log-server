@@ -96,9 +96,10 @@ INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION = (
 
 GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION = (
     "Search one persisted workflow or session snapshot with controlled grep "
-    "semantics. Use grep for the text pattern. Omit source filters to search "
-    "all saved files, pass source_key for one source, or pass source_keys for "
-    "multiple sources; do not pass both."
+    "semantics. Use grep for an extended regex pattern, for example "
+    "'Ban|wp-login|502'. Omit source filters to search all saved files, pass "
+    "source_key for one source, or pass source_keys for multiple sources; do "
+    "not pass both."
 )
 
 SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION = (
@@ -173,7 +174,7 @@ READ_SNAPSHOT_NEXT_STEP_TIPS = [
 ]
 
 GREP_SNAPSHOT_NEXT_STEP_TIPS = [
-    "Use match_offset and match_limit to page through additional grep results.",
+    "Use match_offset and max_matches to page through additional grep results.",
     (
         "Reopen the matching file with read_log_snapshot_file around the "
         "reported line numbers for more context."

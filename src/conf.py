@@ -23,6 +23,15 @@ from urllib.parse import quote
 import settings as settings_module
 
 SettingsSource = ModuleType | Mapping[str, Any]
+PRODUCTION_ENVIRONMENTS = frozenset({"prod", "production"})
+INSECURE_PRODUCTION_VALUES = frozenset(
+    {
+        "",
+        "change-me-local-dev-secret",
+        "local-secret",
+        "mcp-log-server-local-password",
+    }
+)
 
 
 class Settings:
@@ -106,6 +115,23 @@ def set_settings(settings: Settings) -> None:
     """Replace the concrete settings object used by the process-wide proxy."""
 
     _settings_proxy.set_wrapped(settings)
+
+
+def validate_runtime_settings(runtime_settings: Settings) -> None:
+    """Reject unsafe production runtime settings before the server starts."""
+
+    environment = str(runtime_settings.ENVIRONMENT).lower()
+    if environment not in PRODUCTION_ENVIRONMENTS:
+        return
+
+    required_production_secrets = {
+        "JWT_SHARED_SECRET": runtime_settings.JWT_SHARED_SECRET,
+        "DATABASE_PASSWORD": runtime_settings.DATABASE_PASSWORD,
+    }
+    for name, value in required_production_secrets.items():
+        normalized_value = str(value).strip()
+        if normalized_value in INSECURE_PRODUCTION_VALUES:
+            raise RuntimeError(f"{name} must be set to a production secret.")
 
 
 settings: Settings = cast(Settings, _settings_proxy)

@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 import settings as settings_module
-from conf import Settings
+from conf import Settings, validate_runtime_settings
 from tests.conftest import override_settings
 
 
@@ -72,3 +72,45 @@ def test_settings_resolves_database_dsn(
 ) -> None:
     with override_settings(**database_config) as test_settings:
         assert test_settings.db == expected_dsn
+
+
+@pytest.mark.parametrize(
+    ("settings_overrides", "expected_message"),
+    [
+        (
+            {"ENVIRONMENT": "prod", "JWT_SHARED_SECRET": "change-me-local-dev-secret"},
+            "JWT_SHARED_SECRET must be set to a production secret",
+        ),
+        (
+            {"ENVIRONMENT": "prod", "DATABASE_PASSWORD": "local-secret"},
+            "DATABASE_PASSWORD must be set to a production secret",
+        ),
+    ],
+)
+def test_validate_runtime_settings_rejects_production_insecure_defaults(
+    settings_overrides: dict[str, Any],
+    expected_message: str,
+) -> None:
+    runtime_settings = Settings(
+        {
+            "ENVIRONMENT": "prod",
+            "JWT_SHARED_SECRET": "prod-secret",
+            "DATABASE_PASSWORD": "prod-db-secret",
+        },
+        **settings_overrides,
+    )
+
+    with pytest.raises(RuntimeError, match=expected_message):
+        validate_runtime_settings(runtime_settings)
+
+
+def test_validate_runtime_settings_allows_development_defaults() -> None:
+    runtime_settings = Settings(
+        {
+            "ENVIRONMENT": "dev",
+            "JWT_SHARED_SECRET": "change-me-local-dev-secret",
+            "DATABASE_PASSWORD": "local-secret",
+        }
+    )
+
+    validate_runtime_settings(runtime_settings)

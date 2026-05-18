@@ -9,7 +9,7 @@ from fastmcp.server.auth import AuthProvider
 
 from app import create_application
 from auth.auth_provider import build_auth_provider
-from conf import settings
+from conf import settings, validate_runtime_settings
 from logging_config import configure_logging, get_logger
 
 logger: logging.Logger = get_logger("main")
@@ -19,6 +19,7 @@ def main() -> None:
     """Run the FastMCP HTTP service."""
 
     configure_logging(settings)
+    validate_runtime_settings(settings)
     auth_provider: AuthProvider | None = build_auth_provider(settings)
     app: FastMCP = create_application(auth_provider=auth_provider)
     logger.info(

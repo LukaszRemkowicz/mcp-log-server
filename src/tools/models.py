@@ -281,7 +281,7 @@ class GrepLogSnapshotPayload(BaseModel):
     searched_source_keys: list[str]
     matched_source_keys: list[str]
     match_offset: int
-    match_limit: int
+    max_matches: int
     match_count: int
     returned_match_count: int
     next_step_tips: list[str]
