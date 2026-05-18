@@ -13,6 +13,7 @@ from auth.scopes import (
     WORKFLOW_BOOTSTRAP_SCOPE,
 )
 from middleware.audit import AccessAuditMiddleware
+from middleware.authorized_manifests import AuthorizedManifestsMiddleware
 from tests.conftest import CustomAccessToken
 from tools.agent_hints import (
     BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION,
@@ -43,6 +44,9 @@ def test_application_registers_expected_mcp_components(
         tools = await app._local_provider.list_tools()
         tool_names = [tool.name for tool in tools]
         assert any(isinstance(middleware, AccessAuditMiddleware) for middleware in app.middleware)
+        assert any(
+            isinstance(middleware, AuthorizedManifestsMiddleware) for middleware in app.middleware
+        )
 
         assert "analyze_daily_log_bundle" in tool_names
         assert "collect_logs" in tool_names

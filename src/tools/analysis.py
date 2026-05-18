@@ -9,18 +9,21 @@ from typing import cast
 
 from fastmcp.dependencies import CurrentAccessToken
 from fastmcp.server.auth import AccessToken, require_scopes
+from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
 
 from app import mcp
+from auth.mcp_authorized_manifests import AuthorizedProjectManifests
 from auth.mcp_caller_context import get_request_mcp_caller
 from auth.scopes import LOGS_COLLECT_SCOPE
 from core.types import LogWorkspace
 from decorators import project_authorized_tool, workflow_discoverable_tool
 from logging_config import get_logger
+from manifests.models import Manifest
 from services.log_analysis import LogAnalysisService
 from services.log_filtering import CreateFilteredViewError, LogFilteringService, SourceNoiseContext
 from services.log_snapshots import LogSnapshotService, SnapshotContext, SnapshotLookupError
-from services.project_manifest import ProjectManifestError, ProjectManifestService
+from services.project_manifest import ProjectManifestError
 from tools.agent_hints import (
     BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION,
     CREATE_FILTERED_VIEW_TOOL_DESCRIPTION,
@@ -53,13 +56,33 @@ logger: logging.Logger = get_logger("tools.analysis")
 analysis_service = LogAnalysisService()
 filtering_service = LogFilteringService()
 snapshot_service = LogSnapshotService()
-manifest_service = ProjectManifestService()
 
 DEFAULT_MAX_ERROR_GROUPS = 50
 DEFAULT_MAX_PROXY_GROUPS = 50
 DEFAULT_FILTERED_VIEW_MAX_LINES = 200
 GROUP_ERRORS_SUMMARY_LIMIT = 5
 GROUP_ERRORS_SUMMARY_MESSAGE_MAX_CHARS = 120
+
+
+def _get_authorized_manifest(project_name: str) -> Manifest | None:
+    """Return one request-state manifest prepared by AuthorizedManifestsMiddleware."""
+
+    request = get_http_request()
+    authorized_manifests = cast(
+        AuthorizedProjectManifests,
+        request.state.authorized_manifests,
+    )
+    return authorized_manifests.manifests.get(project_name)
+
+
+def _build_unknown_project_manifest_error(project_name: str) -> ProjectManifestError:
+    """Return the standard missing-manifest error for this tool module."""
+
+    return ProjectManifestError(
+        message=(
+            f"Unknown project {project_name!r}. No persisted manifest was found for that project."
+        )
+    )
 
 
 def _summarize_group_message(message: str) -> str:
@@ -688,11 +711,12 @@ async def create_filtered_view(
         )
     source_keys_detail: list[JSONValue] = list(source_keys or [])
 
-    manifest_result = await manifest_service.get_or_error(project_name)
-    if isinstance(manifest_result, ProjectManifestError):
+    manifest = _get_authorized_manifest(project_name)
+    if manifest is None:
+        manifest_error = _build_unknown_project_manifest_error(project_name)
         return _build_filtered_view_source_key_error_result(
             error=CreateFilteredViewError(
-                message=manifest_result.message,
+                message=manifest_error.message,
                 error_code="snapshot_source_key_not_found",
                 retry_tips=[
                     "Retry with a valid archive_name and source_keys for the authorized project.",
@@ -707,7 +731,6 @@ async def create_filtered_view(
             view_mode=view_mode,
         )
 
-    manifest = manifest_result.manifest
     source_contexts = {
         source.source_key: SourceNoiseContext(
             source_key=source.source_key,

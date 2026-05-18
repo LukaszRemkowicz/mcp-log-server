@@ -26,16 +26,19 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import PurePosixPath
+from typing import cast
 
 from fastmcp.server.auth import require_scopes
+from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
 
 from app import mcp
+from auth.mcp_authorized_manifests import AuthorizedProjectManifests
 from auth.scopes import CONTAINER_FILES_READ_SCOPE
 from conf import settings
 from decorators import project_authorized_tool
 from logging_config import get_logger
-from manifests.models import SourceDefinition
+from manifests.models import Manifest, SourceDefinition
 from services.docker_service import (
     MAX_CONTAINER_FILE_BYTES,
     ContainerDetail,
@@ -72,6 +75,27 @@ manifest_service = ProjectManifestService()
 docker_service = DockerService()
 
 
+def _get_authorized_manifest(project_name: str) -> Manifest | None:
+    """Return one request-state manifest prepared by AuthorizedManifestsMiddleware."""
+
+    request = get_http_request()
+    authorized_manifests = cast(
+        AuthorizedProjectManifests,
+        request.state.authorized_manifests,
+    )
+    return authorized_manifests.manifests.get(project_name)
+
+
+def _build_unknown_project_manifest_error(project_name: str) -> ProjectManifestError:
+    """Return the standard missing-manifest error for this tool module."""
+
+    return ProjectManifestError(
+        message=(
+            f"Unknown project {project_name!r}. No persisted manifest was found for that project."
+        )
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ContainerInspectionContext:
     """Resolved project/source/path context shared by container inspection tools."""
@@ -97,21 +121,22 @@ async def _prepare_container_source_context(
 ) -> ContainerSourceContext | ToolResult:
     """Resolve manifest and docker source for one container-level tool."""
 
-    manifest_result = await manifest_service.get_or_error(project_name)
-    if isinstance(manifest_result, ProjectManifestError):
+    manifest = _get_authorized_manifest(project_name)
+    if manifest is None:
+        manifest_error = _build_unknown_project_manifest_error(project_name)
         logger.info(
             "tool error",
             extra={
                 "event": "tool_error",
                 "tool_name": action,
-                "error_message": manifest_result.message,
+                "error_message": manifest_error.message,
                 "source_key": source_key,
                 "project_name": project_name,
             },
         )
         return build_container_inspection_error_result(
             action=action,
-            message=manifest_result.message,
+            message=manifest_error.message,
             requested_project_name=project_name,
             source_key=source_key,
             path=None,
@@ -119,7 +144,7 @@ async def _prepare_container_source_context(
         )
 
     definition = manifest_service.get_container_source_or_error(
-        manifest_result.manifest,
+        manifest,
         source_key,
     )
     if isinstance(definition, ProjectManifestError):
@@ -133,7 +158,7 @@ async def _prepare_container_source_context(
         )
 
     return ContainerSourceContext(
-        project_name=manifest_result.project_name,
+        project_name=manifest.project_key,
         definition=definition,
     )
 
@@ -147,14 +172,15 @@ async def _prepare_container_inspection_context(
 ) -> ContainerInspectionContext | ToolResult:
     """Resolve manifest, container source, and allowed path for one inspection tool."""
 
-    manifest_result = await manifest_service.get_or_error(project_name)
-    if isinstance(manifest_result, ProjectManifestError):
+    manifest = _get_authorized_manifest(project_name)
+    if manifest is None:
+        manifest_error = _build_unknown_project_manifest_error(project_name)
         logger.info(
             "tool error",
             extra={
                 "event": "tool_error",
                 "tool_name": action,
-                "error_message": manifest_result.message,
+                "error_message": manifest_error.message,
                 "source_key": source_key,
                 "path": path,
                 "project_name": project_name,
@@ -162,7 +188,7 @@ async def _prepare_container_inspection_context(
         )
         return build_container_inspection_error_result(
             action=action,
-            message=manifest_result.message,
+            message=manifest_error.message,
             requested_project_name=project_name,
             source_key=source_key,
             path=path,
@@ -170,7 +196,7 @@ async def _prepare_container_inspection_context(
         )
 
     definition = manifest_service.get_container_source_or_error(
-        manifest_result.manifest,
+        manifest,
         source_key,
     )
     if isinstance(definition, ProjectManifestError):
@@ -208,7 +234,7 @@ async def _prepare_container_inspection_context(
         )
 
     return ContainerInspectionContext(
-        project_name=manifest_result.project_name,
+        project_name=manifest.project_key,
         definition=definition,
         normalized_path=normalized_path,
     )
@@ -412,20 +438,19 @@ async def inspect_containers_health(
     """Return Docker runtime status for all manifest-approved source containers."""
 
     assert project_name is not None
-    manifest_result = await manifest_service.get_or_error(project_name)
-    if isinstance(manifest_result, ProjectManifestError):
+    manifest = _get_authorized_manifest(project_name)
+    if manifest is None:
+        manifest_error = _build_unknown_project_manifest_error(project_name)
         return build_container_inspection_error_result(
             action="inspect_containers_health",
-            message=manifest_result.message,
+            message=manifest_error.message,
             requested_project_name=project_name,
             source_key=None,
             path=None,
             settings=settings,
         )
 
-    docker_sources = [
-        source for source in manifest_result.manifest.sources if source.source_type == "docker"
-    ]
+    docker_sources = [source for source in manifest.sources if source.source_type == "docker"]
     container_payloads: list[ContainerHealthPayload] = []
     for source in docker_sources:
         health = docker_service.inspect_container_health(source.target)
@@ -447,7 +472,7 @@ async def inspect_containers_health(
 
     payload = InspectContainersHealthPayload(
         action="inspect_containers_health",
-        project_name=manifest_result.project_name,
+        project_name=manifest.project_key,
         resolved_source_keys=[source.source_key for source in docker_sources],
         containers=container_payloads,
     )

@@ -5,14 +5,16 @@ from __future__ import annotations
 import logging
 from typing import cast
 
+from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
 
-from auth.mcp_caller_context import get_request_mcp_caller
+from auth.mcp_authorized_manifests import AuthorizedProjectManifests
 from auth.scopes import LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE
 from conf import settings
 from core.types import LogWorkspace
 from decorators import project_authorized_tool, workflow_discoverable_tool
 from logging_config import get_logger
+from manifests.models import Manifest
 from services.log_collection import BuildLogsError, LogCollectionService
 from services.project_manifest import ProjectManifestError, ProjectManifestService
 from tools.agent_hints import COLLECT_LOGS_NEXT_STEP_TIPS, COLLECT_LOGS_TOOL_DESCRIPTION
@@ -25,6 +27,26 @@ logger: logging.Logger = get_logger("tools.collection")
 
 collection_service = LogCollectionService()
 manifest_service = ProjectManifestService()
+
+
+def _get_authorized_manifests() -> AuthorizedProjectManifests:
+    """Return request-state manifests prepared by AuthorizedManifestsMiddleware."""
+
+    request = get_http_request()
+    return cast(
+        AuthorizedProjectManifests,
+        request.state.authorized_manifests,
+    )
+
+
+def _build_unknown_project_manifest_error(project_name: str) -> ProjectManifestError:
+    """Return the standard missing-manifest error for this tool module."""
+
+    return ProjectManifestError(
+        message=(
+            f"Unknown project {project_name!r}. No persisted manifest was found for that project."
+        )
+    )
 
 
 @workflow_discoverable_tool(PROJECTS_READ_SCOPE)
@@ -41,20 +63,18 @@ async def list_projects() -> list[ProjectManifestSummary]:
     manifest contents.
     """
 
-    caller = get_request_mcp_caller()
-    assert caller is not None, "list_projects expects middleware-attached MCP caller context"
+    authorized_manifests = _get_authorized_manifests()
 
     project_summaries: list[ProjectManifestSummary] = []
-    for project_name in sorted(caller.allowed_projects):
-        manifest_context = await manifest_service.get(project_name)
-        if manifest_context is not None:
-            project_summaries.append(
-                ProjectManifestSummary(
-                    project_name=manifest_context.project_name,
-                    project_summary=manifest_context.manifest.project_summary,
-                    source_keys=[source.source_key for source in manifest_context.manifest.sources],
-                )
+    for project_name in sorted(authorized_manifests.manifests):
+        manifest = authorized_manifests.manifests[project_name]
+        project_summaries.append(
+            ProjectManifestSummary(
+                project_name=manifest.project_key,
+                project_summary=manifest.project_summary,
+                source_keys=[source.source_key for source in manifest.sources],
             )
+        )
 
     logger.info(
         "tool result",
@@ -115,17 +135,19 @@ async def collect_logs(
         since=since,
     )
     assert project_names, "collect_logs expects middleware-normalized non-empty project_names"
+    authorized_manifests = _get_authorized_manifests()
 
     project_payloads = []
     for project_name in project_names:
-        manifest_result = await manifest_service.get_or_error(project_name)
-        if isinstance(manifest_result, ProjectManifestError):
+        manifest: Manifest | None = authorized_manifests.manifests.get(project_name)
+        if manifest is None:
+            manifest_error = _build_unknown_project_manifest_error(project_name)
             logger.info(
                 "tool error",
                 extra={
                     "event": "tool_error",
                     "tool_name": "collect_logs",
-                    "error_message": manifest_result.message,
+                    "error_message": manifest_error.message,
                     "project_names": project_names,
                     "workspace": workspace,
                     "session_id": session_id,
@@ -134,7 +156,7 @@ async def collect_logs(
                 },
             )
             return build_collect_logs_error_result(
-                manifest_result.message,
+                manifest_error.message,
                 settings=settings,
                 project_names=project_names,
                 workspace=workspace,
@@ -142,7 +164,7 @@ async def collect_logs(
             )
 
         manifest_sources = manifest_service.get_manifest_source_keys(
-            manifest_result.manifest,
+            manifest,
             defaults.source_keys,
         )
         if not manifest_sources.sources and manifest_sources.missing_source_keys:
@@ -163,7 +185,7 @@ async def collect_logs(
                 ),
             )
         project_payload = await collection_service.build_logs(
-            manifest=manifest_result.manifest,
+            manifest=manifest,
             sources=manifest_sources.sources,
             missing_source_keys=manifest_sources.missing_source_keys,
             source_keys=manifest_sources.source_keys,
