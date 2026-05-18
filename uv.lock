@@ -1278,7 +1278,6 @@ dependencies = [
     { name = "fastmcp" },
     { name = "joserfc" },
     { name = "pydantic" },
-    { name = "pydantic-settings" },
     { name = "tortoise-orm", extra = ["asyncpg"] },
     { name = "typer" },
 ]
@@ -1307,7 +1306,6 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=2.0.0" },
     { name = "joserfc", specifier = ">=1.4.0" },
     { name = "pydantic", specifier = ">=2.9.0" },
-    { name = "pydantic-settings", specifier = ">=2.5.0" },
     { name = "tortoise-orm", extras = ["asyncpg"], specifier = ">=0.25.1" },
     { name = "typer", specifier = ">=0.24.0" },
 ]

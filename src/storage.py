@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from conf import settings
-from settings import REPOSITORY_ROOT, Settings
+from conf import Settings, settings
+from settings import REPOSITORY_ROOT
 
 
 @dataclass(frozen=True, slots=True)

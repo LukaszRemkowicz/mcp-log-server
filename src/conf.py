@@ -1,9 +1,69 @@
-"""Django-style settings access helpers for the current process."""
+"""Django-style settings access helpers for the current process.
 
+Settings are intentionally loaded from uppercase values in `settings.py`
+instead of a Pydantic settings model. The Pydantic approach made each new
+setting live in two places: once as the real value and again as a model field.
+Keeping constants out of environment loading also required a separate
+`ClassVar` path, which made ordinary `override_settings()` behavior awkward
+because Pydantic model copies only update model fields, not class variables.
+
+This module keeps `settings.py` as the single source of truth while still
+providing a stable `conf.settings` proxy. Test/runtime overrides stay plain:
+copy the current settings object, replace attributes, and restore the previous
+object afterward.
+"""
+
+from collections.abc import Mapping
+from copy import copy
+from functools import lru_cache
+from types import ModuleType
 from typing import Any, cast
+from urllib.parse import quote
 
-from settings import Settings
-from settings import get_settings as _get_settings
+import settings as settings_module
+
+SettingsSource = ModuleType | Mapping[str, Any]
+
+
+class Settings:
+    """Mutable settings object loaded from uppercase module values."""
+
+    def __init__(self, *sources: SettingsSource, **overrides: Any) -> None:
+        """Load uppercase settings from source modules/mappings plus overrides."""
+
+        for source in sources or (settings_module,):
+            for name, value in _source_settings(source).items():
+                setattr(self, name, copy(value))
+        for name, value in overrides.items():
+            setattr(self, name, copy(value))
+
+    def __getattr__(self, name: str) -> Any:
+        raise AttributeError(name)
+
+    @property
+    def db(self) -> str:
+        """Return the Postgres connection DSN for database clients."""
+
+        username = quote(self.DATABASE_USER, safe="")
+        password = quote(self.DATABASE_PASSWORD, safe="")
+        database = quote(self.DATABASE_NAME, safe="")
+        return (
+            f"postgres://{username}:{password}@{self.DATABASE_HOST}:{self.DATABASE_PORT}/{database}"
+        )
+
+    def copy(self, **updates: Any) -> "Settings":
+        """Return a shallow settings copy with optional overrides."""
+
+        values = vars(self).copy()
+        values.update(updates)
+        return Settings(**values)
+
+
+def _source_settings(source: SettingsSource) -> dict[str, Any]:
+    """Return uppercase settings from one module or mapping source."""
+
+    values = vars(source) if isinstance(source, ModuleType) else source
+    return {name: value for name, value in values.items() if name.isupper()}
 
 
 class SettingsProxy:
@@ -24,6 +84,13 @@ class SettingsProxy:
         """Replace the concrete settings object used by the proxy."""
 
         self._wrapped = wrapped
+
+
+@lru_cache(maxsize=1)
+def _get_settings() -> Settings:
+    """Return a cached settings instance for process-wide reuse."""
+
+    return Settings()
 
 
 _settings_proxy = SettingsProxy(_get_settings())

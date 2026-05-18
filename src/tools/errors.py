@@ -19,7 +19,7 @@ from typing import Any
 from fastmcp.tools.base import ToolResult
 from mcp.types import TextContent
 
-from settings import Settings
+from conf import Settings
 from storage import storage
 from tools.models import SnapshotWorkspace
 from utils.mcp_errors import (

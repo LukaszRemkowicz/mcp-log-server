@@ -52,8 +52,8 @@ def get_mcp_service_status(
         "client_id": caller.client_id,
         "client_type": caller.client_type,
         "environment": settings.ENVIRONMENT,
-        "host": settings.HOST,
-        "port": settings.PORT,
+        "host": settings.MCP_HOST,
+        "port": settings.MCP_PORT,
         "log_level": settings.LOG_LEVEL,
     }
     logger.info(

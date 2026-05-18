@@ -21,7 +21,7 @@ from app import create_application, mcp
 from auth.auth_provider import build_auth_provider
 from auth.mcp_caller_model import get_mcp_caller_model
 from auth.scopes import LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE
-from conf import set_settings, settings
+from conf import Settings, set_settings, settings
 from core.types import LogWorkspace
 from database.managers import DatabaseModel
 from database.models import (
@@ -37,7 +37,6 @@ from database.services.project_manifests import ProjectManifestService as Projec
 from database.signals import register_database_signals
 from manifests.loader import list_project_manifests
 from manifests.models import Manifest
-from settings import Settings
 
 JwtOverrides = dict[str, Any] | None
 AccessTokenClaims = dict[str, Any] | None
@@ -161,8 +160,8 @@ def override_settings(
 ) -> Iterator[Settings]:
     """Temporarily patch selected shared app settings for tests."""
 
-    previous_settings = settings.model_copy()
-    effective_settings = previous_settings.model_copy(update=updates)
+    previous_settings = settings.copy()
+    effective_settings = previous_settings.copy(**updates)
 
     set_settings(effective_settings)
     try:

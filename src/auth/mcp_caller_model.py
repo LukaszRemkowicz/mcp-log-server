@@ -1,4 +1,4 @@
-"""Resolve the configured MCP caller model."""
+"""Resolve the configured caller authorization model."""
 
 from __future__ import annotations
 
@@ -17,13 +17,13 @@ def get_mcp_caller_model() -> type[McpCaller]:
     not need to import the concrete model directly.
     """
 
-    module_path, _, class_name = settings.MCP_CALLER_MODEL.rpartition(".")
+    module_path, _, class_name = settings.CALLER_AUTH.rpartition(".")
     if not module_path or not class_name:
-        msg = "MCP_CALLER_MODEL must be a dotted Python path."
+        msg = "CALLER_AUTH must be a dotted Python path."
         raise RuntimeError(msg)
 
     model = getattr(import_module(module_path), class_name)
     if not isinstance(model, type) or not issubclass(model, McpCaller):
-        msg = "MCP_CALLER_MODEL must point to a McpCaller model class."
+        msg = "CALLER_AUTH must point to a McpCaller model class."
         raise RuntimeError(msg)
     return model

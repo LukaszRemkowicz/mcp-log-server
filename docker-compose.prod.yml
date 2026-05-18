@@ -29,7 +29,8 @@ services:
       db:
         condition: service_healthy
     environment:
-      HOST: 0.0.0.0
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: ${MCP_PORT:-8001}
       PYTHONPATH: /app/src
       DATABASE_HOST: db
       DATABASE_PORT: 5432
@@ -42,7 +43,7 @@ services:
       COMMANDS_COMPOSE_PROJECT_NAME: mcp-log-server
       COMMANDS_APP_SERVICE: app
     ports:
-      - "127.0.0.1:${MCP_PORT_HOST:-8001}:8001"
+      - "127.0.0.1:${MCP_PORT_HOST:-8001}:${MCP_PORT:-8001}"
     command: ["uv", "run", "python", "-m", "main"]
 
 volumes:

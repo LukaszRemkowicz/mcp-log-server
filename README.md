@@ -101,14 +101,11 @@ For real deployment, some values should still be treated as required.
 Production-required secrets/config:
 
 - `ENVIRONMENT`
-- `HOST`
-- `PORT`
+- `MCP_HOST`
+- `MCP_PORT`
 - `JWT_SHARED_SECRET`
 - `JWT_ISSUER`
 - `JWT_AUDIENCE`
-- `MCP_PATH`
-- `MCP_STATELESS_HTTP`
-- `MCP_JSON_RESPONSE`
 - `DATABASE_HOST`
 - `DATABASE_PORT`
 - `DATABASE_NAME`
@@ -119,9 +116,6 @@ Production-required secrets/config:
 Production-recommended runtime config:
 
 - `LOG_LEVEL`
-- `LOG_FORMAT`
-- `JWT_ALGORITHM`
-- `JWT_EXPIRATION_SECONDS`
 - `MCP_PORT_HOST` when the host-side MCP port should differ from `8001`
 
 Local development defaults:
@@ -174,10 +168,10 @@ are reviewed and approved.
   container.
   Default: `/var/run/fail2ban/fail2ban.sock`
 
-  Live `inspect_live_fail2ban_activity` diagnostics call
-  `fail2ban-client -s "$FAIL2BAN_SOCKET_PATH" ...`. This is separate from
-  collected fail2ban logs; the live command only works when the host socket is
-  intentionally mounted into the MCP container.
+Live `inspect_live_fail2ban_activity` diagnostics call
+`fail2ban-client -s "$FAIL2BAN_SOCKET_PATH" ...`. This is separate from
+collected fail2ban logs; the live command only works when the host socket is
+intentionally mounted into the MCP container.
 
 - `FAIL2BAN_SOCKET_DIR_HOST`
   Host path to the fail2ban Unix socket directory when using the optional fail2ban Compose
@@ -395,8 +389,8 @@ database list becomes the effective project allowlist for the tool call, so a
 valid JWT is not enough by itself; the caller must also have a matching
 `mcp_callers` row for the requested workspace and projects.
 
-The concrete caller model is resolved through `MCP_CALLER_MODEL`, which defaults
-to `database.models.McpCaller`.
+The concrete caller authorization model is resolved through `CALLER_AUTH`, which
+defaults to `database.models.McpCaller`.
 
 Example manual row:
 
@@ -415,25 +409,25 @@ VALUES (
 );
 ```
 
-- `JWT_ALGORITHM`
-  Signing algorithm for local example JWTs.
-  Default: `HS256`
+The local JWT signing algorithm is fixed in [src/settings.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/settings.py:1)
+as `HS256`.
 
 - `JWT_SHARED_SECRET`
   Shared secret used to sign and verify local example JWTs.
   Default: `change-me-local-dev-secret`
 
 - `JWT_ISSUER`
-  Required `iss` claim for local example JWTs.
+  Required `iss` claim for local example JWTs. This is not a secret; it is a
+  public token issuer identifier that the server validates.
   Default: `mcp-log-server-dev`
 
 - `JWT_AUDIENCE`
-  Required `aud` claim for local example JWTs.
+  Required `aud` claim for local example JWTs. This is not a secret; it is the
+  public audience identifier expected by the server.
   Default: `mcp-log-server`
 
-- `JWT_EXPIRATION_SECONDS`
-  Lifetime of locally generated example JWTs.
-  Default: `86400`
+The local example JWT lifetime is fixed in [src/settings.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/settings.py:1)
+as `86400` seconds.
 
 Generate example JWTs locally:
 
@@ -533,16 +527,7 @@ own HTTP server logging.
   - `WARNING`
   - `ERROR`
 
-- `LOG_FORMAT`
-  Controls the project log output format.
-  Default: `text`
-
-  Supported values:
-
-  - `text`
-    human-readable development logs
-  - `json`
-    one JSON object per line for easier ingestion by log pipelines later
+The project log output format is fixed to JSON in [src/settings.py](/Users/lukaszremkowicz/Projects/mcp-log-server/src/settings.py:1), so every project log line is emitted as one JSON object.
 
 Current project logs include:
 
@@ -556,12 +541,12 @@ Current project logs include:
 Example:
 
 ```bash
-LOG_LEVEL=DEBUG LOG_FORMAT=text doppler run -- docker compose up --build
+LOG_LEVEL=DEBUG doppler run -- docker compose up --build
 ```
 
 ### MCP Configuration
 
-These variables control how the local FastMCP HTTP server starts.
+These settings control how the local FastMCP HTTP server starts.
 
 Manifests and logs are intentionally separate:
 
@@ -571,17 +556,24 @@ Manifests and logs are intentionally separate:
 - file-backed manifest source targets must be absolute paths, so each source
   declares exactly where its log file lives
 
+- `MCP_HOST`
+  Host address the FastMCP service binds inside the running process.
+  Default: `127.0.0.1`
+
+  Docker Compose injects `0.0.0.0` inside app containers so the service is
+  reachable through the loopback-only host port binding.
+
+- `MCP_PORT`
+  Port the FastMCP service binds inside the running process.
+  Default: `8001`
+
 - `MCP_PATH`
   HTTP path where the FastMCP endpoint is exposed.
   Default: `/mcp`
 
-  If this is set to `/mcp`, MCP JSON-RPC requests go to:
+  MCP JSON-RPC requests go to:
 
   - `http://127.0.0.1:8001/mcp`
-
-  If changed to `/api/mcp`, the endpoint becomes:
-
-  - `http://127.0.0.1:8001/api/mcp`
 
 - `MCP_STATELESS_HTTP`
   Enables stateless HTTP mode for the FastMCP transport.

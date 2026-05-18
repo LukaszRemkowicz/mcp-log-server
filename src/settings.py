@@ -1,82 +1,39 @@
-"""Application settings for the MCP log server."""
+"""Django-style settings for the MCP log server."""
 
 from __future__ import annotations
 
-from functools import lru_cache
+import os
 from pathlib import Path
-from urllib.parse import quote
-
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
-class Settings(BaseSettings):
-    """Process configuration loaded from environment variables."""
-
-    model_config = SettingsConfigDict(
-        extra="ignore",
-        populate_by_name=True,
-    )
-
-    ENVIRONMENT: str = "dev"
-    HOST: str = "127.0.0.1"
-    PORT: int = 8001
-    LOG_LEVEL: str = "INFO"
-    LOG_FORMAT: str = "text"
-    JWT_ALGORITHM: str = "HS256"
-    JWT_SHARED_SECRET: str = "change-me-local-dev-secret"
-    JWT_ISSUER: str = "mcp-log-server-dev"
-    JWT_AUDIENCE: str = "mcp-log-server"
-    JWT_EXPIRATION_SECONDS: int = 86400
-    LOGS_DIR: Path = REPOSITORY_ROOT / "logs"
-    DEFAULT_LOG_WINDOW: str = Field(
-        default="24h",
-        alias="DEFAULT_LOG_WINDOW",
-    )
-    WORKFLOW_ARCHIVE_RETENTION: str = Field(
-        default="14d",
-        alias="WORKFLOW_ARCHIVE_RETENTION",
-    )
-    LOG_SNAPSHOT_RETENTION: str = Field(
-        default="7d",
-        alias="LOG_SNAPSHOT_RETENTION",
-    )
-    FAIL2BAN_SOCKET_PATH: Path = Field(
-        default=Path("/var/run/fail2ban/fail2ban.sock"),
-        alias="FAIL2BAN_SOCKET_PATH",
-    )
-    FAIL2BAN_CLIENT_COMMAND: str = "fail2ban-client"
-    FAIL2BAN_JAILS: list[str] = Field(
-        default_factory=lambda: ["portfolio-nginx-probes", "portfolio-traefik-probes"],
-        alias="FAIL2BAN_JAILS",
-    )
-    FAIL2BAN_COMMAND_TIMEOUT_SECONDS: int = 5
-    MCP_PATH: str = "/mcp"
-    MCP_STATELESS_HTTP: bool = True
-    MCP_JSON_RESPONSE: bool = True
-    MCP_CALLER_MODEL: str = "database.models.McpCaller"
-    DATABASE_HOST: str = "127.0.0.1"
-    DATABASE_PORT: int = 5432
-    DATABASE_NAME: str = "mcp_log_server"
-    DATABASE_USER: str = "mcp_log_server"
-    DATABASE_PASSWORD: str = "mcp-log-server-local-password"
-
-    @property
-    def db(self) -> str:
-        """Return the Postgres connection DSN for database clients."""
-
-        username = quote(self.DATABASE_USER, safe="")
-        password = quote(self.DATABASE_PASSWORD, safe="")
-        database = quote(self.DATABASE_NAME, safe="")
-        return (
-            f"postgres://{username}:{password}@{self.DATABASE_HOST}:{self.DATABASE_PORT}/{database}"
-        )
-
-
-@lru_cache(maxsize=1)
-def get_settings() -> Settings:
-    """Return a cached settings instance for process-wide reuse."""
-
-    return Settings()
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "dev")
+MCP_HOST = os.environ.get("MCP_HOST", "127.0.0.1")
+MCP_PORT = int(os.environ.get("MCP_PORT", "8001"))
+LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
+LOG_FORMAT = "json"
+JWT_ALGORITHM = "HS256"
+JWT_SHARED_SECRET = os.environ.get("JWT_SHARED_SECRET", "change-me-local-dev-secret")
+JWT_ISSUER = os.environ.get("JWT_ISSUER", "mcp-log-server-dev")
+JWT_AUDIENCE = os.environ.get("JWT_AUDIENCE", "mcp-log-server")
+JWT_EXPIRATION_SECONDS = 86400
+LOGS_DIR = Path(os.environ.get("LOGS_DIR", (REPOSITORY_ROOT / "logs").as_posix()))
+DEFAULT_LOG_WINDOW = "24h"
+WORKFLOW_ARCHIVE_RETENTION = "14d"
+LOG_SNAPSHOT_RETENTION = "7d"
+FAIL2BAN_SOCKET_PATH = Path(
+    os.environ.get("FAIL2BAN_SOCKET_PATH", "/var/run/fail2ban/fail2ban.sock")
+)
+FAIL2BAN_CLIENT_COMMAND = "fail2ban-client"
+FAIL2BAN_JAILS = ["portfolio-nginx-probes", "portfolio-traefik-probes"]
+FAIL2BAN_COMMAND_TIMEOUT_SECONDS = 5
+MCP_PATH = "/mcp"
+MCP_STATELESS_HTTP = True
+MCP_JSON_RESPONSE = True
+CALLER_AUTH = "database.models.McpCaller"
+DATABASE_HOST = os.environ.get("DATABASE_HOST", "127.0.0.1")
+DATABASE_PORT = int(os.environ.get("DATABASE_PORT", "5432"))
+DATABASE_NAME = os.environ.get("DATABASE_NAME", "mcp_log_server")
+DATABASE_USER = os.environ.get("DATABASE_USER", "mcp_log_server")
+DATABASE_PASSWORD = os.environ.get("DATABASE_PASSWORD", "mcp-log-server-local-password")

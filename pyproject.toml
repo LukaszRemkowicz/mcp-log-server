@@ -16,7 +16,6 @@ dependencies = [
   "fastmcp>=2.0.0",
   "joserfc>=1.4.0",
   "pydantic>=2.9.0",
-  "pydantic-settings>=2.5.0",
   "tortoise-orm[asyncpg]>=0.25.1",
   "typer>=0.24.0",
 ]

@@ -4,23 +4,41 @@ from typing import Any
 
 import pytest
 
-from settings import Settings
+import settings as settings_module
+from conf import Settings
 from tests.conftest import override_settings
 
 
 def test_settings_expose_uppercase_fields() -> None:
-    settings = Settings()
+    runtime_settings = Settings()
 
-    assert settings.DEFAULT_LOG_WINDOW == "24h"
-    assert settings.WORKFLOW_ARCHIVE_RETENTION == "14d"
-    assert settings.LOG_SNAPSHOT_RETENTION == "7d"
-    assert settings.FAIL2BAN_SOCKET_PATH.as_posix() == "/var/run/fail2ban/fail2ban.sock"
-    assert settings.FAIL2BAN_CLIENT_COMMAND == "fail2ban-client"
-    assert settings.FAIL2BAN_JAILS == ["portfolio-nginx-probes", "portfolio-traefik-probes"]
-    assert settings.FAIL2BAN_COMMAND_TIMEOUT_SECONDS == 5
-    assert settings.MCP_PATH == "/mcp"
-    assert settings.MCP_JSON_RESPONSE is True
-    assert settings.MCP_CALLER_MODEL == "database.models.McpCaller"
+    assert runtime_settings.MCP_HOST == settings_module.MCP_HOST
+    assert runtime_settings.MCP_PORT == settings_module.MCP_PORT
+    assert runtime_settings.LOG_FORMAT == "json"
+    assert runtime_settings.DEFAULT_LOG_WINDOW == "24h"
+    assert runtime_settings.WORKFLOW_ARCHIVE_RETENTION == "14d"
+    assert runtime_settings.LOG_SNAPSHOT_RETENTION == "7d"
+    assert runtime_settings.FAIL2BAN_SOCKET_PATH.as_posix() == "/var/run/fail2ban/fail2ban.sock"
+    assert runtime_settings.FAIL2BAN_CLIENT_COMMAND == "fail2ban-client"
+    assert runtime_settings.FAIL2BAN_JAILS == ["portfolio-nginx-probes", "portfolio-traefik-probes"]
+    assert runtime_settings.FAIL2BAN_COMMAND_TIMEOUT_SECONDS == 5
+    assert runtime_settings.MCP_PATH == "/mcp"
+    assert runtime_settings.MCP_JSON_RESPONSE is True
+    assert runtime_settings.CALLER_AUTH == "database.models.McpCaller"
+
+
+def test_settings_can_load_injected_source() -> None:
+    """Verify settings can be built from an explicit source object."""
+
+    runtime_settings = Settings(
+        {
+            "LOG_LEVEL": "DEBUG",
+            "LOG_FORMAT": "json",
+        }
+    )
+
+    assert runtime_settings.LOG_LEVEL == "DEBUG"
+    assert runtime_settings.LOG_FORMAT == "json"
 
 
 @pytest.mark.parametrize(
