@@ -1,0 +1,70 @@
+services:
+  db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DATABASE_NAME:?DATABASE_NAME is required}
+      POSTGRES_USER: ${DATABASE_USER:?DATABASE_USER is required}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    image: ${ENVIRONMENT:?ENVIRONMENT is required}-mcp-log-server:${TAG:?TAG is required}
+    build:
+      context: .
+      dockerfile: docker/app/Dockerfile
+      target: production
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: ${MCP_PORT:-8001}
+      PYTHONPATH: /app/src
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_NAME: ${DATABASE_NAME:?DATABASE_NAME is required}
+      DATABASE_USER: ${DATABASE_USER:?DATABASE_USER is required}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
+      JWT_SHARED_SECRET: ${JWT_SHARED_SECRET:?JWT_SHARED_SECRET is required}
+      JWT_ISSUER: ${JWT_ISSUER:?JWT_ISSUER is required}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:?JWT_AUDIENCE is required}
+      FAIL2BAN_SOCKET_PATH: ${FAIL2BAN_SOCKET_PATH:-/var/run/fail2ban/fail2ban.sock}
+      # Used by `uv run commands ...` to find this Compose app service.
+      # Must match the Compose project name and the `services.app` key.
+      COMMANDS_COMPOSE_PROJECT_NAME: mcp-log-server
+      COMMANDS_APP_SERVICE: app
+    ports:
+      - "127.0.0.1:${MCP_PORT_HOST:-8001}:${MCP_PORT:-8001}"
+    networks:
+      - default
+      - traefik_proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.mcp-log-server.rule=Host(`mcp.${SITE_DOMAIN:?SITE_DOMAIN is required}`)"
+      - "traefik.http.routers.mcp-log-server.entrypoints=websecure"
+      - "traefik.http.routers.mcp-log-server.tls=true"
+      - "traefik.http.routers.mcp-log-server.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.mcp-log-server.middlewares=mcp-api-security@file,rate-limit@file"
+      - "traefik.http.routers.mcp-log-server.service=mcp-log-server"
+      - "traefik.http.services.mcp-log-server.loadbalancer.server.port=${MCP_PORT:-8001}"
+    command: ["uv", "run", "python", "-m", "main"]
+
+volumes:
+  postgres-data:
+
+networks:
+  traefik_proxy:
+    external: true

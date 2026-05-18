@@ -1,0 +1,44 @@
+{
+  "project_key": "vps-security",
+  "project_summary": "VPS security logs for fail2ban and edge-proxy probe analysis.",
+  "static_asset_paths": [],
+  "static_asset_extensions": [],
+  "sources": [
+    {
+      "source_key": "fail2ban",
+      "source_type": "file",
+      "target": "/app/src/tests/fixtures/logs/vps-security/fail2ban.log",
+      "description": "Host fail2ban log with ban, unban, already-banned, and jail lifecycle events.",
+      "required": true,
+      "parser_type": "plain_text",
+      "normalization_profile": "security_events",
+      "retention_class": "medium",
+      "default_noise_profile": "security_noise",
+      "inspect_path_prefixes": []
+    },
+    {
+      "source_key": "nginx_access",
+      "source_type": "file",
+      "target": "/app/src/tests/fixtures/logs/vps-security/nginx_access.log",
+      "description": "Production nginx access log watched by the nginx probe fail2ban jail.",
+      "required": false,
+      "parser_type": "nginx_json",
+      "normalization_profile": "proxy_access",
+      "retention_class": "short",
+      "default_noise_profile": "web_noise",
+      "inspect_path_prefixes": []
+    },
+    {
+      "source_key": "traefik_access",
+      "source_type": "file",
+      "target": "/app/src/tests/fixtures/logs/vps-security/traefik_access.log",
+      "description": "Traefik access log watched by the Traefik probe fail2ban jail.",
+      "required": false,
+      "parser_type": "traefik_json",
+      "normalization_profile": "proxy_access",
+      "retention_class": "short",
+      "default_noise_profile": "proxy_noise",
+      "inspect_path_prefixes": []
+    }
+  ]
+}

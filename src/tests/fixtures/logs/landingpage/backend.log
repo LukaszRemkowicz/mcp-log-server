@@ -1,0 +1,4 @@
+{"timestamp":"2026-04-29T09:00:00Z","level":"INFO","request_path":"/health","message":"health ok"}
+{"timestamp":"2026-04-29T09:01:00Z","level":"ERROR","request_path":"/api/orders","message":"Database timeout"}
+{"timestamp":"2026-04-29T10:00:00Z","level":"ERROR","message":"Database connection failed","request_path":"/api/orders"}
+{"timestamp":"2026-04-29T10:05:00Z","level":"ERROR","message":"Database connection failed","request_path":"/api/orders"}

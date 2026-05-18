@@ -1,0 +1,2 @@
+{"timestamp":"2026-05-05T10:00:00Z","level":"INFO","project":"alpha","message":"worker started"}
+{"timestamp":"2026-05-05T10:01:00Z","level":"INFO","project":"alpha","message":"processed scheduled job"}

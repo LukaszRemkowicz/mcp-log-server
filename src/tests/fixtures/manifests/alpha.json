@@ -1,0 +1,18 @@
+{
+  "project_key": "alpha",
+  "project_summary": "Alpha project summary.",
+  "sources": [
+    {
+      "source_key": "app_file",
+      "source_type": "file",
+      "target": "/app/src/tests/fixtures/logs/alpha/app_file.log",
+      "description": "Alpha application logs.",
+      "required": true,
+      "parser_type": "json_lines",
+      "normalization_profile": "app_logs",
+      "retention_class": "short",
+      "default_noise_profile": "app_noise",
+      "inspect_path_prefixes": []
+    }
+  ]
+}
