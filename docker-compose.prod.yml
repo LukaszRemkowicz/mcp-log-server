@@ -50,7 +50,7 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/log/fail2ban.log:/var/log/fail2ban.log:ro
-      - /var/log/portfolio/nginx/prod/access.log:/var/log/portfolio/nginx/prod/access.log:ro
+      - /etc/nginx/logs/access.log:/var/log/nginx/access.log:ro
       - /var/log/portfolio/traefik/access.log:/var/log/portfolio/traefik/access.log:ro
     group_add:
       - "${DOCKER_SOCKET_GID:?DOCKER_SOCKET_GID is required}"

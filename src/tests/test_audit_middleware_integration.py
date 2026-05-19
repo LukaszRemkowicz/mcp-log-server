@@ -730,29 +730,29 @@ async def test_audit_middleware_expands_all_allowed_projects_from_manifests(
 
 @pytest.mark.anyio
 @pytest.mark.usefixtures("db")
-async def test_project_manifest_save_clears_all_manifest_cache() -> None:
-    """Verify manifest saves clear cached manifest listings."""
+async def test_project_manifest_service_all_returns_fresh_rows() -> None:
+    """Verify manifest listings reflect rows created by separate service calls."""
 
     await ProjectManifest.clear_cache()
     project_manifest_service = ProjectManifestService()
     await ProjectManifestFactory.save_to_db(
-        project_key="cache-alpha",
-        project_summary="Cache alpha.",
+        project_key="fresh-alpha",
+        project_summary="Fresh alpha.",
     )
 
     try:
         first_result = await project_manifest_service.all()
         await ProjectManifestFactory.save_to_db(
-            project_key="cache-beta",
-            project_summary="Cache beta.",
+            project_key="fresh-beta",
+            project_summary="Fresh beta.",
         )
         second_result = await project_manifest_service.all()
         first_project_keys = {row.project_key for row in first_result}
         second_project_keys = {row.project_key for row in second_result}
 
-        assert "cache-alpha" in first_project_keys
-        assert "cache-beta" not in first_project_keys
-        assert "cache-beta" in second_project_keys
+        assert "fresh-alpha" in first_project_keys
+        assert "fresh-beta" not in first_project_keys
+        assert "fresh-beta" in second_project_keys
         assert second_result != first_result
     finally:
         await ProjectManifest.clear_cache()
@@ -760,8 +760,8 @@ async def test_project_manifest_save_clears_all_manifest_cache() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.usefixtures("db")
-async def test_project_manifest_save_clears_one_manifest_cache() -> None:
-    """Verify manifest saves clear cached single-manifest lookups."""
+async def test_project_manifest_service_get_returns_fresh_row_after_save() -> None:
+    """Verify single-manifest lookups reflect direct row saves."""
 
     project_manifest_service = ProjectManifestService()
     project_manifest = await ProjectManifestFactory.save_to_db()
@@ -783,8 +783,8 @@ async def test_project_manifest_save_clears_one_manifest_cache() -> None:
 
 @pytest.mark.anyio
 @pytest.mark.usefixtures("db")
-async def test_project_manifest_service_cache_is_clearable() -> None:
-    """Verify manifest writes can clear the cached manifest listing."""
+async def test_project_manifest_service_all_does_not_require_cache_clear() -> None:
+    """Verify manifest listings do not require process-local cache invalidation."""
 
     project_manifest_service = ProjectManifestService()
     first_project_manifest = await ProjectManifestFactory.save_to_db()
@@ -800,19 +800,18 @@ async def test_project_manifest_service_cache_is_clearable() -> None:
         assert second_project_manifest.project_key in second_project_keys
         assert second_result != first_result
 
-        await ProjectManifest.clear_cache()
-
-        refreshed_result = await project_manifest_service.all()
-        refreshed_project_keys = {row.project_key for row in refreshed_result}
-        assert second_project_manifest.project_key in refreshed_project_keys
+        third_project_manifest = await ProjectManifestFactory.save_to_db()
+        third_result = await project_manifest_service.all()
+        third_project_keys = {row.project_key for row in third_result}
+        assert third_project_manifest.project_key in third_project_keys
     finally:
         await ProjectManifest.clear_cache()
 
 
 @pytest.mark.anyio
 @pytest.mark.usefixtures("db")
-async def test_project_manifest_service_update_clears_single_manifest_cache() -> None:
-    """Verify service updates refresh cached single-manifest lookups."""
+async def test_project_manifest_service_update_refreshes_single_manifest_lookup() -> None:
+    """Verify service updates are visible to later single-manifest lookups."""
 
     project_manifest_service = ProjectManifestService()
     project_manifest = await ProjectManifestFactory.save_to_db()
