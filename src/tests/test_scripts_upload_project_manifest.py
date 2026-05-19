@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -228,8 +229,13 @@ def test_upload_project_manifest_command_rejects_project_and_all() -> None:
 
 def test_upload_project_manifest_command_runs_inside_app_container(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
+    copied: list[dict[str, object]] = []
 
     class FakeDockerCommandService:
+        @staticmethod
+        def copy_files_to_compose_service(**kwargs):
+            copied.append(kwargs)
+
         @staticmethod
         def run_compose_service_command(**kwargs):
             calls.append(kwargs)
@@ -239,6 +245,11 @@ def test_upload_project_manifest_command_runs_inside_app_container(monkeypatch) 
             )
 
     monkeypatch.setattr(upload_command, "DockerCommandService", FakeDockerCommandService)
+    monkeypatch.setattr(
+        upload_command,
+        "_manifest_files_for_container_copy",
+        lambda **_: [Path("landingpage.json")],
+    )
 
     result = runner.invoke(app, ["upload-project-manifest", "landingpage"])
 
@@ -256,23 +267,41 @@ def test_upload_project_manifest_command_runs_inside_app_container(monkeypatch) 
                 "scripts.main",
                 "upload-project-manifest-internal",
                 "--path",
-                ".",
+                "/tmp/mcp-log-server-manifests",
                 "landingpage",
             ],
+        }
+    ]
+    assert copied == [
+        {
+            "project_name": "mcp-log-server",
+            "service_name": "app",
+            "files": [Path("landingpage.json")],
+            "target_dir": "/tmp/mcp-log-server-manifests",
         }
     ]
 
 
 def test_upload_project_manifest_command_passes_all_to_app_container(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
+    copied: list[dict[str, object]] = []
 
     class FakeDockerCommandService:
+        @staticmethod
+        def copy_files_to_compose_service(**kwargs):
+            copied.append(kwargs)
+
         @staticmethod
         def run_compose_service_command(**kwargs):
             calls.append(kwargs)
             return DockerCommandResult(exit_code=0, output="")
 
     monkeypatch.setattr(upload_command, "DockerCommandService", FakeDockerCommandService)
+    monkeypatch.setattr(
+        upload_command,
+        "_manifest_files_for_container_copy",
+        lambda **_: [Path("landingpage.json"), Path("vps-security.json")],
+    )
 
     result = runner.invoke(app, ["upload-project-manifest", "--all"])
 
@@ -285,15 +314,21 @@ def test_upload_project_manifest_command_passes_all_to_app_container(monkeypatch
         "scripts.main",
         "upload-project-manifest-internal",
         "--path",
-        ".",
+        "/tmp/mcp-log-server-manifests",
         "--all",
     ]
+    assert copied[0]["files"] == [Path("landingpage.json"), Path("vps-security.json")]
 
 
 def test_update_project_manifest_command_runs_inside_app_container(monkeypatch) -> None:
     calls: list[dict[str, object]] = []
+    copied: list[dict[str, object]] = []
 
     class FakeDockerCommandService:
+        @staticmethod
+        def copy_files_to_compose_service(**kwargs):
+            copied.append(kwargs)
+
         @staticmethod
         def run_compose_service_command(**kwargs):
             calls.append(kwargs)
@@ -303,6 +338,11 @@ def test_update_project_manifest_command_runs_inside_app_container(monkeypatch) 
             )
 
     monkeypatch.setattr(upload_command, "DockerCommandService", FakeDockerCommandService)
+    monkeypatch.setattr(
+        upload_command,
+        "_manifest_files_for_container_copy",
+        lambda **_: [Path("landingpage.json")],
+    )
 
     result = runner.invoke(app, ["update-project-manifest", "--project", "landingpage"])
 
@@ -316,7 +356,8 @@ def test_update_project_manifest_command_runs_inside_app_container(monkeypatch) 
         "scripts.main",
         "update-project-manifest-internal",
         "--path",
-        ".",
+        "/tmp/mcp-log-server-manifests",
         "--project",
         "landingpage",
     ]
+    assert copied[0]["files"] == [Path("landingpage.json")]

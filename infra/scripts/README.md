@@ -141,8 +141,8 @@ Deploy behavior:
 - verifies the local image `prod-mcp-log-server:<TAG>` exists
 - exposes the MCP HTTP endpoint through the existing Traefik stack at
   `https://mcp.${SITE_DOMAIN}/mcp`
-- includes `docker-compose.fail2ban.yml` by default so the app container can
-  talk to the host fail2ban socket on the VPS
+- includes `docker-compose.fail2ban.yml` by default so the internal
+  `fail2ban-proxy` sidecar can talk to the host fail2ban socket on the VPS
 - asks for confirmation before mutating the target stack unless
   `AUTO_APPROVE=true`
 - creates a database backup unless `SKIP_BACKUP=true`
@@ -167,3 +167,30 @@ override explicitly:
 ```bash
 ENABLE_FAIL2BAN_SOCKET=false TAG=v1.2.3 infra/scripts/release/deploy.sh
 ```
+
+## Production logs
+
+Read production container logs without loading `docker-compose.prod.yml` and
+without requiring Doppler or Compose-time variables:
+
+```bash
+infra/scripts/logs.sh app
+```
+
+Follow logs:
+
+```bash
+FOLLOW=true infra/scripts/logs.sh app
+```
+
+Read another service:
+
+```bash
+infra/scripts/logs.sh db
+```
+
+Useful options:
+
+- `TAIL_LINES=500` changes the number of lines shown.
+- `COMPOSE_PROJECT_NAME=mcp-log-server-prod` overrides the Docker Compose
+  project name when needed.

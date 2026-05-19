@@ -1277,6 +1277,7 @@ dependencies = [
     { name = "docker" },
     { name = "factory-boy" },
     { name = "fastmcp" },
+    { name = "ipython" },
     { name = "joserfc" },
     { name = "pydantic" },
     { name = "tortoise-orm", extra = ["asyncpg"] },
@@ -1286,7 +1287,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "black" },
-    { name = "ipython" },
     { name = "isort" },
     { name = "mypy" },
     { name = "pip-audit" },
@@ -1305,6 +1305,7 @@ requires-dist = [
     { name = "docker", specifier = ">=7.1.0" },
     { name = "factory-boy", specifier = ">=3.3.3" },
     { name = "fastmcp", specifier = ">=2.0.0" },
+    { name = "ipython", specifier = ">=9.0.0" },
     { name = "joserfc", specifier = ">=1.4.0" },
     { name = "pydantic", specifier = ">=2.9.0" },
     { name = "tortoise-orm", extras = ["asyncpg"], specifier = ">=0.25.1" },
@@ -1314,7 +1315,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "black", specifier = ">=24.10.0" },
-    { name = "ipython", specifier = ">=9.0.0" },
     { name = "isort", specifier = ">=5.13.0" },
     { name = "mypy", specifier = ">=1.13.0" },
     { name = "pip-audit", specifier = ">=2.9.0" },

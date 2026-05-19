@@ -13,6 +13,7 @@ class FakeComposeContainer:
 
     def __init__(self, *, output: str = "done\n", exit_code: int = 0) -> None:
         self.commands: list[list[str]] = []
+        self.archives: list[tuple[str, bytes]] = []
         self.output = output
         self.exit_code = exit_code
 
@@ -21,6 +22,10 @@ class FakeComposeContainer:
         assert stderr is True
         self.commands.append(command)
         return FakeDockerExecResult(exit_code=self.exit_code, output=self.output)
+
+    def put_archive(self, path: str, data: bytes) -> bool:
+        self.archives.append((path, data))
+        return True
 
 
 def test_run_compose_service_command_uses_compose_labels(mocker) -> None:
@@ -71,3 +76,24 @@ def test_run_compose_service_command_errors_when_service_missing(mocker) -> None
         assert str(error) == "Running Compose service mcp-log-server/app was not found."
     else:
         raise AssertionError("Expected missing service to raise ValueError.")
+
+
+def test_copy_files_to_compose_service_puts_archive_in_target_directory(tmp_path, mocker) -> None:
+    manifest = tmp_path / "landingpage.json"
+    manifest.write_text('{"project_key":"landingpage"}')
+    container = FakeComposeContainer()
+
+    fake_client = SimpleNamespace(containers=SimpleNamespace(list=lambda *, filters: [container]))
+    mocker.patch("scripts.docker_commands.docker.from_env", return_value=fake_client)
+
+    DockerCommandService().copy_files_to_compose_service(
+        project_name="mcp-log-server",
+        service_name="app",
+        files=[manifest],
+        target_dir="/tmp/mcp-log-server-manifests",
+    )
+
+    assert container.commands == [["mkdir", "-p", "/tmp/mcp-log-server-manifests"]]
+    assert len(container.archives) == 1
+    assert container.archives[0][0] == "/tmp/mcp-log-server-manifests"
+    assert b"landingpage.json" in container.archives[0][1]

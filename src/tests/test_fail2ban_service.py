@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import subprocess
+from io import BytesIO
 
 from pytest_mock import MockerFixture
 
@@ -130,3 +132,72 @@ def test_fail2ban_service_returns_unavailable_when_client_is_missing(
     assert result.error_code == "fail2ban_client_unavailable"
     assert result.jails == []
     assert result.retry_tips
+
+
+def test_fail2ban_service_uses_proxy_for_allowlisted_status_commands(
+    mocker: MockerFixture,
+) -> None:
+    """Verify proxy mode uses fixed HTTP endpoints instead of subprocess calls."""
+
+    class FakeResponse(BytesIO):
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    payloads = [
+        {
+            "returncode": 0,
+            "stdout": (
+                "Status\n"
+                "|- Number of jail:\t2\n"
+                "`- Jail list:\tportfolio-nginx-probes, portfolio-traefik-probes\n"
+            ),
+            "stderr": "",
+        },
+        {
+            "returncode": 0,
+            "stdout": (
+                "Status for the jail: portfolio-nginx-probes\n"
+                "|- Filter\n"
+                "|  |- Currently failed:\t1\n"
+                "`- Actions\n"
+                "   |- Currently banned:\t0\n"
+                "   `- Banned IP list:\t\n"
+            ),
+            "stderr": "",
+        },
+        {
+            "returncode": 0,
+            "stdout": (
+                "Status for the jail: portfolio-traefik-probes\n"
+                "|- Filter\n"
+                "|  |- Currently failed:\t0\n"
+                "`- Actions\n"
+                "   |- Currently banned:\t0\n"
+                "   `- Banned IP list:\t\n"
+            ),
+            "stderr": "",
+        },
+    ]
+    urlopen = mocker.patch(
+        "services.fail2ban_service.urlopen",
+        side_effect=[FakeResponse(json.dumps(payload).encode("utf-8")) for payload in payloads],
+    )
+    run = mocker.patch("services.fail2ban_service.subprocess.run")
+
+    result = Fail2banService(
+        socket_path=FAIL2BAN_SOCKET_PATH,
+        proxy_url="http://fail2ban-proxy:8765",
+        jails=FAIL2BAN_JAILS,
+    ).inspect_activity()
+
+    assert run.call_count == 0
+    assert [call.args[0].full_url for call in urlopen.call_args_list] == [
+        "http://fail2ban-proxy:8765/status",
+        "http://fail2ban-proxy:8765/status/portfolio-nginx-probes",
+        "http://fail2ban-proxy:8765/status/portfolio-traefik-probes",
+    ]
+    assert result.inspection_status == "ok"
+    assert result.service.jail_count == 2

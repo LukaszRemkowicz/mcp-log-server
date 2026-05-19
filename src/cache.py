@@ -1,4 +1,12 @@
-"""Application cache helpers."""
+"""Application cache helpers.
+
+These helpers use process-local in-memory cache storage. Invalidation only
+works inside the Python process that owns the cache, so writes performed by a
+shell command, migration command, or another container process do not clear the
+already-running MCP app process cache. Do not use this module for operational
+or security-sensitive DB state such as caller allowlists, project manifests, or
+source routing unless the cache backend is replaced with a shared store.
+"""
 
 from __future__ import annotations
 

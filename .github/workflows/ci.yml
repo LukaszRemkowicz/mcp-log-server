@@ -94,10 +94,10 @@ jobs:
         env:
           DATABASE_HOST: localhost
           DATABASE_PORT: 5432
-          DATABASE_NAME: mcp_log_server
+          DATABASE_NAME: mcp_log_server_test
           DATABASE_USER: mcp_log_server
           DATABASE_PASSWORD: mcp-log-server-local-password
-        run: uv run migrate && bash infra/scripts/run_http_e2e.sh
+        run: bash infra/scripts/run_http_e2e.sh
 
   docker-build:
     name: Docker Build Check

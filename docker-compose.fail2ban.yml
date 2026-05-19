@@ -1,8 +1,21 @@
 services:
   app:
+    environment:
+      FAIL2BAN_PROXY_URL: http://fail2ban-proxy:8765
+
+  fail2ban-proxy:
+    image: ${ENVIRONMENT:?ENVIRONMENT is required}-mcp-log-server:${TAG:?TAG is required}
+    restart: unless-stopped
+    user: "0:0"
+    environment:
+      PYTHONPATH: /app/src
+      FAIL2BAN_SOCKET_PATH: ${FAIL2BAN_SOCKET_PATH:-/var/run/fail2ban/fail2ban.sock}
+      FAIL2BAN_PROXY_HOST: 0.0.0.0
+      FAIL2BAN_PROXY_PORT: 8765
     volumes:
       - type: bind
         source: ${FAIL2BAN_SOCKET_DIR_HOST:-/var/run/fail2ban}
         target: ${FAIL2BAN_SOCKET_DIR:-/var/run/fail2ban}
         bind:
           create_host_path: false
+    command: ["uv", "run", "python", "-m", "services.fail2ban_proxy"]
