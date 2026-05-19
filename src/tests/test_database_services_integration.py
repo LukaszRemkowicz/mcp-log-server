@@ -271,7 +271,7 @@ async def test_log_collection_service_persists_collect_logs_metadata(
             source_keys=manifest_sources.source_keys,
             workspace=LogWorkspace.WORKFLOW,
             session_id=agent_session.name,
-            since="5m",
+            since="2026-04-29T10:59:00Z",
             until=None,
         )
         assert not isinstance(payload, BuildLogsError)
@@ -286,7 +286,7 @@ async def test_log_collection_service_persists_collect_logs_metadata(
         assert collect_logs.requested_source_keys == ["app_file", "missing"]
         assert collect_logs.resolved_source_keys == ["app_file"]
         assert collect_logs.unknown_requested_source_keys == ["missing"]
-        assert collect_logs.requested_since == "5m"
+        assert collect_logs.requested_since == "2026-04-29T10:59:00Z"
         assert collect_logs.requested_until is None
         assert collect_logs.snapshot_dir == payload.snapshot_dir
 
@@ -325,7 +325,7 @@ async def test_log_collection_service_persists_session_source_file_path(
             source_keys=manifest_sources.source_keys,
             workspace=LogWorkspace.SESSION,
             session_id=agent_session.name,
-            since="5m",
+            since="2026-04-29T10:59:00Z",
             until=None,
         )
         assert not isinstance(payload, BuildLogsError)
