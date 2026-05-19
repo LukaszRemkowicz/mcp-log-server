@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from typing import ClassVar
 
-from cache import cached_for_6_hours_in_namespace
 from database.models import ProjectManifest
 from database.schemas import ProjectManifestCreate, ProjectManifestUpdate
 
@@ -30,13 +29,11 @@ class ProjectManifestService:
         context = payload.model_dump(exclude={"pk"}, exclude_none=True)
         return await self.model.objects.create(id=payload.pk, **context)
 
-    @cached_for_6_hours_in_namespace(ProjectManifest.cache_namespace)
     async def get(self, project_key: str) -> ProjectManifest:
         """Return one persisted project manifest by project key."""
 
         return await self.model.objects.get(project_key=project_key)
 
-    @cached_for_6_hours_in_namespace(ProjectManifest.cache_namespace)
     async def all(self) -> list[ProjectManifest]:
         """Return all persisted project manifests ordered by project key."""
 

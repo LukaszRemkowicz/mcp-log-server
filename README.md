@@ -138,6 +138,10 @@ uv run commands upload-project-manifest --path src/manifests/projects --all
 # Update one existing project manifest
 uv run commands update-project-manifest --path src/manifests/projects --project landingpage
 
+# Update an existing production manifest from the host
+COMMANDS_COMPOSE_PROJECT_NAME=mcp-log-server-prod COMMANDS_APP_SERVICE=app \
+  uv run commands update-project-manifest --path src/manifests/projects --project vps-security
+
 # Build a tagged production image
 TAG=v1.2.3 infra/scripts/release/build.sh
 

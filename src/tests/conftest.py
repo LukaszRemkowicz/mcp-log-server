@@ -251,7 +251,7 @@ async def _flush_database_tables() -> None:
 
 
 async def _clear_project_manifest_cache() -> None:
-    """Clear manifest caches that can otherwise cross pytest event loops."""
+    """Clear any registered manifest caches from older cache-backed code paths."""
 
     await ProjectManifest.clear_cache()
 

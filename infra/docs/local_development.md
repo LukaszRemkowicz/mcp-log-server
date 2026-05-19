@@ -241,6 +241,24 @@ container, so database access uses Docker service DNS (`db:5432`) instead of
 host `127.0.0.1:5432`. The command reads manifests from `--path`; when omitted,
 `--path` defaults to the current working directory (`.`).
 
+The command finds the running app container through two environment variables:
+
+- `COMMANDS_COMPOSE_PROJECT_NAME`
+  Compose project name. Default: `mcp-log-server`.
+- `COMMANDS_APP_SERVICE`
+  Compose service name. Default: `app`.
+
+Production deployments usually use the Compose project
+`mcp-log-server-prod`, so update production manifests with:
+
+```bash
+COMMANDS_COMPOSE_PROJECT_NAME=mcp-log-server-prod \
+COMMANDS_APP_SERVICE=app \
+uv run commands update-project-manifest \
+  --path src/manifests/projects \
+  --project vps-security
+```
+
 Runtime MCP tools read project manifests from the database. Manifest JSON files
 are source input for the upload/update commands, not runtime app settings and
 not the lookup path for `collect_logs`, `list_projects`, or manifest-backed

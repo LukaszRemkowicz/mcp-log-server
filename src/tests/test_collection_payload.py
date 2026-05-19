@@ -583,6 +583,79 @@ def test_collect_source_streams_persisted_file_logs_to_output_file(tmp_path) -> 
     assert output_file.read_text(encoding="utf-8") == "log line 1\nlog line 2\n"
 
 
+def test_collect_source_filters_file_logs_by_time_window(tmp_path: Path) -> None:
+    source_file = tmp_path / "nginx-access.log"
+    source_file.write_text(
+        "\n".join(
+            [
+                (
+                    '93.105.167.111 - - [26/Jan/2026:13:35:02 +0000] "GET / HTTP/1.1" '
+                    '301 169 "-" "Mozilla/5.0"'
+                ),
+                (
+                    '10.0.0.10 - - [18/May/2026:09:38:45 +0000] "GET / HTTP/1.1" '
+                    '200 8421 "-" "Mozilla/5.0"'
+                ),
+                "python traceback continuation",
+                (
+                    '10.0.0.11 - - [20/May/2026:09:38:45 +0000] "GET / HTTP/1.1" '
+                    '200 8421 "-" "Mozilla/5.0"'
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    definition = SourceDefinition(
+        source_key="nginx_access",
+        source_type="file",
+        target=str(source_file),
+        description="Nginx access logs.",
+        required=True,
+        parser_type="nginx_json",
+        normalization_profile="proxy_access",
+        retention_class="short",
+        default_noise_profile="web_noise",
+        stream=None,
+    )
+
+    output_file = tmp_path / "persisted.log"
+    result = LogCollectionService().collect_source(
+        definition,
+        output_file=output_file,
+        time_filters=DockerTimeFilters(
+            since=LogCollectionService.normalize_docker_time_filter("2026-05-18T00:00:00Z"),
+            until=LogCollectionService.normalize_docker_time_filter("2026-05-19T00:00:00Z"),
+            file_filters_enabled=True,
+        ),
+    )
+
+    content = output_file.read_text(encoding="utf-8")
+    assert result["line_count"] == 2
+    assert "26/Jan/2026" not in content
+    assert "18/May/2026" in content
+    assert "python traceback continuation" in content
+    assert "20/May/2026" not in content
+
+
+def test_parse_log_line_timestamp_supports_file_log_formats() -> None:
+    service = LogCollectionService()
+
+    raw_nginx_timestamp = service.parse_log_line_timestamp(
+        '93.105.167.111 - - [26/Jan/2026:13:35:02 +0000] "GET / HTTP/1.1" 301 169'
+    )
+    json_nginx_timestamp = service.parse_log_line_timestamp(
+        '{ "time_local": "18/May/2026:09:38:45 +0000", "status": "200" }'
+    )
+    fail2ban_timestamp = service.parse_log_line_timestamp(
+        "2026-05-18 09:38:55,771 fail2ban.filter [123]: INFO Found 203.0.113.10"
+    )
+
+    assert raw_nginx_timestamp == datetime(2026, 1, 26, 13, 35, 2, tzinfo=UTC)
+    assert json_nginx_timestamp == datetime(2026, 5, 18, 9, 38, 45, tzinfo=UTC)
+    assert fail2ban_timestamp == datetime(2026, 5, 18, 9, 38, 55, tzinfo=UTC)
+
+
 def test_collect_source_rejects_relative_file_target(tmp_path: Path) -> None:
     definition = SourceDefinition.model_construct(
         source_key="app_file",

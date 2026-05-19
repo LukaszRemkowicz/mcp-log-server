@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 from dataclasses import dataclass
@@ -43,6 +44,13 @@ if TYPE_CHECKING:
 
 DOCKER_LOG_TIMEOUT_SECONDS = 15
 _DOCKER_DURATION_PATTERN = re.compile(r"(?P<value>\d+)(?P<unit>[smhd])")
+_RAW_NGINX_TIMESTAMP_PATTERN = re.compile(r"\[(?P<timestamp>\d{2}/[A-Za-z]{3}/\d{4}:[^\]]+)\]")
+_FAIL2BAN_TIMESTAMP_PATTERN = re.compile(
+    r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:,\d+)?"
+)
+_ISO_PREFIX_TIMESTAMP_PATTERN = re.compile(
+    r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)"
+)
 DockerTimeFilter = datetime | int | None
 
 
@@ -60,6 +68,7 @@ class DockerTimeFilters:
 
     since: DockerTimeFilter
     until: DockerTimeFilter
+    file_filters_enabled: bool = False
 
 
 class BuildLogsError(BaseModel):
@@ -469,13 +478,15 @@ class LogCollectionService:
         since: str | None,
         until: str | None,
     ) -> DockerTimeFilters:
-        """Return Docker-ready time filters for docker sources."""
+        """Return normalized time filters for docker and file source collectors."""
 
-        if not any(source.source_type == "docker" for source in sources):
-            return DockerTimeFilters(since=None, until=None)
         return DockerTimeFilters(
             since=LogCollectionService.normalize_docker_time_filter(since),
             until=LogCollectionService.normalize_docker_time_filter(until),
+            file_filters_enabled=(
+                until is not None
+                or (since is not None and since.strip() != settings.DEFAULT_LOG_WINDOW)
+            ),
         )
 
     @staticmethod
@@ -608,15 +619,66 @@ class LogCollectionService:
         """
 
         if definition.source_type == "file":
-            return self._collect_file_source(definition, output_file=output_file)
+            return self._collect_file_source(
+                definition,
+                output_file=output_file,
+                time_filters=time_filters,
+            )
         return self._collect_docker_source(
             definition,
             output_file=output_file,
             time_filters=time_filters,
         )
 
+    @classmethod
+    def _write_file_to_output(
+        cls,
+        path: Path,
+        output_file: Path,
+        *,
+        time_filters: DockerTimeFilters,
+    ) -> tuple[int, int]:
+        """Copy one file-backed source into the destination log file.
+
+        File sources cannot use Docker Engine time filtering, so collection
+        applies the same since/until window while streaming lines. Timestamped
+        lines are filtered directly; untimestamped continuation lines are kept
+        only after the previous timestamped line was included.
+        """
+
+        if not time_filters.file_filters_enabled:
+            return cls._copy_file_to_output(path, output_file)
+
+        byte_count = 0
+        newline_count = 0
+        trailing_byte: bytes = b""
+        previous_timestamp_included = time_filters.since is None and time_filters.until is None
+        with path.open("rb") as source_handle, output_file.open("wb") as output_handle:
+            for line in source_handle:
+                decoded_line = line.decode("utf-8", errors="replace")
+                line_timestamp = cls.parse_log_line_timestamp(decoded_line)
+                if line_timestamp is None:
+                    if not previous_timestamp_included:
+                        continue
+                else:
+                    previous_timestamp_included = cls.timestamp_in_window(
+                        line_timestamp,
+                        time_filters=time_filters,
+                    )
+                    if not previous_timestamp_included:
+                        continue
+                output_handle.write(line)
+                byte_count += len(line)
+                newline_count += line.count(b"\n")
+                trailing_byte = line[-1:]
+        if byte_count == 0:
+            return 0, 0
+        if trailing_byte == b"\n":
+            return byte_count, newline_count
+        return byte_count, newline_count + 1
+
     @staticmethod
-    def _write_file_to_output(path: Path, output_file: Path) -> tuple[int, int]:
+    def _copy_file_to_output(path: Path, output_file: Path) -> tuple[int, int]:
         """Copy one file-backed source directly into the destination log file."""
 
         byte_count = 0
@@ -634,6 +696,105 @@ class LogCollectionService:
         if trailing_byte == b"\n":
             return byte_count, newline_count
         return byte_count, newline_count + 1
+
+    @staticmethod
+    def _time_filter_to_datetime(value: DockerTimeFilter) -> datetime | None:
+        """Return one normalized UTC datetime from a time filter value."""
+
+        if value is None:
+            return None
+        if isinstance(value, int):
+            return datetime.fromtimestamp(value, UTC)
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    @classmethod
+    def timestamp_in_window(
+        cls,
+        timestamp: datetime,
+        *,
+        time_filters: DockerTimeFilters,
+    ) -> bool:
+        """Return whether a timestamp falls inside the requested collection window."""
+
+        normalized_timestamp = timestamp.astimezone(UTC)
+        since = cls._time_filter_to_datetime(time_filters.since)
+        until = cls._time_filter_to_datetime(time_filters.until)
+        if since is not None and normalized_timestamp < since:
+            return False
+        if until is not None and normalized_timestamp > until:
+            return False
+        return True
+
+    @classmethod
+    def parse_log_line_timestamp(cls, line: str) -> datetime | None:
+        """Parse supported timestamp formats from one log line."""
+
+        stripped_line = line.strip()
+        if not stripped_line:
+            return None
+
+        json_timestamp = cls._parse_json_log_timestamp(stripped_line)
+        if json_timestamp is not None:
+            return json_timestamp
+
+        raw_nginx_match = _RAW_NGINX_TIMESTAMP_PATTERN.search(stripped_line)
+        if raw_nginx_match is not None:
+            return datetime.strptime(
+                raw_nginx_match.group("timestamp"),
+                "%d/%b/%Y:%H:%M:%S %z",
+            ).astimezone(UTC)
+
+        fail2ban_match = _FAIL2BAN_TIMESTAMP_PATTERN.match(stripped_line)
+        if fail2ban_match is not None:
+            return datetime.strptime(
+                fail2ban_match.group("timestamp"),
+                "%Y-%m-%d %H:%M:%S",
+            ).replace(tzinfo=UTC)
+
+        iso_match = _ISO_PREFIX_TIMESTAMP_PATTERN.match(stripped_line)
+        if iso_match is not None:
+            return cls._parse_iso_timestamp(iso_match.group("timestamp"))
+
+        return None
+
+    @classmethod
+    def _parse_json_log_timestamp(cls, line: str) -> datetime | None:
+        """Return a timestamp from common structured JSON log fields."""
+
+        if not line.startswith("{"):
+            return None
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        timestamp_value = (
+            payload.get("timestamp") or payload.get("time") or payload.get("time_local")
+        )
+        if not isinstance(timestamp_value, str) or not timestamp_value.strip():
+            return None
+        stripped_timestamp = timestamp_value.strip()
+        try:
+            if "/" in stripped_timestamp and ":" in stripped_timestamp:
+                return datetime.strptime(
+                    stripped_timestamp,
+                    "%d/%b/%Y:%H:%M:%S %z",
+                ).astimezone(UTC)
+            return cls._parse_iso_timestamp(stripped_timestamp)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _parse_iso_timestamp(value: str) -> datetime:
+        """Parse an ISO-like timestamp and normalize it to UTC."""
+
+        parsed_datetime = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed_datetime.tzinfo is None:
+            parsed_datetime = parsed_datetime.replace(tzinfo=UTC)
+        return parsed_datetime.astimezone(UTC)
 
     @staticmethod
     def normalize_docker_time_filter(value: str | None) -> datetime | int | None:
@@ -690,6 +851,7 @@ class LogCollectionService:
         self,
         definition: SourceDefinition,
         output_file: Path,
+        time_filters: DockerTimeFilters,
     ) -> LogSnapshotFilePayload | CollectSourceError:
         """Collect one file-backed source declared by the manifest.
 
@@ -730,7 +892,11 @@ class LogCollectionService:
                 ],
             )
 
-        byte_count, line_count = self._write_file_to_output(path, output_file)
+        byte_count, line_count = self._write_file_to_output(
+            path,
+            output_file,
+            time_filters=time_filters,
+        )
         persisted_output_file = str(output_file)
         return LogSnapshotFilePayload(
             source_key=definition.source_key,

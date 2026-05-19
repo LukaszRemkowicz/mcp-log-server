@@ -78,3 +78,29 @@ uv run commands update-project-manifest --help
 
 These commands may proxy work into the Docker Compose app service so they run
 against the same runtime environment as the MCP server.
+
+`upload-project-manifest` is create-only. Existing manifest rows are left
+unchanged. Use `update-project-manifest` for an existing project:
+
+```bash
+uv run commands update-project-manifest \
+  --path src/manifests/projects \
+  --project vps-security
+```
+
+The outer command finds the running Compose app service with:
+
+- `COMMANDS_COMPOSE_PROJECT_NAME`
+  Compose project name. Default: `mcp-log-server`.
+- `COMMANDS_APP_SERVICE`
+  Compose service name. Default: `app`.
+
+For production, the Compose project is usually `mcp-log-server-prod`, so run:
+
+```bash
+COMMANDS_COMPOSE_PROJECT_NAME=mcp-log-server-prod \
+COMMANDS_APP_SERVICE=app \
+uv run commands update-project-manifest \
+  --path src/manifests/projects \
+  --project vps-security
+```

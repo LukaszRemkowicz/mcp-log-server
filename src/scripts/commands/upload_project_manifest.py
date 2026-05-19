@@ -258,7 +258,12 @@ def _run_internal_manifest_command(
     *,
     manifest_files: list[Path] | None = None,
 ) -> None:
-    """Run one hidden manifest command inside the Docker Compose app service."""
+    """Run one hidden manifest command inside the Docker Compose app service.
+
+    Set COMMANDS_COMPOSE_PROJECT_NAME and COMMANDS_APP_SERVICE when the running
+    Compose project/service names differ from the local defaults
+    (mcp-log-server/app), for example production mcp-log-server-prod/app.
+    """
 
     docker_service = DockerCommandService()
     try:
@@ -314,7 +319,12 @@ def upload_project_manifest(
         typer.Option("--path", help="Directory with project manifest JSON files."),
     ] = Path("."),
 ) -> None:
-    """Run the manifest upload command inside the Docker Compose app service."""
+    """Run the manifest upload command inside the Docker Compose app service.
+
+    Uses COMMANDS_COMPOSE_PROJECT_NAME and COMMANDS_APP_SERVICE to find the
+    running app service. Defaults are mcp-log-server/app; production usually
+    needs COMMANDS_COMPOSE_PROJECT_NAME=mcp-log-server-prod.
+    """
 
     if all_projects and project_name is not None:
         raise typer.BadParameter("Use either PROJECT_NAME or --all, not both.")
@@ -345,7 +355,12 @@ def update_project_manifest(
         typer.Option("--path", help="Directory with project manifest JSON files."),
     ] = Path("."),
 ) -> None:
-    """Run the manifest update command inside the Docker Compose app service."""
+    """Run the manifest update command inside the Docker Compose app service.
+
+    Uses COMMANDS_COMPOSE_PROJECT_NAME and COMMANDS_APP_SERVICE to find the
+    running app service. Defaults are mcp-log-server/app; production usually
+    needs COMMANDS_COMPOSE_PROJECT_NAME=mcp-log-server-prod.
+    """
 
     manifest_files = _manifest_files_for_container_copy(
         manifests_dir=path,
