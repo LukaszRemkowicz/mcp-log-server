@@ -254,6 +254,19 @@ def _client_not_authorized_error(
     )
 
 
+def _collect_logs_workspace_argument_error() -> AgentToolErrorResult:
+    """Return an agent-facing error when collect_logs receives private workspace input."""
+
+    return build_agent_tool_error_result(
+        error_code="invalid_tool_arguments",
+        message="collect_logs workspace is owned by the authenticated MCP caller.",
+        retry_tips=[
+            "Retry without workspace; MCP injects it from the caller allowlist row.",
+        ],
+        details={"invalid_arguments": ["workspace"], "tool_name": "collect_logs"},
+    )
+
+
 def _client_has_no_allowed_projects_error(
     *,
     client_id: str,
@@ -387,7 +400,7 @@ async def _authorize_mcp_client(
         workspace=workspace,
     )
     if caller is None and allow_any_workspace:
-        caller = await caller_service.get_allowed_for_any_workspace(
+        caller = await caller_service.get_allowed_by_identity(
             client_id=client_id,
             client_type=client_type,
         )
@@ -415,14 +428,17 @@ async def _authorize_mcp_client(
     )
 
 
-def _prepare_collect_logs_session_id(
+def _prepare_collect_logs_arguments(
     context: MiddlewareContext[mt.CallToolRequestParams],
+    *,
+    workspace: LogWorkspace,
 ) -> str:
-    """Inject the effective collect_logs session id into tool arguments."""
+    """Inject caller-owned collect_logs runtime arguments."""
 
     arguments: dict[str, Any] = dict(context.message.arguments or {})
     session_id = LogCollectionService.resolve_session_id(arguments.get("session_id"))
 
+    arguments["workspace"] = workspace
     arguments["session_id"] = str(session_id)
     context.message.arguments = arguments
     return session_id
@@ -479,6 +495,7 @@ async def _authenticate_mcp_caller(
     token: AccessToken,
     workspace: LogWorkspace,
     tool_name: str,
+    allow_any_workspace: bool = False,
 ) -> AuthenticatedMcpCaller | AgentToolErrorResult:
     """Authorize the JWT caller against DB allowlist and attach request state."""
 
@@ -494,7 +511,7 @@ async def _authenticate_mcp_caller(
             client_type=client_type,
             workspace=workspace,
             allow_empty_projects=tool_name in {"get_mcp_service_status", "list_projects"},
-            allow_any_workspace=tool_name in WORKSPACE_AGNOSTIC_TOOLS,
+            allow_any_workspace=allow_any_workspace,
         )
     except BaseORMException:
         logger.exception(
@@ -608,24 +625,25 @@ class AccessAuditMiddleware(Middleware):
         started_at = perf_counter()
         tool_name = context.message.name
         arguments: dict[str, Any] = dict(context.message.arguments or {})
+        if tool_name == "collect_logs" and "workspace" in arguments:
+            return _collect_logs_workspace_argument_error()
         workspace = _resolve_tool_workspace(tool_name=tool_name, arguments=arguments)
-        if (
-            tool_name == "collect_logs"
-            and workspace == LogWorkspace.SESSION
-            and _is_workflow_agent(token)
-        ):
-            return _workflow_agent_session_error(token)
+        allow_any_workspace = tool_name in WORKSPACE_AGNOSTIC_TOOLS or (
+            tool_name == "collect_logs" and "workspace" not in arguments
+        )
         caller_result = await _authenticate_mcp_caller(
             token=token,
             workspace=workspace,
             tool_name=tool_name,
+            allow_any_workspace=allow_any_workspace,
         )
         if isinstance(caller_result, AgentToolErrorResult):
             return caller_result
 
-        session_id = (
-            _prepare_collect_logs_session_id(context) if tool_name == "collect_logs" else None
-        )
+        workspace = caller_result.workspace
+        session_id = None
+        if tool_name == "collect_logs":
+            session_id = _prepare_collect_logs_arguments(context, workspace=workspace)
         request_agent_session: AuthenticatedAgentSession | None = None
         if session_id is not None:
             agent_session_result = await _prepare_agent_session(

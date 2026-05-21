@@ -318,7 +318,7 @@ def build_collect_logs_request(
     request_id: str = "collect-1",
     project_names: list[str] | None = None,
     source_keys: list[str] | None = None,
-    workspace: str = "workflow",
+    workspace: str | None = None,
     session_id: str | None = None,
     since: str | None = None,
     until: str | None = None,
@@ -327,9 +327,10 @@ def build_collect_logs_request(
 
     arguments: dict[str, Any] = {
         "source_keys": ["all"] if source_keys is None else source_keys,
-        "workspace": workspace,
         "project_names": ["landingpage"] if project_names is None else project_names,
     }
+    if workspace is not None:
+        arguments["workspace"] = workspace
     payload: dict[str, Any] = {
         "jsonrpc": "2.0",
         "id": request_id,

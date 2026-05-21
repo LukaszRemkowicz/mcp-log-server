@@ -49,19 +49,15 @@ Save fresh tokens for curl or local MCP checks:
 uv run commands generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
 ```
 
+Generate longer-lived development tokens, with the lifetime expressed in hours:
+
+```bash
+uv run commands generate-dev-jwt --exp-time 720
+```
+
 When `--output-file` is provided, the command writes the token JSON to that
 path and does not print the tokens to the console. Parent directories are
 created automatically. Without `--output-file`, the JSON is printed to stdout.
-
-Override identity claims when testing a different local caller:
-
-```bash
-uv run commands generate-dev-jwt \
-  --workflow-client-id workflow-local \
-  --workflow-client-type workflow_test \
-  --codex-client-id codex-local \
-  --codex-client-type codex_test
-```
 
 The JWTs are signed with the local development settings. Regenerate them when
 they expire, when scopes change, or when the expected identity claims change.
@@ -80,12 +76,17 @@ These commands may proxy work into the Docker Compose app service so they run
 against the same runtime environment as the MCP server.
 
 `upload-project-manifest` is create-only. Existing manifest rows are left
-unchanged. Use `update-project-manifest` for an existing project:
+unchanged. Use `update-project-manifest` for an existing project, or `--all`
+to update every manifest JSON file from the selected path:
 
 ```bash
 uv run commands update-project-manifest \
   --path src/manifests/projects \
   --project vps-security
+
+uv run commands update-project-manifest \
+  --path src/manifests/projects \
+  --all
 ```
 
 The outer command finds the running Compose app service with:
@@ -102,5 +103,5 @@ COMMANDS_COMPOSE_PROJECT_NAME=mcp-log-server-prod \
 COMMANDS_APP_SERVICE=app \
 uv run commands update-project-manifest \
   --path src/manifests/projects \
-  --project vps-security
+  --all
 ```

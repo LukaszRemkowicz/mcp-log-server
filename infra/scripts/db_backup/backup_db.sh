@@ -12,13 +12,16 @@ COMPOSE_FILE="${COMPOSE_FILE:-$(get_compose_file "$PROJECT_DIR" "$ENVIRONMENT")}
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(get_compose_project_name "$ENVIRONMENT")}"
 BACKUP_DIR="$(get_backup_dir "$PROJECT_DIR" "$ENVIRONMENT")"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
+ALLOW_EMPTY_POSTGRES_DATA_DIR="${ALLOW_EMPTY_POSTGRES_DATA_DIR:-false}"
 
 DATABASE_NAME="${DATABASE_NAME:-mcp_log_server}"
 DATABASE_USER="${DATABASE_USER:-mcp_log_server}"
 DATABASE_PASSWORD="${DATABASE_PASSWORD:-local-secret}"
+POSTGRES_DATA_DIR="${POSTGRES_DATA_DIR:-/var/lib/mcp-log-server/postgresql}"
+POSTGRES_PG_VERSION_FILE="$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION"
 
 # docker-compose.prod.yml interpolates these even when only the db service is targeted.
-export ENVIRONMENT COMPOSE_PROJECT_NAME DATABASE_NAME DATABASE_USER DATABASE_PASSWORD
+export ENVIRONMENT COMPOSE_PROJECT_NAME DATABASE_NAME DATABASE_USER DATABASE_PASSWORD POSTGRES_DATA_DIR
 export TAG="${TAG:-backup}"
 
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -33,6 +36,17 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$BACKUP_DIR"
+
+if [[ "$ENVIRONMENT" == "prod" && ! -f "$POSTGRES_PG_VERSION_FILE" ]]; then
+    if [[ "$ALLOW_EMPTY_POSTGRES_DATA_DIR" != "true" ]]; then
+        log_error "Refusing to back up an empty or uninitialized Postgres data directory."
+        log_info "Postgres data directory: $POSTGRES_DATA_DIR"
+        log_info "Expected marker file: $POSTGRES_PG_VERSION_FILE"
+        log_info "Set ALLOW_EMPTY_POSTGRES_DATA_DIR=true only for a deliberate first-time init."
+        exit 1
+    fi
+    log_warn "Postgres data directory is not initialized; continuing by explicit override."
+fi
 
 # Step 1: take a lock so two backup processes cannot write the same target area.
 log_step 1 8 "Acquire backup lock"

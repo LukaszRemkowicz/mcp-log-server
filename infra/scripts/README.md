@@ -139,6 +139,9 @@ AUTO_APPROVE=true TAG=v1.2.3 infra/scripts/release/deploy.sh
 Deploy behavior:
 
 - verifies the local image `prod-mcp-log-server:<TAG>` exists
+- creates the production Postgres host data directory before starting `db`;
+  default: `/var/lib/mcp-log-server/postgresql`, override with
+  `POSTGRES_DATA_DIR`
 - exposes the MCP HTTP endpoint through the existing Traefik stack at
   `https://mcp.${SITE_DOMAIN}/mcp`
 - includes `docker-compose.fail2ban.yml` by default so the internal
@@ -154,6 +157,21 @@ Deploy behavior:
 - checks that the app accepts an authenticated MCP `tools/list` request and
   exposes `get_mcp_health_check`
 - records the deployed tag under the script state directory after health passes
+
+Production Postgres data is a host bind mount, not a Compose-managed Docker
+volume. Normal Docker volume prune commands will not delete it. Do not point
+`POSTGRES_DATA_DIR` at a temporary directory.
+
+To prevent accidentally booting an empty production database after changing or
+losing the host path, deploy and prod backup commands expect this marker file to
+exist:
+
+```text
+$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION
+```
+
+For a brand-new environment only, initialize deliberately with
+`ALLOW_EMPTY_POSTGRES_DATA_DIR=true` and usually `SKIP_BACKUP=true`.
 
 Dry run:
 

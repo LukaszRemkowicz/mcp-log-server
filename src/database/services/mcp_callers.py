@@ -35,13 +35,13 @@ class McpCallerService:
             .first()
         )
 
-    async def get_allowed_for_any_workspace(
+    async def get_allowed_by_identity(
         self,
         *,
         client_id: str,
         client_type: str,
     ) -> McpCaller | None:
-        """Return a matching caller row from any workspace, if one exists."""
+        """Return a matching allowed MCP caller row by authenticated identity."""
 
         return await (
             self.model.objects.filter(

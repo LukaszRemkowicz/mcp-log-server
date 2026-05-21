@@ -3,12 +3,12 @@ services:
     image: postgres:18
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${DATABASE_NAME:?DATABASE_NAME is required}
-      POSTGRES_USER: ${DATABASE_USER:?DATABASE_USER is required}
-      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
+      POSTGRES_DB: ${DATABASE_NAME}
+      POSTGRES_USER: ${DATABASE_USER}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - postgres-data:/var/lib/postgresql/data
+      - ${POSTGRES_DATA_DIR:-/var/lib/mcp-log-server/postgresql}:/var/lib/postgresql
     healthcheck:
       test:
         [
@@ -20,7 +20,7 @@ services:
       retries: 5
 
   app:
-    image: ${ENVIRONMENT:?ENVIRONMENT is required}-mcp-log-server:${TAG:?TAG is required}
+    image: prod-mcp-log-server:${TAG:-latest}
     build:
       context: .
       dockerfile: docker/app/Dockerfile
@@ -36,12 +36,12 @@ services:
       PYTHONPATH: /app/src
       DATABASE_HOST: db
       DATABASE_PORT: 5432
-      DATABASE_NAME: ${DATABASE_NAME:?DATABASE_NAME is required}
-      DATABASE_USER: ${DATABASE_USER:?DATABASE_USER is required}
-      DATABASE_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
-      JWT_SHARED_SECRET: ${JWT_SHARED_SECRET:?JWT_SHARED_SECRET is required}
-      JWT_ISSUER: ${JWT_ISSUER:?JWT_ISSUER is required}
-      JWT_AUDIENCE: ${JWT_AUDIENCE:?JWT_AUDIENCE is required}
+      DATABASE_NAME: ${DATABASE_NAME}
+      DATABASE_USER: ${DATABASE_USER}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD}
+      JWT_SHARED_SECRET: ${JWT_SHARED_SECRET}
+      JWT_ISSUER: ${JWT_ISSUER}
+      JWT_AUDIENCE: ${JWT_AUDIENCE}
       FAIL2BAN_SOCKET_PATH: ${FAIL2BAN_SOCKET_PATH:-/var/run/fail2ban/fail2ban.sock}
       # Used by `uv run commands ...` to find this Compose app service.
       # Must match the Compose project name and the `services.app` key.
@@ -53,8 +53,8 @@ services:
       - /etc/nginx/logs/access.log:/var/log/nginx/access.log:ro
       - /var/log/portfolio/traefik/access.log:/var/log/portfolio/traefik/access.log:ro
     group_add:
-      - "${DOCKER_SOCKET_GID:?DOCKER_SOCKET_GID is required}"
-      - "${FAIL2BAN_LOG_GID:?FAIL2BAN_LOG_GID is required}"
+      - "${DOCKER_SOCKET_GID:-0}"
+      - "${FAIL2BAN_LOG_GID:-1}"
     ports:
       - "127.0.0.1:${MCP_PORT_HOST:-8001}:${MCP_PORT:-8001}"
     networks:
@@ -62,7 +62,7 @@ services:
       - traefik_proxy
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.mcp-log-server.rule=Host(`mcp.${SITE_DOMAIN:?SITE_DOMAIN is required}`)"
+      - "traefik.http.routers.mcp-log-server.rule=Host(`mcp.${SITE_DOMAIN}`)"
       - "traefik.http.routers.mcp-log-server.entrypoints=websecure"
       - "traefik.http.routers.mcp-log-server.tls=true"
       - "traefik.http.routers.mcp-log-server.tls.certresolver=letsencrypt"
@@ -70,9 +70,6 @@ services:
       - "traefik.http.routers.mcp-log-server.service=mcp-log-server"
       - "traefik.http.services.mcp-log-server.loadbalancer.server.port=${MCP_PORT:-8001}"
     command: ["uv", "run", "python", "-m", "main"]
-
-volumes:
-  postgres-data:
 
 networks:
   traefik_proxy:

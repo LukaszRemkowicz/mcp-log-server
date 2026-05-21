@@ -235,6 +235,12 @@ untouched. To update an existing manifest, run:
 uv run commands update-project-manifest --path src/manifests/projects --project landingpage
 ```
 
+To update every existing manifest from the configured directory, run:
+
+```bash
+uv run commands update-project-manifest --path src/manifests/projects --all
+```
+
 Run this command on the host where the Docker Compose app service is running.
 It uses Docker SDK to execute a hidden internal command inside the app
 container, so database access uses Docker service DNS (`db:5432`) instead of
@@ -256,7 +262,7 @@ COMMANDS_COMPOSE_PROJECT_NAME=mcp-log-server-prod \
 COMMANDS_APP_SERVICE=app \
 uv run commands update-project-manifest \
   --path src/manifests/projects \
-  --project vps-security
+  --all
 ```
 
 Runtime MCP tools read project manifests from the database. Manifest JSON files
