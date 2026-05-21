@@ -110,10 +110,8 @@ async def collect_logs(
     Public request shape:
 
     - use `project_names`, even for one project
-    - `workspace="workflow"` writes shared workflow artifacts
-    - `workspace="session"` writes investigation artifacts under one shared
-      `session_id`; MCP creates one when the request omits it
-    - the fixed workflow agent is not allowed to use `workspace="session"`
+    - middleware injects `workspace` from the authenticated caller row
+    - session callers write investigation artifacts under one shared `session_id`
     - reuse the returned `session_id` when the same investigation later needs
       logs from another project or a narrower time window
 
@@ -121,8 +119,8 @@ async def collect_logs(
 
     - for real MCP/API calls, middleware authorizes and normalizes
       `project_names` before this tool runs
-    - for real MCP/API `collect_logs` calls, middleware also injects a generated
-      `session_id` when `workspace="session"` and the request omitted it
+    - for real MCP/API `collect_logs` calls, middleware injects the caller-owned
+      `workspace` and an effective `session_id`
     - when `project_names` is omitted or empty in the HTTP path, project
       authorization may use all projects accessible to the request-state caller
     - direct Python calls to `collect_logs(...)` do not go through middleware,

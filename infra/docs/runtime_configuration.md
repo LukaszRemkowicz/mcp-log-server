@@ -274,6 +274,24 @@ the dedicated production compose file:
 doppler run -- docker compose -f docker-compose.prod.yml up --build -d
 ```
 
+Production Postgres data is stored in a host bind mount, not a Docker
+Compose-managed volume:
+
+```text
+${POSTGRES_DATA_DIR:-/var/lib/mcp-log-server/postgresql}:/var/lib/postgresql
+```
+
+The deploy script creates this directory before starting the database. Override
+`POSTGRES_DATA_DIR` only when you have chosen another durable host path. Docker
+volume prune commands do not delete this host directory, but normal filesystem
+deletion still can.
+
+Deploy and prod backup commands refuse to continue when
+`$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION` is missing, unless
+`ALLOW_EMPTY_POSTGRES_DATA_DIR=true` is set. That override is only for a
+deliberate first-time initialization or restore flow; it should not be used to
+paper over a missing production data directory.
+
 The production deploy script includes the fail2ban socket override by default,
 so the normal VPS path is:
 
@@ -302,6 +320,8 @@ Production compose differences:
 - runs the `app` and `db` services
 - does not mount the local source tree
 - does not use `watchfiles`
+- stores Postgres data in the durable host directory configured by
+  `POSTGRES_DATA_DIR`
 - builds the Dockerfile `production` stage with
   `uv sync --frozen --no-dev --compile-bytecode`
 - sets `UV_NO_DEV=1`, `UV_FROZEN=1`, and `UV_NO_SYNC=1` inside the production

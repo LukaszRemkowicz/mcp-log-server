@@ -65,11 +65,15 @@ def build_example_token_payloads(
     settings: Settings,
     *,
     callers: dict[str, McpCaller],
+    exp_time_hours: int | None = None,
 ) -> dict[str, dict[str, object]]:
     """Return example JWT payloads for local development clients."""
 
     now = int(time.time())
-    exp = now + settings.JWT_EXPIRATION_SECONDS
+    expiration_seconds = (
+        settings.JWT_EXPIRATION_SECONDS if exp_time_hours is None else exp_time_hours * 60 * 60
+    )
+    exp = now + expiration_seconds
     common_claims = {
         "iss": settings.JWT_ISSUER,
         "aud": settings.JWT_AUDIENCE,
@@ -120,6 +124,7 @@ def build_example_tokens(
     settings: Settings,
     *,
     callers: dict[str, McpCaller],
+    exp_time_hours: int | None = None,
 ) -> dict[str, str]:
     """Return signed example JWTs for local development."""
 
@@ -129,6 +134,7 @@ def build_example_tokens(
     payloads = build_example_token_payloads(
         settings,
         callers=callers,
+        exp_time_hours=exp_time_hours,
     )
     for token_name, payload in payloads.items():
         tokens[token_name] = jwt.encode(
@@ -142,6 +148,8 @@ def build_example_tokens(
 
 async def build_example_token_response(
     settings: Settings | None = None,
+    *,
+    exp_time_hours: int | None = None,
 ) -> dict[str, str]:
     """Return signed example tokens with generation timestamps."""
 
@@ -151,18 +159,23 @@ async def build_example_token_response(
         **build_example_tokens(
             settings,
             callers=await _get_token_callers(),
+            exp_time_hours=exp_time_hours,
         ),
         "created_at": generated_at,
         "updated_at": generated_at,
     }
 
 
-async def _build_example_token_response_with_database(settings: Settings) -> dict[str, str]:
+async def _build_example_token_response_with_database(
+    settings: Settings,
+    *,
+    exp_time_hours: int | None = None,
+) -> dict[str, str]:
     """Initialize the database, build tokens from caller rows, and close connections."""
 
     await initialize_database(TORTOISE_ORM)
     try:
-        return await build_example_token_response(settings)
+        return await build_example_token_response(settings, exp_time_hours=exp_time_hours)
     finally:
         await close_database()
 
@@ -173,6 +186,14 @@ def generate_dev_jwt(
         "--output-file",
         "-o",
         help="Write the generated token JSON to this file instead of stdout.",
+    ),
+    exp_time_hours: int | None = typer.Option(
+        None,
+        "--exp-time",
+        min=1,
+        help=(
+            "Override token lifetime in hours. Defaults to JWT_EXPIRATION_SECONDS from settings."
+        ),
     ),
 ) -> None:
     """Generate signed local development JWTs for MCP clients.
@@ -186,7 +207,12 @@ def generate_dev_jwt(
     """
 
     try:
-        payload = asyncio.run(_build_example_token_response_with_database(get_settings()))
+        payload = asyncio.run(
+            _build_example_token_response_with_database(
+                get_settings(),
+                exp_time_hours=exp_time_hours,
+            )
+        )
     except RuntimeError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1) from exc

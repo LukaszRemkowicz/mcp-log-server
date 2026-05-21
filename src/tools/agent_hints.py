@@ -9,9 +9,7 @@ evolve without cluttering business logic.
 COLLECT_LOGS_TOOL_DESCRIPTION = (
     "Collect deterministic logs for one or more projects into persisted artifacts "
     "for later analysis. "
-    'Use workspace="workflow" only for the fixed shared monitoring flow. '
-    'Use workspace="session" only with a non-workflow agent token when an agent '
-    "wants its own investigation workspace. "
+    "MCP chooses the artifact workspace from the authenticated caller. "
     "For a new session collection, omit session_id and MCP will create one. "
     "For follow-up collection in the same investigation, reuse the returned "
     "session_id to collect additional projects or narrower windows. "

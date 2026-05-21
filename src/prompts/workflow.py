@@ -8,6 +8,8 @@ def build_daily_log_prompt(asset_loader: WorkflowAssetLoader) -> str:
 
     return "\n\n".join(
         [
+            asset_loader.load_text("prompts/monitoring_tool_loop_system.md").strip(),
+            asset_loader.load_text("prompts/monitoring_tool_loop_user.md").strip(),
             asset_loader.load_text("prompts/monitoring_job_system.md").strip(),
             asset_loader.load_text("prompts/monitoring_job_rules.md").strip(),
             asset_loader.load_text("prompts/monitoring_log_summary.md").strip(),

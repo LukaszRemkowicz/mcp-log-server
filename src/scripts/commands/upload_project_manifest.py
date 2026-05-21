@@ -164,6 +164,37 @@ async def update_manifest(
     )
 
 
+async def update_manifests(
+    *,
+    manifests: list[Manifest],
+    service: ProjectManifestService,
+) -> list[ProjectManifestCommandResult]:
+    """Update existing manifests and report missing rows."""
+
+    results: list[ProjectManifestCommandResult] = []
+    async with database_context():
+        for manifest in manifests:
+            if not await service.exists(manifest.project_key):
+                results.append(
+                    ProjectManifestCommandResult(
+                        project_key=manifest.project_key,
+                        source_count=len(manifest.sources),
+                        status="missing",
+                    )
+                )
+                continue
+            row = await service.update(await _update_payload(manifest=manifest, service=service))
+            results.append(
+                ProjectManifestCommandResult(
+                    project_key=manifest.project_key,
+                    source_count=len(manifest.sources),
+                    row_id=str(row.id),
+                    status="updated",
+                )
+            )
+    return results
+
+
 def _echo_upload_results(results: list[ProjectManifestCommandResult]) -> None:
     """Print upload command results for created and untouched manifests."""
 
@@ -184,6 +215,27 @@ def _echo_upload_results(results: list[ProjectManifestCommandResult]) -> None:
     typer.echo(
         f"Upload summary: created {created_count}, already existing {existing_count}, "
         f"total {len(results)}."
+    )
+
+
+def _echo_update_results(results: list[ProjectManifestCommandResult]) -> None:
+    """Print update command results for updated and missing manifests."""
+
+    updated_count = sum(result.status == "updated" for result in results)
+    missing_count = sum(result.status == "missing" for result in results)
+    for item in results:
+        if item.status == "updated":
+            typer.echo(
+                f"Updated project manifest {item.project_key} "
+                f"(sources: {item.source_count}, row_id: {item.row_id})"
+            )
+            continue
+        typer.echo(
+            f"Project manifest {item.project_key} does not exist. "
+            f"To create it, run: uv run commands upload-project-manifest {item.project_key}"
+        )
+    typer.echo(
+        f"Update summary: updated {updated_count}, missing {missing_count}, total {len(results)}."
     )
 
 
@@ -222,35 +274,41 @@ async def upload_project_manifest_internal(
 @async_
 async def update_project_manifest_internal(
     project_name: Annotated[
-        str,
-        typer.Option("--project", help="Project key to update from <path>/<project>.json."),
-    ],
+        str | None,
+        typer.Option(
+            "--project",
+            help="Project key to update from <path>/<project>.json. Required unless --all is used.",
+        ),
+    ] = None,
+    all_projects: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Update every manifest JSON file from --path instead of using --project.",
+        ),
+    ] = False,
     path: Annotated[
         Path,
         typer.Option("--path", help="Directory with project manifest JSON files."),
     ] = Path("."),
 ) -> None:
-    """Update one configured project manifest in the database."""
+    """Update one or all configured project manifests in the database."""
 
-    manifest = _load_manifests(
+    if all_projects and project_name is not None:
+        raise typer.BadParameter("Use either --project or --all, not both.")
+    if project_name is None and not all_projects:
+        raise typer.BadParameter("Provide --project PROJECT_NAME or use --all.")
+
+    manifests = _load_manifests(
         manifests_dir=path,
         project_name=project_name,
-        all_projects=False,
-    )[0]
-    result = await update_manifest(
-        manifest=manifest,
+        all_projects=all_projects,
+    )
+    results = await update_manifests(
+        manifests=manifests,
         service=ProjectManifestService(),
     )
-    if result.status == "missing":
-        typer.echo(
-            f"Project manifest {result.project_key} does not exist. "
-            f"To create it, run: uv run commands upload-project-manifest {result.project_key}"
-        )
-        return
-    typer.echo(
-        f"Updated project manifest {result.project_key} "
-        f"(sources: {result.source_count}, row_id: {result.row_id})"
-    )
+    _echo_update_results(results)
 
 
 def _run_internal_manifest_command(
@@ -347,9 +405,19 @@ def upload_project_manifest(
 
 def update_project_manifest(
     project_name: Annotated[
-        str,
-        typer.Option("--project", help="Project key to update from <path>/<project>.json."),
-    ],
+        str | None,
+        typer.Option(
+            "--project",
+            help="Project key to update from <path>/<project>.json. Required unless --all is used.",
+        ),
+    ] = None,
+    all_projects: Annotated[
+        bool,
+        typer.Option(
+            "--all",
+            help="Update every manifest JSON file from --path instead of using --project.",
+        ),
+    ] = False,
     path: Annotated[
         Path,
         typer.Option("--path", help="Directory with project manifest JSON files."),
@@ -362,23 +430,20 @@ def update_project_manifest(
     needs COMMANDS_COMPOSE_PROJECT_NAME=mcp-log-server-prod.
     """
 
+    if all_projects and project_name is not None:
+        raise typer.BadParameter("Use either --project or --all, not both.")
+    if project_name is None and not all_projects:
+        raise typer.BadParameter("Provide --project PROJECT_NAME or use --all.")
+
     manifest_files = _manifest_files_for_container_copy(
         manifests_dir=path,
         project_name=project_name,
-        all_projects=False,
+        all_projects=all_projects,
     )
-    _run_internal_manifest_command(
-        [
-            "uv",
-            "run",
-            "python",
-            "-m",
-            "scripts.main",
-            "update-project-manifest-internal",
-            "--path",
-            CONTAINER_MANIFESTS_DIR,
-            "--project",
-            project_name,
-        ],
-        manifest_files=manifest_files,
-    )
+    command = ["uv", "run", "python", "-m", "scripts.main", "update-project-manifest-internal"]
+    command.extend(["--path", CONTAINER_MANIFESTS_DIR])
+    if all_projects:
+        command.append("--all")
+    elif project_name is not None:
+        command.extend(["--project", project_name])
+    _run_internal_manifest_command(command, manifest_files=manifest_files)

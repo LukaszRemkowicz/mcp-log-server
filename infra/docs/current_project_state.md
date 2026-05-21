@@ -64,9 +64,9 @@ The repository currently includes:
 
 Current next-step note:
 
-- workflow/session artifact lookup is now DB-backed; upcoming collection work
-  should build on the database contracts instead of adding filesystem metadata
-  indexes.
+- Phase 6 is the MVP boundary for the repository implementation.
+- workflow/session artifact lookup is now DB-backed; upcoming work should build
+  on the database contracts instead of adding filesystem metadata indexes.
 
 ## Current Phase Status
 
@@ -272,7 +272,9 @@ Characteristics:
 - no file watching
 - runs `app` and `db` services
 - uses the official `postgres:18` image for the `db` service
-- persists database data in the named `postgres-data` Docker volume
+- persists database data in the host directory configured by
+  `POSTGRES_DATA_DIR` (`/var/lib/mcp-log-server/postgresql` by default), not in
+  a Compose-managed Docker volume
 - binds the MCP HTTP host port to `127.0.0.1`
 - starts with `uv run python -m main`
 

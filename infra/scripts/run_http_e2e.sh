@@ -206,7 +206,7 @@ fi
 
 TOOLS_RESPONSE="$(json_post '{"jsonrpc":"2.0","id":"tools-list","method":"tools/list","params":{}}')"
 COLLECT_RESPONSE="$(
-  json_post '{"jsonrpc":"2.0","id":"collect-workflow","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_names":["landingpage"],"workspace":"workflow","source_keys":["app_first","app_second"]}}}'
+  json_post '{"jsonrpc":"2.0","id":"collect-workflow","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_names":["landingpage"],"source_keys":["app_first","app_second"]}}}'
 )"
 LIST_RESPONSE="$(
   json_post '{"jsonrpc":"2.0","id":"list-snapshot","method":"tools/call","params":{"name":"list_log_snapshot_files","arguments":{"project_name":"landingpage"}}}'
@@ -224,7 +224,7 @@ GROUP_ERRORS_RESPONSE="$(
   json_post '{"jsonrpc":"2.0","id":"group-errors","method":"tools/call","params":{"name":"group_errors","arguments":{"project_name":"landingpage","source_keys":["app_first","app_second"],"max_groups":10}}}'
 )"
 SESSION_RESPONSE="$(
-  json_post_with_token "$CODEX_AGENT_JWT" '{"jsonrpc":"2.0","id":"collect-session","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_names":["landingpage"],"workspace":"session","session_id":"'"$SESSION_ID"'","source_keys":["app_first"]}}}'
+  json_post_with_token "$CODEX_AGENT_JWT" '{"jsonrpc":"2.0","id":"collect-session","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_names":["landingpage"],"session_id":"'"$SESSION_ID"'","source_keys":["app_first"]}}}'
 )"
 
 assert_eq \
