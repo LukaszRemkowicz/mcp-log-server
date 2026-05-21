@@ -18,7 +18,7 @@ from core.types import LogWorkspace
 from database.models import AgentCall, AgentSession, McpCaller, ProjectManifest
 from database.schemas import ProjectManifestUpdate
 from database.services.project_manifests import ProjectManifestService
-from middleware.audit import AccessAuditMiddleware, _prepare_collect_logs_session_id
+from middleware.audit import AccessAuditMiddleware, _prepare_collect_logs_arguments
 from services.agent_calls import AGENT_CALL_UNAVAILABLE_RETRY_TIP, AgentCallCreateError
 from services.session_ids import generate_session_id
 from tests.factories import McpCallerFactory, ProjectManifestFactory
@@ -49,7 +49,6 @@ async def test_audit_middleware_persists_agent_call_for_collect_logs(
         message=mt.CallToolRequestParams(
             name="collect_logs",
             arguments={
-                "workspace": "session",
                 "project_names": ["landingpage"],
                 "source_keys": ["backend"],
             },
@@ -98,26 +97,48 @@ async def test_audit_middleware_persists_agent_call_for_collect_logs(
     assert rows[0].error_code is None
 
 
-def test_prepare_collect_logs_session_id_is_mandatory_for_session_collect_logs() -> None:
-    """Verify session collect_logs gets an effective session id from middleware."""
+@pytest.mark.anyio
+async def test_audit_middleware_rejects_collect_logs_workspace_argument(
+    mocker: MockerFixture,
+) -> None:
+    """Verify collect_logs does not accept caller-supplied workspace."""
 
+    token = AccessToken(
+        token="test-token",
+        client_id="workflow-client",
+        scopes=["logs:collect"],
+        claims={
+            "sub": "workflow-subject",
+            "client_type": "workflow_agent",
+        },
+    )
+    mocker.patch("middleware.audit.get_access_token", return_value=token)
     context = MiddlewareContext(
         message=mt.CallToolRequestParams(
             name="collect_logs",
-            arguments={"workspace": "session", "session_id": None},
+            arguments={
+                "workspace": "workflow",
+                "project_names": ["landingpage"],
+                "source_keys": ["backend"],
+            },
         )
     )
+    middleware = AccessAuditMiddleware()
+    call_next = mocker.AsyncMock()
 
-    session_id = _prepare_collect_logs_session_id(context)
+    result = await middleware.on_call_tool(
+        context,
+        cast(CallNext[mt.CallToolRequestParams, ToolResult], call_next),
+    )
 
-    assert SESSION_ID_PATTERN.fullmatch(session_id)
-    assert len(session_id) <= 24
-    assert context.message.arguments is not None
-    assert context.message.arguments["session_id"] == str(session_id)
+    call_next.assert_not_awaited()
+    assert result.structured_content is not None
+    assert result.structured_content["error_code"] == "invalid_tool_arguments"
+    assert result.structured_content["details"]["invalid_arguments"] == ["workspace"]
 
 
-def test_prepare_collect_logs_session_id_generates_for_workflow_collect_logs() -> None:
-    """Verify workflow collect_logs also gets an effective session id."""
+def test_prepare_collect_logs_arguments_injects_session_workspace_and_session_id() -> None:
+    """Verify session collect_logs gets caller-owned workspace and session id."""
 
     context = MiddlewareContext(
         message=mt.CallToolRequestParams(
@@ -126,11 +147,31 @@ def test_prepare_collect_logs_session_id_generates_for_workflow_collect_logs() -
         )
     )
 
-    session_id = _prepare_collect_logs_session_id(context)
+    session_id = _prepare_collect_logs_arguments(context, workspace=LogWorkspace.SESSION)
 
     assert SESSION_ID_PATTERN.fullmatch(session_id)
     assert len(session_id) <= 24
     assert context.message.arguments is not None
+    assert context.message.arguments["workspace"] == LogWorkspace.SESSION
+    assert context.message.arguments["session_id"] == str(session_id)
+
+
+def test_prepare_collect_logs_arguments_injects_workflow_workspace_and_session_id() -> None:
+    """Verify workflow collect_logs gets caller-owned workspace and session id."""
+
+    context = MiddlewareContext(
+        message=mt.CallToolRequestParams(
+            name="collect_logs",
+            arguments={"workspace": "session", "session_id": None},
+        )
+    )
+
+    session_id = _prepare_collect_logs_arguments(context, workspace=LogWorkspace.WORKFLOW)
+
+    assert SESSION_ID_PATTERN.fullmatch(session_id)
+    assert len(session_id) <= 24
+    assert context.message.arguments is not None
+    assert context.message.arguments["workspace"] == LogWorkspace.WORKFLOW
     assert context.message.arguments["session_id"] == str(session_id)
 
 
@@ -161,7 +202,6 @@ async def test_audit_middleware_completes_workflow_collect_logs_with_generated_s
         message=mt.CallToolRequestParams(
             name="collect_logs",
             arguments={
-                "workspace": "workflow",
                 "project_names": ["landingpage"],
                 "source_keys": ["backend"],
             },
@@ -173,6 +213,7 @@ async def test_audit_middleware_completes_workflow_collect_logs_with_generated_s
         next_context: MiddlewareContext[mt.CallToolRequestParams],
     ) -> ToolResult:
         assert next_context.message.arguments is not None
+        assert next_context.message.arguments["workspace"] == LogWorkspace.WORKFLOW
         generated_session_id = str(next_context.message.arguments["session_id"])
         return ToolResult(
             content=[],
@@ -227,7 +268,7 @@ async def test_audit_middleware_returns_agent_error_when_agent_call_create_fails
     context = MiddlewareContext(
         message=mt.CallToolRequestParams(
             name="collect_logs",
-            arguments={"workspace": "session", "project_names": ["landingpage"]},
+            arguments={"project_names": ["landingpage"]},
         )
     )
     middleware = AccessAuditMiddleware()

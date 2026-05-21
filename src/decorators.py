@@ -59,7 +59,7 @@ def _is_internal_tool_parameter(parameter: Parameter) -> bool:
     }:
         return True
 
-    if parameter.name in {"settings", "access_token", "asset_loader", "caller"}:
+    if parameter.name in {"settings", "access_token", "asset_loader", "caller", "workspace"}:
         return True
 
     default = parameter.default

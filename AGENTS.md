@@ -155,12 +155,10 @@ Purpose:
 - `collect_logs`
   returns deterministic collection results for one or more authorized
   projects and requested source keys from the manifest. Current agent-facing
-  arguments are: `project_names`, `source_keys`, `workspace`, optional
-  `session_id`, `since`, and `until`. For real MCP calls with
-  `workspace="session"`, middleware creates a `session_id` when the request
-  omits it; agents should reuse the returned `session_id` for later calls in
-  the same investigation. The fixed `workflow-agent` token is not allowed to
-  use `workspace="session"`; it must use `workspace="workflow"`.
+  arguments are: `project_names`, `source_keys`, optional `session_id`, `since`,
+  and `until`. Middleware derives the artifact workspace from the authenticated
+  MCP caller DB row and injects it into the tool call. Session callers should
+  reuse the returned `session_id` for later calls in the same investigation.
 - `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot`
   operate on one persisted artifact identified by:
   - `session_id` + `project_name` for session investigations

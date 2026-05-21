@@ -98,7 +98,6 @@ COLLECT_LOGS_TOOL_CALLS: tuple[ToolCall, ...] = (
         {
             "project_names": ["landingpage"],
             "source_keys": ["all"],
-            "workspace": "workflow",
         },
     ),
 )
@@ -117,7 +116,7 @@ CALLER_CONTEXT_TOOL_CALLS: tuple[CallerContextToolCall, ...] = (
     ("list_projects", {}, [PROJECTS_READ_SCOPE], ["landingpage"], False),
     (
         "collect_logs",
-        {"project_names": ["landingpage"], "source_keys": ["app_file"], "workspace": "workflow"},
+        {"project_names": ["landingpage"], "source_keys": ["app_file"]},
         [LOGS_COLLECT_SCOPE],
         ["landingpage"],
         False,
@@ -360,6 +359,9 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert response.status_code == 200
     assert content == []
     assert payload["workflow_name"] == "analyze_daily_log_bundle"
+    assert "Monitoring Tool Loop System Prompt" in payload["prompt"]
+    assert "Monitoring Tool Loop User Prompt" in payload["prompt"]
+    assert "valid top-level actions are only" in payload["prompt"]
     assert "Log Summary Instructions" in payload["prompt"]
     assert any(
         item["resource_uri"] == "skill://workflow/severity_guide"
@@ -386,6 +388,7 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert any(argument["name"] == "project_names" for argument in collect_logs_tool["arguments"])
     assert any(argument["name"] == "source_keys" for argument in collect_logs_tool["arguments"])
     assert any(argument["name"] == "session_id" for argument in collect_logs_tool["arguments"])
+    assert all(argument["name"] != "workspace" for argument in collect_logs_tool["arguments"])
 
 
 async def test_service_status_api_does_not_report_project_access(
@@ -2194,7 +2197,7 @@ async def test_collect_logs_api_generates_session_id_before_tool_call(
     token = custom_jwt_token(
         "codex-agent",
         [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
-        "codex-agent",
+        "codex-client",
         {"client_type": "codex"},
     )
     mocker.patch(
@@ -2210,7 +2213,6 @@ async def test_collect_logs_api_generates_session_id_before_tool_call(
             token=token,
             data=build_collect_logs_request(
                 source_keys=["app_file"],
-                workspace="session",
                 session_id=None,
             ),
         )
@@ -2243,13 +2245,13 @@ async def test_analysis_tool_rejects_snapshot_owned_by_other_caller(
     owner_token = custom_jwt_token(
         "codex-agent",
         [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
-        "codex-agent",
+        "codex-client",
         {"client_type": "codex"},
     )
     other_token = custom_jwt_token(
         "codex-agent",
         [LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE],
-        "codex-client",
+        "codex-agent",
         {"client_type": "codex"},
     )
     mocker.patch(
@@ -2266,7 +2268,6 @@ async def test_analysis_tool_rejects_snapshot_owned_by_other_caller(
             token=owner_token,
             data=build_collect_logs_request(
                 source_keys=["app_file"],
-                workspace="session",
                 session_id=None,
             ),
         )
@@ -2297,15 +2298,19 @@ async def test_analysis_tool_rejects_snapshot_owned_by_other_caller(
     assert payload["message"] == "Requested session log snapshot was not found."
 
 
-async def test_collect_logs_api_blocks_workflow_agent_session_workspace(
+async def test_collect_logs_api_uses_caller_workspace_when_workspace_is_omitted(
     valid_jwt_token: str,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
 ) -> None:
-    """Verify workflow agent tokens cannot run interactive session collection."""
+    """Verify collect_logs injects the authenticated caller workspace."""
 
     create_spy = mocker.patch(
         "middleware.audit.agent_call_audit_service.create_tool_call",
+        new=mocker.AsyncMock(return_value=uuid4()),
+    )
+    mocker.patch(
+        "middleware.audit.agent_call_audit_service.complete_tool_call",
         new=mocker.AsyncMock(),
     )
 
@@ -2313,7 +2318,7 @@ async def test_collect_logs_api_blocks_workflow_agent_session_workspace(
         token=valid_jwt_token,
         data=build_collect_logs_request(
             source_keys=["app_file"],
-            workspace="session",
+            workspace=None,
             session_id=None,
         ),
     )
@@ -2321,15 +2326,9 @@ async def test_collect_logs_api_blocks_workflow_agent_session_workspace(
     payload = response.json()["result"]["structuredContent"]
 
     assert response.status_code == 200
-    assert response.json()["result"]["isError"] is True
-    assert payload["status"] == "error"
-    assert payload["error_code"] == "workspace_not_allowed"
-    assert payload["details"] == {
-        "client_id": "workflow-agent",
-        "client_type": "workflow_agent",
-        "workspace": "session",
-    }
-    create_spy.assert_not_called()
+    assert response.json()["result"]["isError"] is False
+    assert payload["workspace"] == "workflow"
+    create_spy.assert_awaited_once()
 
 
 async def test_workflow_skill_resource_read_api_returns_skill_contents(

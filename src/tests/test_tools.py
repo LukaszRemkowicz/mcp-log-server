@@ -100,6 +100,9 @@ def test_application_registers_expected_mcp_components(
         )
         bootstrap_text = build_workflow_bootstrap_payload(WorkflowAssetLoader(), workflow_token)
         assert bootstrap_text["workflow_name"] == "analyze_daily_log_bundle"
+        assert "Monitoring Tool Loop System Prompt" in bootstrap_text["prompt"]
+        assert "Monitoring Tool Loop User Prompt" in bootstrap_text["prompt"]
+        assert "valid top-level actions are only" in bootstrap_text["prompt"]
         assert "Log Summary Instructions" in bootstrap_text["prompt"]
         assert any(
             item["skill_name"] == "severity_guide" for item in bootstrap_text["mandatory_skills"]
@@ -128,6 +131,10 @@ def test_application_registers_expected_mcp_components(
         assert any(
             item["tool_name"] == "suggest_followup_window" for item in bootstrap_text["tools"]
         )
+        collect_logs_tool = next(
+            item for item in bootstrap_text["tools"] if item["tool_name"] == "collect_logs"
+        )
+        assert all(argument["name"] != "workspace" for argument in collect_logs_tool["arguments"])
         assert any(item["tool_name"] == "list_projects" for item in bootstrap_text["tools"])
         assert any(
             item["tool_name"] == "get_mcp_service_status" for item in bootstrap_text["tools"]

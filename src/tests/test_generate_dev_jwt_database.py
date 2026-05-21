@@ -11,6 +11,7 @@ import pytest
 from core.types import LogWorkspace
 from database.models import McpCaller
 from scripts.commands.generate_dev_jwt import build_example_token_response
+from tests.factories import McpCallerFactory
 
 
 def _decode_jwt_payload(token: str) -> dict[str, Any]:
@@ -22,13 +23,13 @@ def _decode_jwt_payload(token: str) -> dict[str, Any]:
 @pytest.mark.anyio
 async def test_generate_dev_jwt_uses_database_callers_for_claims(db: None) -> None:  # noqa: ARG001
     await McpCaller.all().delete()
-    await McpCaller.objects.create(
+    await McpCallerFactory.save_to_db(
         client_id="workflow-prod",
         client_type="workflow_agent_prod",
         workspace=LogWorkspace.WORKFLOW,
         allowed_projects=["landingpage", "shop"],
     )
-    await McpCaller.objects.create(
+    await McpCallerFactory.save_to_db(
         client_id="codex-prod",
         client_type="codex_prod",
         workspace=LogWorkspace.SESSION,
@@ -47,6 +48,30 @@ async def test_generate_dev_jwt_uses_database_callers_for_claims(db: None) -> No
     assert codex_claims["client_id"] == "codex-prod"
     assert codex_claims["client_type"] == "codex_prod"
     assert codex_claims["allowed_projects"] == ["all"]
+
+
+@pytest.mark.anyio
+async def test_generate_dev_jwt_uses_custom_exp_time_hours(db: None) -> None:  # noqa: ARG001
+    await McpCaller.all().delete()
+    await McpCallerFactory.save_to_db(
+        client_id="workflow-prod",
+        client_type="workflow_agent_prod",
+        workspace=LogWorkspace.WORKFLOW,
+        allowed_projects=["landingpage"],
+    )
+    await McpCallerFactory.save_to_db(
+        client_id="codex-prod",
+        client_type="codex_prod",
+        workspace=LogWorkspace.SESSION,
+        allowed_projects=["landingpage"],
+    )
+
+    payload = await build_example_token_response(exp_time_hours=24 * 30)
+    workflow_claims = _decode_jwt_payload(payload["workflow_agent"])
+    codex_claims = _decode_jwt_payload(payload["codex_agent"])
+
+    assert workflow_claims["exp"] - workflow_claims["iat"] == 60 * 60 * 24 * 30
+    assert codex_claims["exp"] - codex_claims["iat"] == 60 * 60 * 24 * 30
 
 
 @pytest.mark.anyio
