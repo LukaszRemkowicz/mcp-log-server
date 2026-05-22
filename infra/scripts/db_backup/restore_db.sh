@@ -20,10 +20,9 @@ BACKUP_FILE="$1"
 DATABASE_NAME="${DATABASE_NAME:-mcp_log_server}"
 DATABASE_USER="${DATABASE_USER:-mcp_log_server}"
 DATABASE_PASSWORD="${DATABASE_PASSWORD:-local-secret}"
-POSTGRES_DATA_DIR="${POSTGRES_DATA_DIR:-/var/lib/mcp-log-server/postgresql}"
 
 # docker-compose.prod.yml interpolates these even when only the db service is targeted.
-export ENVIRONMENT COMPOSE_PROJECT_NAME DATABASE_NAME DATABASE_USER DATABASE_PASSWORD POSTGRES_DATA_DIR
+export ENVIRONMENT COMPOSE_PROJECT_NAME DATABASE_NAME DATABASE_USER DATABASE_PASSWORD
 export TAG="${TAG:-restore}"
 
 if [[ ! -f "$BACKUP_FILE" ]]; then

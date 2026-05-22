@@ -8,7 +8,7 @@ services:
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - ${POSTGRES_DATA_DIR:-/var/lib/mcp-log-server/postgresql}:/var/lib/postgresql
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test:
         [
@@ -70,6 +70,9 @@ services:
       - "traefik.http.routers.mcp-log-server.service=mcp-log-server"
       - "traefik.http.services.mcp-log-server.loadbalancer.server.port=${MCP_PORT:-8001}"
     command: ["uv", "run", "python", "-m", "main"]
+
+volumes:
+  postgres-data:
 
 networks:
   traefik_proxy:

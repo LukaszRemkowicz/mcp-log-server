@@ -8,11 +8,10 @@ from pathlib import Path
 from typing import cast
 
 from fastmcp.dependencies import CurrentAccessToken
-from fastmcp.server.auth import AccessToken, require_scopes
+from fastmcp.server.auth import AccessToken
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
 
-from app import mcp
 from auth.mcp_authorized_manifests import AuthorizedProjectManifests
 from auth.mcp_caller_context import get_request_mcp_caller
 from auth.scopes import LOGS_COLLECT_SCOPE
@@ -365,9 +364,9 @@ def _build_filtered_view_source_key_error_result(
     )
 
 
-@mcp.tool(
-    auth=require_scopes(LOGS_COLLECT_SCOPE),
-    description=GROUP_ERRORS_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    LOGS_COLLECT_SCOPE,
+    mcp_description=GROUP_ERRORS_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def group_errors(
@@ -476,9 +475,9 @@ async def group_errors(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(LOGS_COLLECT_SCOPE),
-    description=INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    LOGS_COLLECT_SCOPE,
+    mcp_description=INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def inspect_proxy_activity(
@@ -556,9 +555,9 @@ async def inspect_proxy_activity(
     return ToolResult(content=[], structured_content=response)
 
 
-@mcp.tool(
-    auth=require_scopes(LOGS_COLLECT_SCOPE),
-    description=BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    LOGS_COLLECT_SCOPE,
+    mcp_description=BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def build_incident_bundle(
@@ -658,9 +657,9 @@ async def build_incident_bundle(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(LOGS_COLLECT_SCOPE),
-    description=CREATE_FILTERED_VIEW_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    LOGS_COLLECT_SCOPE,
+    mcp_description=CREATE_FILTERED_VIEW_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def create_filtered_view(

@@ -104,6 +104,12 @@ def test_application_registers_expected_mcp_components(
         assert "Monitoring Tool Loop User Prompt" in bootstrap_text["prompt"]
         assert "valid top-level actions are only" in bootstrap_text["prompt"]
         assert "Log Summary Instructions" in bootstrap_text["prompt"]
+        assert "inspect_live_fail2ban_activity" in bootstrap_text["prompt"]
+        assert "group_errors" in bootstrap_text["prompt"]
+        assert "inspect_proxy_activity" in bootstrap_text["prompt"]
+        assert "watch-only" in bootstrap_text["prompt"]
+        assert "When an available project includes a fail2ban source" in bootstrap_text["prompt"]
+        assert "record that as a coverage gap" in bootstrap_text["prompt"]
         assert any(
             item["skill_name"] == "severity_guide" for item in bootstrap_text["mandatory_skills"]
         )
@@ -125,11 +131,18 @@ def test_application_registers_expected_mcp_components(
             item["tool_name"] == "read_log_snapshot_file" for item in bootstrap_text["tools"]
         )
         assert any(item["tool_name"] == "grep_log_snapshot" for item in bootstrap_text["tools"])
-        assert all(item["tool_name"] != "group_errors" for item in bootstrap_text["tools"])
-        assert all(item["tool_name"] != "build_incident_bundle" for item in bootstrap_text["tools"])
-        assert all(item["tool_name"] != "create_filtered_view" for item in bootstrap_text["tools"])
+        assert any(item["tool_name"] == "group_errors" for item in bootstrap_text["tools"])
+        assert any(item["tool_name"] == "build_incident_bundle" for item in bootstrap_text["tools"])
+        assert any(item["tool_name"] == "create_filtered_view" for item in bootstrap_text["tools"])
+        assert any(
+            item["tool_name"] == "inspect_proxy_activity" for item in bootstrap_text["tools"]
+        )
         assert any(
             item["tool_name"] == "suggest_followup_window" for item in bootstrap_text["tools"]
+        )
+        assert any(
+            item["tool_name"] == "inspect_live_fail2ban_activity"
+            for item in bootstrap_text["tools"]
         )
         collect_logs_tool = next(
             item for item in bootstrap_text["tools"] if item["tool_name"] == "collect_logs"
