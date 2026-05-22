@@ -375,9 +375,10 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert any(item["tool_name"] == "list_log_snapshot_files" for item in payload["tools"])
     assert any(item["tool_name"] == "read_log_snapshot_file" for item in payload["tools"])
     assert any(item["tool_name"] == "grep_log_snapshot" for item in payload["tools"])
-    assert all(item["tool_name"] != "group_errors" for item in payload["tools"])
-    assert all(item["tool_name"] != "build_incident_bundle" for item in payload["tools"])
-    assert all(item["tool_name"] != "create_filtered_view" for item in payload["tools"])
+    assert any(item["tool_name"] == "group_errors" for item in payload["tools"])
+    assert any(item["tool_name"] == "build_incident_bundle" for item in payload["tools"])
+    assert any(item["tool_name"] == "create_filtered_view" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_proxy_activity" for item in payload["tools"])
     assert any(item["tool_name"] == "suggest_followup_window" for item in payload["tools"])
     assert any(item["tool_name"] == "list_projects" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_service_status" for item in payload["tools"])
@@ -2386,7 +2387,7 @@ async def test_resources_list_shows_concrete_workflow_skill_resources(
     resource_uris = [resource["uri"] for resource in resources]
 
     assert response.status_code == 200
-    assert "skill://workflow/project_context" in resource_uris
+    assert "skill://workflow/project_context" not in resource_uris
     assert "skill://workflow/severity_guide" in resource_uris
     assert "skill://workflow/bot_detection" in resource_uris
 

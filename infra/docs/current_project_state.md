@@ -137,7 +137,6 @@ Currently implemented tools:
 
 Workflow skills are exposed as concrete read-only MCP resources, for example:
 
-- `skill://workflow/project_context`
 - `skill://workflow/severity_guide`
 - `skill://workflow/recommendations_guide`
 - `skill://workflow/bot_detection`

@@ -74,7 +74,7 @@ def test_application_registers_expected_mcp_components(
         resources = await app._local_provider.list_resources()
         resource_uris = [str(resource.uri) for resource in resources]
 
-        assert "skill://workflow/project_context" in resource_uris
+        assert "skill://workflow/project_context" not in resource_uris
         assert "skill://workflow/severity_guide" in resource_uris
         assert "skill://workflow/bot_detection" in resource_uris
 
@@ -117,8 +117,8 @@ def test_application_registers_expected_mcp_components(
             item["skill_name"] == "recommendations_guide"
             for item in bootstrap_text["mandatory_skills"]
         )
-        assert any(
-            item["skill_name"] == "project_context" for item in bootstrap_text["mandatory_skills"]
+        assert all(
+            item["skill_name"] != "project_context" for item in bootstrap_text["mandatory_skills"]
         )
         assert any(
             item["skill_name"] == "bot_detection" for item in bootstrap_text["optional_skills"]
@@ -318,8 +318,8 @@ def test_workflow_bootstrap_uses_skill_resource_uris(
 
     payload = build_workflow_bootstrap_payload(WorkflowAssetLoader(), workflow_token)
 
-    assert any(
-        item["resource_uri"] == "skill://workflow/project_context"
+    assert all(
+        item["resource_uri"] != "skill://workflow/project_context"
         for item in payload["mandatory_skills"]
     )
     assert any(

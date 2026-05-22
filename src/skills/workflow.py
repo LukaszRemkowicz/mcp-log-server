@@ -17,7 +17,7 @@ class WorkflowSkillMetadata(TypedDict):
 
 @dataclass(frozen=True, slots=True)
 class WorkflowSkillDefinition:
-    """Describe one workflow skill copied from the landingpage monitoring assets."""
+    """Describe one workflow skill exposed through the log-analysis workflow."""
 
     skill_name: str
     asset_path: str
@@ -32,12 +32,6 @@ class WorkflowSkillDefinition:
 
 
 WORKFLOW_SKILLS: tuple[WorkflowSkillDefinition, ...] = (
-    WorkflowSkillDefinition(
-        skill_name="project_context",
-        asset_path="skills/project_context.md",
-        description="Project architecture and operational context for the portfolio platform.",
-        mandatory=True,
-    ),
     WorkflowSkillDefinition(
         skill_name="normal_patterns",
         asset_path="skills/normal_patterns.md",

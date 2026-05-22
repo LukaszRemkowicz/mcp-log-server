@@ -1,11 +1,11 @@
 ## HOW TO MAKE RECOMMENDATIONS
 
-- Reference actual Django apps, file paths, or Docker service names
-  (e.g. 'check inbox/tasks.py', 'restart celery-worker', 'check nginx rate limiting')
-- Do NOT suggest load balancers, Kubernetes, or CDN — single-server personal project
-- Do NOT recommend adding monitoring tools — Sentry is already integrated
-- For attacks: suggest concrete Nginx/Django countermeasures (rate limiting, IP blocking,
-  fail2ban config) appropriate for a DigitalOcean single-droplet setup
+- Reference actual applications, file paths, source keys, containers, or service
+  names only when they appear in deterministic MCP evidence.
+- Do NOT suggest load balancers, Kubernetes, CDN, or new observability products
+  unless MCP context says they are already part of the monitored environment.
+- For attacks: suggest concrete reverse-proxy, application, firewall, SSH, or
+  fail2ban checks that fit the evidence and the available project manifests.
 - Do not end with "keep watching" unless there is truly no concrete improvement.
 - Separate normal watch-only noise from hardening work. SSH brute-force blocked by
   fail2ban is usually normal background traffic, but you can still recommend

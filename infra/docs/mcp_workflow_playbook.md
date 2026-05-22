@@ -657,7 +657,6 @@ curl -sS \
 What it returns right now:
 
 - the fixed workflow skill resources, for example:
-  - `skill://workflow/project_context`
   - `skill://workflow/severity_guide`
   - `skill://workflow/bot_detection`
 
