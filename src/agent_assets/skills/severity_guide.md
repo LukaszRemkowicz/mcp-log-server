@@ -9,3 +9,23 @@
 - **CRITICAL**: Service-affecting OR active exploitation attempt. 5xx errors,
   DB/Redis unreachable, Celery tasks exhausted retries, email delivery failed,
   sensitive file returned 200, injection strings in URLs.
+
+HTTP/proxy severity rules:
+
+- Judge 4xx/405/404 traffic by ratio and path context, not by count alone.
+- A small 4xx ratio on scanner-looking paths is usually INFO/watch-only.
+- A high 4xx ratio on real application or API paths is WARNING until proven
+  expected by private monitoring context or deterministic evidence.
+- Do not call a high 4xx ratio normal operation unless path distribution or
+  private monitoring context proves the traffic is expected scanner noise.
+- If the ratio is high and expected-noise context is unclear, prefer WARNING or
+  explicitly state the uncertainty instead of INFO.
+- Treat 4xx ratios at or above 20% as high enough to require explanation.
+- Treat 4xx ratios at or above 50% as suspicious unless the paths are clearly
+  scanner-only or expected noise.
+- Do not summarize high 4xx ratios on admin, API, or application paths as
+  "normal operation"; classify them as WARNING unless deterministic evidence or
+  private monitoring context proves they are expected.
+- Any 5xx/upstream failure affecting real application paths is at least WARNING
+  and may be CRITICAL when repeated or service-affecting.
+- Zero-line sources are coverage gaps, not health evidence.

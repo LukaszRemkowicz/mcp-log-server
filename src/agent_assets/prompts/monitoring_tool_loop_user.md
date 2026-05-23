@@ -4,9 +4,13 @@ You must respond with JSON only.
 
 Choose one action:
 - `call_tools`
+- `read_skills`
 - `final_report`
 
-Use `call_tools` when you still need data or a project skill fragment.
+Use `call_tools` when you still need deterministic data or an optional workflow
+tool result.
+Use `read_skills` when deterministic evidence shows that optional bot-detection
+or OWASP/security guidance is needed before the final report.
 Use `final_report` when you have enough information to finish the job.
 
 You may request one or more tools in a single step.
@@ -19,8 +23,11 @@ For tool calls:
   "action": "call_tools",
   "tool_calls": [
     {
-      "tool_name": "prepare_log_report",
-      "arguments": {}
+      "tool_name": "inspect_proxy_activity",
+      "arguments": {
+        "project_name": "landingpage",
+        "source_keys": ["nginx", "traefik"]
+      }
     }
   ]
 }
@@ -31,6 +38,14 @@ For final report:
 {
   "action": "final_report",
   "summary": "Short overall summary"
+}
+```
+
+For optional skill reads:
+```json
+{
+  "action": "read_skills",
+  "skill_names": ["owasp_security"]
 }
 ```
 

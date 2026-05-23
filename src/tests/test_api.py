@@ -368,6 +368,14 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
         for item in payload["mandatory_skills"]
     )
     assert any(
+        item["resource_uri"] == "skill://workflow/normal_patterns"
+        for item in payload["mandatory_skills"]
+    )
+    assert any(
+        item["resource_uri"] == "skill://workflow/application_monitoring"
+        for item in payload["mandatory_skills"]
+    )
+    assert any(
         item["resource_uri"] == "skill://workflow/bot_detection"
         for item in payload["optional_skills"]
     )

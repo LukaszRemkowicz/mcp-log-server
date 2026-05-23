@@ -11,6 +11,7 @@ from auth.scopes import (
     MCP_STATUS_READ_SCOPE,
     PROJECTS_READ_SCOPE,
     WORKFLOW_BOOTSTRAP_SCOPE,
+    WORKFLOW_SKILLS_READ_SCOPE,
 )
 from middleware.audit import AccessAuditMiddleware
 from middleware.authorized_manifests import AuthorizedManifestsMiddleware
@@ -89,6 +90,7 @@ def test_application_registers_expected_mcp_components(
                 WORKFLOW_BOOTSTRAP_SCOPE,
                 LOGS_COLLECT_SCOPE,
                 PROJECTS_READ_SCOPE,
+                WORKFLOW_SKILLS_READ_SCOPE,
                 MCP_STATUS_READ_SCOPE,
                 MCP_HEALTH_READ_SCOPE,
             ],
@@ -99,19 +101,40 @@ def test_application_registers_expected_mcp_components(
             },
         )
         bootstrap_text = build_workflow_bootstrap_payload(WorkflowAssetLoader(), workflow_token)
+        bootstrap_prompt = bootstrap_text["prompt"]
         assert bootstrap_text["workflow_name"] == "analyze_daily_log_bundle"
-        assert "Monitoring Tool Loop System Prompt" in bootstrap_text["prompt"]
-        assert "Monitoring Tool Loop User Prompt" in bootstrap_text["prompt"]
-        assert "valid top-level actions are only" in bootstrap_text["prompt"]
-        assert "Log Summary Instructions" in bootstrap_text["prompt"]
-        assert "inspect_live_fail2ban_activity" in bootstrap_text["prompt"]
-        assert "group_errors" in bootstrap_text["prompt"]
-        assert "inspect_proxy_activity" in bootstrap_text["prompt"]
-        assert "watch-only" in bootstrap_text["prompt"]
-        assert "When an available project includes a fail2ban source" in bootstrap_text["prompt"]
-        assert "record that as a coverage gap" in bootstrap_text["prompt"]
+        assert "Monitoring Tool Loop System Prompt" in bootstrap_prompt
+        assert "Monitoring Tool Loop User Prompt" in bootstrap_prompt
+        assert "valid top-level actions are only" in bootstrap_prompt
+        assert "Log Summary Instructions" in bootstrap_prompt
+        assert "inspect_live_fail2ban_activity" in bootstrap_prompt
+        assert "group_errors" in bootstrap_prompt
+        assert "inspect_proxy_activity" in bootstrap_prompt
+        assert "watch-only" in bootstrap_prompt
+        assert "When an available project includes a fail2ban source" in bootstrap_prompt
+        assert "record that as a coverage gap" in bootstrap_prompt
+        assert "Do not judge HTTP or proxy health from grouped errors alone" in bootstrap_prompt
+        assert "include the denominator and percentage" in bootstrap_prompt
+        assert "Do not call a high 4xx ratio normal operation" in bootstrap_prompt
+        assert "use WARNING or state the uncertainty instead of INFO" in bootstrap_prompt
+        assert '"severity_rationale"' in bootstrap_prompt
+        assert "severity_rationale` must explain the severity" in bootstrap_prompt
+        assert "Treat 4xx ratios at or above 20% as high enough" in bootstrap_prompt
+        assert "ratios at or above 50% as suspicious" in bootstrap_prompt
+        assert (
+            "Do not summarize high 4xx ratios on admin, API, or application paths"
+            in bootstrap_prompt
+        )
+        assert "Zero collected lines mean the source was not assessed" in bootstrap_prompt
         assert any(
             item["skill_name"] == "severity_guide" for item in bootstrap_text["mandatory_skills"]
+        )
+        assert any(
+            item["skill_name"] == "normal_patterns" for item in bootstrap_text["mandatory_skills"]
+        )
+        assert any(
+            item["skill_name"] == "application_monitoring"
+            for item in bootstrap_text["mandatory_skills"]
         )
         assert any(
             item["skill_name"] == "recommendations_guide"
@@ -122,6 +145,13 @@ def test_application_registers_expected_mcp_components(
         )
         assert any(
             item["skill_name"] == "bot_detection" for item in bootstrap_text["optional_skills"]
+        )
+        assert all(
+            item["skill_name"] != "normal_patterns" for item in bootstrap_text["optional_skills"]
+        )
+        assert all(
+            item["skill_name"] != "application_monitoring"
+            for item in bootstrap_text["optional_skills"]
         )
         assert any(item["tool_name"] == "collect_logs" for item in bootstrap_text["tools"])
         assert any(
@@ -306,6 +336,7 @@ def test_workflow_bootstrap_uses_skill_resource_uris(
             WORKFLOW_BOOTSTRAP_SCOPE,
             LOGS_COLLECT_SCOPE,
             PROJECTS_READ_SCOPE,
+            WORKFLOW_SKILLS_READ_SCOPE,
             MCP_STATUS_READ_SCOPE,
             MCP_HEALTH_READ_SCOPE,
         ],
@@ -325,4 +356,12 @@ def test_workflow_bootstrap_uses_skill_resource_uris(
     assert any(
         item["resource_uri"] == "skill://workflow/bot_detection"
         for item in payload["optional_skills"]
+    )
+    assert any(
+        item["resource_uri"] == "skill://workflow/normal_patterns"
+        for item in payload["mandatory_skills"]
+    )
+    assert any(
+        item["resource_uri"] == "skill://workflow/application_monitoring"
+        for item in payload["mandatory_skills"]
     )

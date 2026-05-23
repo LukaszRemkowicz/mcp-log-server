@@ -36,11 +36,13 @@ WORKFLOW_SKILLS: tuple[WorkflowSkillDefinition, ...] = (
         skill_name="normal_patterns",
         asset_path="skills/normal_patterns.md",
         description="Known healthy log patterns that should not be treated as incidents.",
+        mandatory=True,
     ),
     WorkflowSkillDefinition(
         skill_name="application_monitoring",
         asset_path="skills/application_monitoring.md",
         description="Checklist of application-level failures and log signals to watch.",
+        mandatory=True,
     ),
     WorkflowSkillDefinition(
         skill_name="bot_detection",

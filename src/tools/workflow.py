@@ -88,8 +88,10 @@ class WorkflowBootstrapPayload(TypedDict):
     - the MCP tools visible for the current token and marked as
       workflow-discoverable
 
-    It does not include raw skill text. Skills are fetched later through MCP
-    resources so the workflow can stay token-efficient.
+    It does not include raw skill text. Mandatory skills are fetched by the
+    monitoring app before the first LLM call; optional skills can be fetched
+    later through MCP resources when the monitoring agent validates a
+    `read_skills` action.
 
     It also does not need to include the bootstrap tool itself. The caller has
     already used `analyze_daily_log_bundle` to obtain this payload. The `tools`
@@ -182,9 +184,11 @@ def analyze_daily_log_bundle(
     - optional skill metadata
     - the workflow-discoverable follow-up tool inventory for the current JWT
 
-    The actual skill content is not embedded here. If the LLM decides it needs
-    a skill, the agent should fetch that skill later through `resources/read`
-    using the returned `skill://workflow/...` resource URIs.
+    The actual skill content is not embedded here. The monitoring app fetches
+    mandatory skills before its first LLM call. If the LLM later needs optional
+    bot-detection or security guidance, it should return a `read_skills` action
+    with skill names from `optional_skills`; the monitoring app validates that
+    request and reads the corresponding MCP skill resources.
 
     The returned `tools` field is intentionally a curated subset, not the full
     `tools/list` response. It highlights the deterministic MCP actions the
