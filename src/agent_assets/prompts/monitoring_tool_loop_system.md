@@ -45,13 +45,29 @@ Evidence expectations:
 - Do not summarize high 4xx ratios on admin, API, or application paths as
   "normal operation"; classify them as WARNING unless deterministic evidence or
   private monitoring context proves they are expected.
+- If high 4xx traffic is dominated by scanner-only paths, blocked probes, or
+  disallowed methods with no 5xx, no upstream errors, no successful abuse, and
+  no private-context expectation that the route is legitimate, classify it as
+  watch-only security noise instead of an application defect.
+- For repeated 405 POST / on an admin or application domain, treat it as likely
+  bot/probe traffic when private monitoring context does not define POST / as a
+  legitimate workflow; do not recommend application routing or handler changes
+  unless tool evidence shows user impact, upstream errors, or a real expected
+  client using that route.
 - When an available project includes a fail2ban source, inspect live fail2ban
   activity before making security conclusions or recommendations.
 - If no available project includes a fail2ban source, do not call
   `inspect_live_fail2ban_activity`; record that as a coverage gap instead.
 - Normal SSH brute-force attempts that are blocked by fail2ban are usually
-  watch-only operational noise, but the final report should still include
-  concrete hardening or verification recommendations when available.
+  watch-only operational noise.
+- Do not recommend fail2ban jail, ban-duration, or firewall changes when
+  fail2ban is active and blocking the observed traffic unless evidence shows
+  missed bans, inactive expected jails, jail errors, repeated unbanned offenders,
+  or private monitoring context asks for that review.
+- Recommendations for expected scanner/probe noise should say no immediate
+  routing, application, or mitigation-control change is indicated, then name
+  only concrete follow-up such as verifying log coverage or watching for repeat
+  sources that were not blocked or mitigated.
 - Zero collected lines mean the source was not assessed from logs. Never write
   "no errors found", "no warnings found", or "healthy" for a zero-line source.
 

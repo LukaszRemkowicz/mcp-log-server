@@ -125,6 +125,14 @@ def test_application_registers_expected_mcp_components(
             "Do not summarize high 4xx ratios on admin, API, or application paths"
             in bootstrap_prompt
         )
+        assert "classify it as watch-only security noise" in bootstrap_prompt
+        assert "For repeated 405 POST / on an admin or application domain" in bootstrap_prompt
+        assert "do not recommend application routing or handler changes" in bootstrap_prompt
+        assert "Do not recommend fail2ban jail, ban-duration, or firewall changes" in (
+            bootstrap_prompt
+        )
+        assert "no immediate" in bootstrap_prompt
+        assert "mitigation-control change is indicated" in bootstrap_prompt
         assert "Zero collected lines mean the source was not assessed" in bootstrap_prompt
         assert any(
             item["skill_name"] == "severity_guide" for item in bootstrap_text["mandatory_skills"]

@@ -26,6 +26,15 @@ HTTP/proxy severity rules:
 - Do not summarize high 4xx ratios on admin, API, or application paths as
   "normal operation"; classify them as WARNING unless deterministic evidence or
   private monitoring context proves they are expected.
+- If high 4xx traffic is dominated by scanner-only paths, blocked probes, or
+  disallowed methods with no 5xx, no upstream errors, no successful abuse, and
+  no private-context expectation that the route is legitimate, classify it as
+  watch-only security noise instead of an application defect.
+- Repeated 405 POST / on an admin or application domain is likely bot/probe
+  traffic when private monitoring context does not define POST / as a legitimate
+  workflow; do not raise severity for routing or handler misconfiguration unless
+  tool evidence shows user impact, upstream errors, or a real expected client
+  using that route.
 - Any 5xx/upstream failure affecting real application paths is at least WARNING
   and may be CRITICAL when repeated or service-affecting.
 - Zero-line sources are coverage gaps, not health evidence.

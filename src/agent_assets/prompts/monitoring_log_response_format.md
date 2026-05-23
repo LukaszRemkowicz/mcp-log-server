@@ -30,6 +30,17 @@ Rules:
 - do not write "normal operation" for high 4xx ratios on admin, API, or
   application paths unless deterministic evidence or private monitoring context
   proves the traffic is expected
+- if high 4xx traffic is scanner-only or blocked-probe noise with no 5xx,
+  no upstream errors, and no private-context expectation that the route is
+  legitimate, put it in `watch_only_items` and avoid recommending routing,
+  application, or mitigation-control changes
+- repeated 405 POST / on an admin or application domain is likely bot/probe
+  traffic unless private monitoring context defines POST / as a legitimate
+  workflow or tool evidence shows user impact
+- do not recommend fail2ban jail, ban-duration, or firewall changes when
+  fail2ban is active and blocking the observed traffic unless evidence shows
+  missed bans, inactive expected jails, jail errors, or repeated unbanned
+  offenders
 - `watch_only_items` is where normal blocked bot or SSH brute-force noise belongs
 - `findings` may be included only as a backward-compatible alias when needed by
   the runtime, but prefer `key_findings`

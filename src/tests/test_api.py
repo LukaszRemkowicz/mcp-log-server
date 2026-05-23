@@ -2367,6 +2367,7 @@ async def test_workflow_skill_resource_read_api_returns_skill_contents(
     assert response.status_code == 200
     assert contents[0]["uri"] == "skill://workflow/severity_guide"
     assert "SEVERITY CLASSIFICATION" in contents[0]["text"]
+    assert "classify it as watch-only security noise" in contents[0]["text"]
 
 
 async def test_resources_list_shows_concrete_workflow_skill_resources(
