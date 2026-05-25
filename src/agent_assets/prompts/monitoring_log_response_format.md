@@ -37,6 +37,11 @@ Rules:
 - repeated 405 POST / on an admin or application domain is likely bot/probe
   traffic unless private monitoring context defines POST / as a legitimate
   workflow or tool evidence shows user impact
+- when scanner paths appear, describe them as likely probe families rather than
+  proven app technology: config/secret disclosure, repository exposure,
+  debug/info disclosure, backup/database dump discovery, CMS/PHP probes, or
+  shell/upload exploit probes. Do not imply the monitored app runs WordPress,
+  PHP, Laravel, Joomla, or another stack unless project context says so
 - do not recommend fail2ban jail, ban-duration, or firewall changes when
   fail2ban is active and blocking the observed traffic unless evidence shows
   missed bans, inactive expected jails, jail errors, or repeated unbanned
