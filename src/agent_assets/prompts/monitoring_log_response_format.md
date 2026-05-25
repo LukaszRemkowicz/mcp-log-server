@@ -40,8 +40,13 @@ Rules:
 - when scanner paths appear, describe them as likely probe families rather than
   proven app technology: config/secret disclosure, repository exposure,
   debug/info disclosure, backup/database dump discovery, CMS/PHP probes, or
-  shell/upload exploit probes. Do not imply the monitored app runs WordPress,
-  PHP, Laravel, Joomla, or another stack unless project context says so
+  shell/upload exploit probes. Include one concise sentence in `key_findings`
+  or `watch_only_items` that groups observed paths by these families, for
+  example: "Observed probe families include config disclosure (`/.env`),
+  debug/info disclosure (`/phpinfo.php`), backup dump discovery
+  (`/backup.sql`), and CMS/PHP probes (`/wp-*`)." Do not imply the monitored
+  app runs WordPress, PHP, Laravel, Joomla, or another stack unless project
+  context says so
 - do not recommend fail2ban jail, ban-duration, or firewall changes when
   fail2ban is active and blocking the observed traffic unless evidence shows
   missed bans, inactive expected jails, jail errors, or repeated unbanned

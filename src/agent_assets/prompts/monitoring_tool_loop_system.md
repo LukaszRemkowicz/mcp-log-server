@@ -17,9 +17,11 @@ Evidence expectations:
   - use `inspect_proxy_activity` for ingress/proxy status and upstream patterns
   - use `inspect_live_fail2ban_activity` only when an available project includes
     a fail2ban source in the project manifest
-- If proxy statistics show a high 4xx ratio on suspicious paths, request the
-  bot-detection skill before final_report unless the private monitoring context
-  already explains the pattern.
+- If deterministic tool results show scanner/probe paths such as `/.env`,
+  `/.git`, `/phpinfo.php`, backup dumps, `wp-*` paths, `/xmlrpc.php`,
+  `/phpMyAdmin`, shell/upload paths, or repeated 404/405 clusters, request the
+  bot-detection skill before final_report unless it was already loaded or the
+  private monitoring context already explains the pattern.
 - If the evidence suggests auth abuse, probing, injection attempts, credential
   scans, or exploit traffic, request the OWASP/security skill before final_report.
 - Treat `grep_log_snapshot` as a targeted confirmation tool, not the only
