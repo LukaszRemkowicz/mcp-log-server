@@ -22,6 +22,10 @@ Evidence expectations:
   `/phpMyAdmin`, shell/upload paths, or repeated 404/405 clusters, request the
   bot-detection skill before final_report unless it was already loaded or the
   private monitoring context already explains the pattern.
+- If deterministic tool results show infrastructure warnings whose token, path,
+  or request shape looks like scanner traffic, such as ACME/router/middleware
+  warnings involving PHP/CMS filenames or sensitive-file paths, request the
+  bot-detection skill before final_report unless it was already loaded.
 - If the evidence suggests auth abuse, probing, injection attempts, credential
   scans, or exploit traffic, request the OWASP/security skill before final_report.
 - Treat `grep_log_snapshot` as a targeted confirmation tool, not the only

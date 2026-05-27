@@ -2367,6 +2367,40 @@ async def test_workflow_skill_resource_read_api_returns_skill_contents(
     assert contents[0]["text"]
 
 
+async def test_bot_detection_skill_describes_misleading_infra_warning_probes(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify bot detection guidance teaches infra-warning probe reasoning."""
+
+    workflow_token: str = custom_jwt_token(
+        "workflow-agent",
+        [WORKFLOW_SKILLS_READ_SCOPE],
+        "workflow-agent",
+    )
+
+    response = await jsonrpc.post(
+        token=workflow_token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "4",
+            "method": "resources/read",
+            "params": {"uri": "skill://workflow/bot_detection"},
+        },
+    )
+
+    contents = response.json()["result"]["contents"]
+
+    assert response.status_code == 200
+    assert "Misleading infrastructure-warning probes" in contents[0]["text"]
+    assert "Noise-vs-incident reasoning checklist" in contents[0]["text"]
+    assert "multiple deterministic facts" in contents[0]["text"]
+    assert "service impact" in contents[0]["text"]
+    assert "ACME" in contents[0]["text"]
+    assert "not a standalone rule" in contents[0]["text"]
+    assert "very likely scanner noise" in contents[0]["text"]
+
+
 async def test_resources_list_shows_concrete_workflow_skill_resources(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
