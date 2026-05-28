@@ -14,6 +14,11 @@ or OWASP/security guidance is needed before the final report.
 If tool results show bot, scanner, probe, credential, sensitive-path, or
 suspicious 4xx traffic and `bot_detection` is available but not yet read, choose
 `read_skills` for `bot_detection` before `final_report`.
+If tool results show possible security impact, successful sensitive-path access,
+auth/admin/API abuse, injection or path-traversal patterns, malicious-input 5xx,
+security-control failure, or unclear impact on real application/admin/API
+routes, and `owasp_security` is available but not yet read, choose `read_skills`
+for `owasp_security` before `final_report`.
 Use `final_report` when you have enough information to finish the job.
 
 You may request one or more tools in a single step.

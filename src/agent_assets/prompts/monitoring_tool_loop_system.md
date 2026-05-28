@@ -19,6 +19,12 @@ Decision contract:
   optional skill but has not been read yet, return `action=read_skills` for
   `bot_detection` before `final_report`. Use the skill text for interpretation
   instead of relying on model memory.
+- If deterministic evidence shows possible security impact, successful
+  sensitive-path access, auth/admin/API abuse, injection or path-traversal
+  patterns, malicious-input 5xx, security-control failure, or unclear impact on
+  real application/admin/API routes, and `owasp_security` is listed as an
+  optional skill but has not been read yet, return `action=read_skills` for
+  `owasp_security` before `final_report`.
 - Keep detailed interpretation inside retrieved skill text and deterministic
   tool results, not unstated assumptions.
 - If no optional skill is relevant and evidence is sufficient, finish with

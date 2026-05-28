@@ -364,6 +364,9 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert "return `action=read_skills` for" in payload["prompt"]
     assert "`bot_detection` before `final_report`" in payload["prompt"]
     assert "instead of relying on model memory" in payload["prompt"]
+    assert "possible security impact" in payload["prompt"]
+    assert "successful sensitive-path access" in payload["prompt"]
+    assert "`owasp_security` before `final_report`" in payload["prompt"]
     assert any(
         item["resource_uri"] == "skill://workflow/severity_guide"
         for item in payload["mandatory_skills"]
