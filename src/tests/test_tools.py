@@ -129,6 +129,12 @@ def test_application_registers_expected_mcp_components(
         assert any(
             item["skill_name"] == "bot_detection" for item in bootstrap_text["optional_skills"]
         )
+        bot_detection = next(
+            item
+            for item in bootstrap_text["optional_skills"]
+            if item["skill_name"] == "bot_detection"
+        )
+        assert "scanner/probe-heavy traffic" in bot_detection["when_useful"]
         assert all(
             item["skill_name"] != "normal_patterns" for item in bootstrap_text["optional_skills"]
         )
@@ -257,6 +263,12 @@ def test_application_registers_expected_mcp_components(
         assert all(
             item["tool_name"] != "analyze_daily_log_bundle" for item in bootstrap_text["tools"]
         )
+
+        prompt = bootstrap_text["prompt"]
+        assert "call `read_skills` when optional skill metadata matches observed facts" in prompt
+        assert "/.env" not in prompt
+        assert "wp-*" not in prompt
+        assert "/phpMyAdmin" not in prompt
 
     asyncio.run(run_test())
 

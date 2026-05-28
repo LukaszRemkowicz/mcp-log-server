@@ -41,8 +41,7 @@ suspicious request from the log line.
   missing-resource statuses such as 403/404/405; service/container health is
   normal; and there is no independent evidence of router failure, certificate
   renewal failure, successful access, or service impact. ACME challenge warnings
-  with PHP/CMS-looking token names are one example of this pattern, not a
-  standalone rule.
+  with PHP/CMS-looking token names are one example of this pattern, not a standalone rule.
 
 **Noise-vs-incident reasoning checklist**:
 - Do not call something noise from one warning line. Build the conclusion from

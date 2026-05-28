@@ -377,6 +377,12 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
         item["resource_uri"] == "skill://workflow/bot_detection"
         for item in payload["optional_skills"]
     )
+    bot_detection = next(
+        item
+        for item in payload["optional_skills"]
+        if item["resource_uri"] == "skill://workflow/bot_detection"
+    )
+    assert "scanner/probe-heavy traffic" in bot_detection["when_useful"]
     assert any(item["tool_name"] == "collect_logs" for item in payload["tools"])
     assert any(item["tool_name"] == "list_log_snapshot_files" for item in payload["tools"])
     assert any(item["tool_name"] == "read_log_snapshot_file" for item in payload["tools"])

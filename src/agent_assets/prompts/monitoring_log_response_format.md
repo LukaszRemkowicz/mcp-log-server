@@ -19,38 +19,17 @@ Rules:
 - `key_findings` is the canonical findings field for the final report
 - do not invent alternate top-level field names
 - `severity_rationale` must explain the severity using deterministic evidence
-  and private monitoring context, especially when high 4xx or attack traffic is
-  classified as INFO/watch-only
+  and private monitoring context
 - `evidence` must cite deterministic tool results or collection facts, not model guesses
 - `coverage_gaps` must name unavailable, zero-line, or uninspected sources when relevant
 - for zero-line sources, say the source was not assessed from logs; do not say
   "no errors found", "no warnings found", or "healthy"
-- HTTP/proxy findings must include denominator counts and percentages when
-  judging whether 4xx/405/404 traffic is normal, suspicious, or broken
-- do not write "normal operation" for high 4xx ratios on admin, API, or
-  application paths unless deterministic evidence or private monitoring context
-  proves the traffic is expected
-- if high 4xx traffic is scanner-only or blocked-probe noise with no 5xx,
-  no upstream errors, and no private-context expectation that the route is
-  legitimate, put it in `watch_only_items` and avoid recommending routing,
-  application, or mitigation-control changes
-- repeated 405 POST / on an admin or application domain is likely bot/probe
-  traffic unless private monitoring context defines POST / as a legitimate
-  workflow or tool evidence shows user impact
-- when scanner paths appear, describe them as likely probe families rather than
-  proven app technology: config/secret disclosure, repository exposure,
-  debug/info disclosure, backup/database dump discovery, CMS/PHP probes, or
-  shell/upload exploit probes. Include one concise sentence in `key_findings`
-  or `watch_only_items` that groups observed paths by these families, for
-  example: "Observed probe families include config disclosure (`/.env`),
-  debug/info disclosure (`/phpinfo.php`), backup dump discovery
-  (`/backup.sql`), and CMS/PHP probes (`/wp-*`)." Do not imply the monitored
-  app runs WordPress, PHP, Laravel, Joomla, or another stack unless project
-  context says so
-- do not recommend fail2ban jail, ban-duration, or firewall changes when
-  fail2ban is active and blocking the observed traffic unless evidence shows
-  missed bans, inactive expected jails, jail errors, or repeated unbanned
-  offenders
-- `watch_only_items` is where normal blocked bot or SSH brute-force noise belongs
+- HTTP/proxy findings should include denominator counts and percentages when
+  deterministic tool results provide them
+- describe suspicious traffic by evidence-backed families or behavior, not by
+  unproven application technology
+- use retrieved optional skills for detailed bot, security, severity, and
+  recommendation wording
+- `watch_only_items` is where normal recurring noise belongs
 - `findings` may be included only as a backward-compatible alias when needed by
   the runtime, but prefer `key_findings`
