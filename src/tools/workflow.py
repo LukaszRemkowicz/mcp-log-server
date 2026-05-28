@@ -47,7 +47,7 @@ from auth.scopes import WORKFLOW_BOOTSTRAP_SCOPE
 from decorators import list_workflow_discoverable_tool_registrations
 from dependencies import get_workflow_asset_loader
 from logging_config import get_logger
-from prompts.workflow import build_daily_log_prompt
+from prompts.workflow import build_daily_log_prompt, build_sitemap_analysis_prompt
 from skills.workflow import (
     WorkflowSkillMetadata,
     list_mandatory_workflow_skill_definitions,
@@ -169,6 +169,20 @@ def build_workflow_bootstrap_payload(
     }
 
 
+def build_sitemap_workflow_bootstrap_payload(
+    asset_loader: WorkflowAssetLoader,
+) -> WorkflowBootstrapPayload:
+    """Assemble the structured bootstrap payload for sitemap analysis."""
+
+    return {
+        "workflow_name": "analyze_sitemap_bundle",
+        "prompt": build_sitemap_analysis_prompt(asset_loader),
+        "mandatory_skills": [],
+        "optional_skills": [],
+        "tools": [],
+    }
+
+
 @mcp.tool(auth=require_scopes(WORKFLOW_BOOTSTRAP_SCOPE))
 def analyze_daily_log_bundle(
     asset_loader: WorkflowAssetLoader = Depends(get_workflow_asset_loader),
@@ -205,6 +219,27 @@ def analyze_daily_log_bundle(
             "mandatory_skill_count": len(payload["mandatory_skills"]),
             "optional_skill_count": len(payload["optional_skills"]),
             "tool_count": len(payload["tools"]),
+        },
+    )
+    return ToolResult(
+        content=[],
+        structured_content=payload,
+    )
+
+
+@mcp.tool(auth=require_scopes(WORKFLOW_BOOTSTRAP_SCOPE))
+def analyze_sitemap_bundle(
+    asset_loader: WorkflowAssetLoader = Depends(get_workflow_asset_loader),
+) -> ToolResult:
+    """Return the generic sitemap-analysis workflow bootstrap payload."""
+
+    payload = build_sitemap_workflow_bootstrap_payload(asset_loader)
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "analyze_sitemap_bundle",
+            "prompt_chars": len(payload["prompt"]),
         },
     )
     return ToolResult(

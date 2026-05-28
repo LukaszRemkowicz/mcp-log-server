@@ -32,7 +32,11 @@ from tools.agent_hints import (
     STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
     SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION,
 )
-from tools.workflow import build_workflow_bootstrap_payload, get_allowed_workflow_tool_metadata
+from tools.workflow import (
+    build_sitemap_workflow_bootstrap_payload,
+    build_workflow_bootstrap_payload,
+    get_allowed_workflow_tool_metadata,
+)
 from utils.assets import WorkflowAssetLoader
 
 
@@ -50,6 +54,7 @@ def test_application_registers_expected_mcp_components(
         )
 
         assert "analyze_daily_log_bundle" in tool_names
+        assert "analyze_sitemap_bundle" in tool_names
         assert "collect_logs" in tool_names
         assert "list_log_snapshot_files" in tool_names
         assert "read_log_snapshot_file" in tool_names
@@ -254,6 +259,18 @@ def test_application_registers_expected_mcp_components(
         )
 
     asyncio.run(run_test())
+
+
+def test_build_sitemap_workflow_bootstrap_payload_returns_generic_prompt() -> None:
+    payload = build_sitemap_workflow_bootstrap_payload(WorkflowAssetLoader())
+
+    assert payload["workflow_name"] == "analyze_sitemap_bundle"
+    assert "key_findings must be a list of complete strings" in payload["prompt"]
+    assert "self-referential canonical" in payload["prompt"]
+    assert "remove that URL from the sitemap" in payload["prompt"]
+    assert payload["mandatory_skills"] == []
+    assert payload["optional_skills"] == []
+    assert payload["tools"] == []
 
 
 def test_tool_metadata_filters_tools_by_token_scopes(
