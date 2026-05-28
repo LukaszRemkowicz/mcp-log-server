@@ -8,16 +8,19 @@
   fail2ban checks only when they fit the evidence and the available project
   manifests.
 - Do not end with "keep watching" unless there is truly no concrete improvement.
-- Separate normal watch-only noise from hardening work. SSH brute-force blocked by
-  fail2ban is usually normal background traffic. Do not recommend changing
-  jail coverage, ban duration, SSH settings, firewall rules, or block rules when
-  fail2ban is active and blocking the observed traffic unless deterministic
-  evidence shows missed bans, inactive expected jails, jail errors, repeated
-  unbanned offenders, or private monitoring context asks for that review.
+- Separate normal watch-only noise from hardening work. SSH brute-force or
+  scanner/probe traffic with no service impact is usually normal background
+  traffic. Do not recommend changing jail coverage, ban duration, SSH settings,
+  firewall rules, or block rules when deterministic evidence shows the host
+  security daemon is healthy and no mitigation gap is present, unless
+  deterministic evidence shows missed bans, inactive expected jails, jail errors,
+  repeated unbanned offenders, or private monitoring context asks for that review.
 - For expected scanner/probe noise, say no immediate routing, application, or
   mitigation-control change is indicated. Name only concrete follow-up such as
-  verifying log coverage, watching for repeat sources that were not blocked or
-  mitigated, or checking a specific source that was unavailable.
+  verifying log coverage, watching for repeat sources that remain relevant, or
+  checking a specific source that was unavailable. Do not describe traffic as
+  blocked, mitigated, or effectively handled unless a tool result explicitly
+  proves that mitigation state.
 - For repeated 405 POST / on admin or application domains, recommend route or
   handler changes only when deterministic evidence shows user impact, upstream
   errors, or private monitoring context defines POST / as a legitimate workflow.

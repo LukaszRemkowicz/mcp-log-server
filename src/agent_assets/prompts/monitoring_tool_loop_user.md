@@ -11,6 +11,9 @@ Use `call_tools` when you still need deterministic data or an optional workflow
 tool result.
 Use `read_skills` when deterministic evidence shows that optional bot-detection
 or OWASP/security guidance is needed before the final report.
+If tool results show bot, scanner, probe, credential, sensitive-path, or
+suspicious 4xx traffic and `bot_detection` is available but not yet read, choose
+`read_skills` for `bot_detection` before `final_report`.
 Use `final_report` when you have enough information to finish the job.
 
 You may request one or more tools in a single step.

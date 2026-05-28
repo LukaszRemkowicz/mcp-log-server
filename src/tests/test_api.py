@@ -361,6 +361,9 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert payload["workflow_name"] == "analyze_daily_log_bundle"
     assert isinstance(payload["prompt"], str)
     assert payload["prompt"]
+    assert "return `action=read_skills` for" in payload["prompt"]
+    assert "`bot_detection` before `final_report`" in payload["prompt"]
+    assert "instead of relying on model memory" in payload["prompt"]
     assert any(
         item["resource_uri"] == "skill://workflow/severity_guide"
         for item in payload["mandatory_skills"]
@@ -2405,6 +2408,62 @@ async def test_bot_detection_skill_describes_misleading_infra_warning_probes(
     assert "ACME" in contents[0]["text"]
     assert "not a standalone rule" in contents[0]["text"]
     assert "very likely scanner noise" in contents[0]["text"]
+
+
+async def test_workflow_skills_do_not_infer_mitigation_from_zero_current_bans(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify security-daemon guidance does not infer mitigation from zero bans."""
+
+    workflow_token: str = custom_jwt_token(
+        "workflow-agent",
+        [WORKFLOW_SKILLS_READ_SCOPE],
+        "workflow-agent",
+    )
+
+    bot_response = await jsonrpc.post(
+        token=workflow_token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "bot",
+            "method": "resources/read",
+            "params": {"uri": "skill://workflow/bot_detection"},
+        },
+    )
+    recommendations_response = await jsonrpc.post(
+        token=workflow_token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "recommendations",
+            "method": "resources/read",
+            "params": {"uri": "skill://workflow/recommendations_guide"},
+        },
+    )
+    severity_response = await jsonrpc.post(
+        token=workflow_token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "severity",
+            "method": "resources/read",
+            "params": {"uri": "skill://workflow/severity_guide"},
+        },
+    )
+
+    assert bot_response.status_code == 200
+    assert recommendations_response.status_code == 200
+    assert severity_response.status_code == 200
+    bot_text = bot_response.json()["result"]["contents"][0]["text"]
+    recommendations_text = recommendations_response.json()["result"]["contents"][0]["text"]
+    severity_text = severity_response.json()["result"]["contents"][0]["text"]
+
+    assert "Zero currently banned IPs only means no IPs are banned" in bot_text
+    assert "do not treat it as evidence of past mitigation" in bot_text
+    assert "Do not describe traffic as" in recommendations_text
+    assert "blocked, mitigated, or effectively handled" in recommendations_text
+    assert "active mitigation such as fail2ban" not in bot_text
+    assert "fail2ban is active and blocking" not in recommendations_text
+    assert "detected and blocked by fail2ban" not in severity_text
 
 
 async def test_resources_list_shows_concrete_workflow_skill_resources(

@@ -48,8 +48,12 @@ suspicious request from the log line.
   multiple deterministic facts.
 - Strong scanner-noise evidence: probe-shaped token/path, clustered PHP/CMS or
   sensitive-file probes in the same time window, blocked/missing-resource
-  responses, active mitigation such as fail2ban, healthy containers/services, and
-  no follow-through error showing the real platform feature failed.
+  responses, current runtime security-daemon state when available, healthy
+  containers/services, and no follow-through error showing the real platform
+  feature failed. Zero currently banned IPs only means no IPs are banned at
+  inspection time; do not treat it as evidence of past mitigation or successful
+  protection unless another tool result explicitly proves that history or
+  effectiveness.
 - Weak or inconclusive evidence: warning text without nearby request context,
   zero-line sources, missing proxy logs, unknown service health, or no check of
   the affected subsystem.

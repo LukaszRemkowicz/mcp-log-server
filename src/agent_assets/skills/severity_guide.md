@@ -1,9 +1,8 @@
 ## SEVERITY CLASSIFICATION
 
 - **INFO**: Normal operation. Routine requests, scheduled tasks completed, no issues.
-  Automated SSH brute-force attempts that are detected and blocked by fail2ban
-  are INFO unless they coincide with service impact, sensitive data exposure, or
-  failed mitigation.
+  Automated SSH brute-force attempts or scanner probes with no service impact,
+  sensitive data exposure, or mitigation-control failure are INFO/watch-only.
 - **WARNING**: Degraded but operational. A few 4xx errors, one failed Celery retry,
   slow DB query, reconnaissance-only attack (all 404s).
 - **CRITICAL**: Service-affecting OR active exploitation attempt. 5xx errors,

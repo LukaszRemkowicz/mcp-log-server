@@ -14,6 +14,11 @@ Decision contract:
 - Prefer summary and incident tools before broad text search.
 - Use `read_skills` only for optional skills listed in the prompt context.
 - Choose optional skills from their descriptions and `when_useful` metadata.
+- If deterministic evidence shows bot, scanner, probe, credential,
+  sensitive-path, or suspicious 4xx traffic and `bot_detection` is listed as an
+  optional skill but has not been read yet, return `action=read_skills` for
+  `bot_detection` before `final_report`. Use the skill text for interpretation
+  instead of relying on model memory.
 - Keep detailed interpretation inside retrieved skill text and deterministic
   tool results, not unstated assumptions.
 - If no optional skill is relevant and evidence is sufficient, finish with
