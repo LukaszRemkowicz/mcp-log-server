@@ -849,15 +849,13 @@ class LogAnalysisService:
 
         parsed = self._parse_json_line(raw_line)
         if parsed is not None:
-            event = self._classify_structured_line(
+            return self._classify_structured_line(
                 source_key=source_key,
                 output_file=output_file,
                 line_number=line_number,
                 raw_line=raw_line,
                 payload=parsed,
             )
-            if event is not None:
-                return event
 
         return self._classify_text_line(
             source_key=source_key,

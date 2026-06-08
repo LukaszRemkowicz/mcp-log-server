@@ -30,6 +30,66 @@ def _proxy_source(path: Path, *, source_key: str = "nginx") -> CollectLogsSource
     )
 
 
+def test_group_errors_ignores_info_structured_json_with_error_like_tool_names(
+    tmp_path: Path,
+) -> None:
+    """Structured INFO records should not fall back to plain text keyword matching."""
+
+    log_file = tmp_path / "app.jsonl"
+    log_file.write_text(
+        "\n".join(
+            [
+                (
+                    '{"level":"INFO","event":"tool_result","tool_name":"group_errors",'
+                    '"message":"tool result","payload":{"action":"group_errors"}}'
+                ),
+                (
+                    '{"level":"INFO","event":"tool_call","message":"calling '
+                    'build_incident_bundle after group_errors"}'
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    analysis = LogAnalysisService().group_snapshot_errors(
+        sources=[_proxy_source(log_file, source_key="app_file")],
+        requested_source_keys=None,
+        max_groups=5,
+    )
+
+    assert analysis.matching_line_count == 0
+    assert analysis.total_group_count == 0
+    assert analysis.groups == []
+
+
+def test_group_errors_keeps_structured_json_error_level_failures(tmp_path: Path) -> None:
+    """Structured ERROR records remain grouped from parsed fields."""
+
+    log_file = tmp_path / "app.jsonl"
+    log_file.write_text(
+        "\n".join(
+            [
+                '{"level":"INFO","message":"regular request finished"}',
+                '{"level":"ERROR","message":"Database connection failed"}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    analysis = LogAnalysisService().group_snapshot_errors(
+        sources=[_proxy_source(log_file, source_key="app_file")],
+        requested_source_keys=None,
+        max_groups=5,
+    )
+
+    assert analysis.matching_line_count == 1
+    assert analysis.total_group_count == 1
+    assert analysis.groups[0].category == "application_error"
+    assert analysis.groups[0].severity == "high"
+    assert analysis.groups[0].message_summary == "Database connection failed"
+
+
 def test_proxy_activity_caps_route_accumulators_to_max_groups(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
