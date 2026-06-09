@@ -8,13 +8,10 @@ import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
-from docker.errors import APIError, DockerException
 from pydantic import BaseModel
-from requests import exceptions as requests_exceptions
 
-import docker
 from conf import settings
 from core.types import LogWorkspace
 from database.schemas import (
@@ -36,13 +33,10 @@ from tools.models import (
     SnapshotWorkspace,
 )
 
+from .docker_log_gateway import DockerLogGateway, DockerLogGatewayError, DockerLogGatewayProtocol
 from .log_snapshots import LogSnapshotService
 from .session_ids import SESSION_ID_MAX_LENGTH, generate_session_id
 
-if TYPE_CHECKING:
-    from docker.client import DockerClient  # type: ignore[import-not-found]
-
-DOCKER_LOG_TIMEOUT_SECONDS = 15
 _DOCKER_DURATION_PATTERN = re.compile(r"(?P<value>\d+)(?P<unit>[smhd])")
 _RAW_NGINX_TIMESTAMP_PATTERN = re.compile(r"\[(?P<timestamp>\d{2}/[A-Za-z]{3}/\d{4}:[^\]]+)\]")
 _FAIL2BAN_TIMESTAMP_PATTERN = re.compile(
@@ -130,6 +124,7 @@ class LogCollectionService:
         collect_logs_db_service: CollectLogsDBService | None = None,
         collect_logs_source_db_service: CollectLogsSourceDBService | None = None,
         agent_session_db_service: AgentSessionDBService | None = None,
+        docker_log_gateway: DockerLogGatewayProtocol | None = None,
     ) -> None:
         self.snapshot_service = LogSnapshotService()
         self.collect_logs_db_service = collect_logs_db_service or CollectLogsDBService()
@@ -137,6 +132,7 @@ class LogCollectionService:
             collect_logs_source_db_service or CollectLogsSourceDBService()
         )
         self.agent_session_db_service = agent_session_db_service or AgentSessionDBService()
+        self.docker_log_gateway = docker_log_gateway
 
     @staticmethod
     def normalize_params(
@@ -913,8 +909,8 @@ class LogCollectionService:
             byte_count=byte_count,
         )
 
-    @staticmethod
     def _collect_docker_source(
+        self,
         definition: SourceDefinition,
         output_file: Path,
         time_filters: DockerTimeFilters,
@@ -927,22 +923,19 @@ class LogCollectionService:
         if time_filters.until is not None:
             logs_kwargs["until"] = time_filters.until
 
+        stream_target = self._resolve_docker_log_container(definition)
+        if isinstance(stream_target, CollectSourceError):
+            return stream_target
+        docker_log_gateway = self._get_docker_log_gateway()
+
         try:
-            client: DockerClient = docker.from_env(  # type: ignore[attr-defined]
-                timeout=DOCKER_LOG_TIMEOUT_SECONDS
-            )
-            container = client.containers.get(definition.target)
             byte_count = 0
             newline_count = 0
             trailing_byte: bytes = b""
             with output_file.open("wb") as handle:
-                for chunk in container.logs(
-                    follow=False,
-                    timestamps=True,
-                    stdout=True,
-                    stderr=True,
-                    stream=True,
-                    **logs_kwargs,
+                for chunk in docker_log_gateway.stream_logs(
+                    container_name=stream_target,
+                    logs_kwargs=logs_kwargs,
                 ):
                     handle.write(chunk)
                     byte_count += len(chunk)
@@ -956,54 +949,16 @@ class LogCollectionService:
                 line_count = newline_count
             else:
                 line_count = newline_count + 1
-        except APIError as error:
-            error_output = str(error).strip() or "Unknown docker error."
-            return CollectSourceError(
-                source_key=definition.source_key,
-                source_type=definition.source_type,
-                target=definition.target,
-                description=definition.description,
-                stream=definition.stream,
-                parser_type=definition.parser_type,
-                normalization_profile=definition.normalization_profile,
-                default_noise_profile=definition.default_noise_profile,
-                error=error_output,
-                retry_tips=[
-                    "Verify the container name in the manifest or retry with a different source."
-                ],
-            )
-        except requests_exceptions.Timeout:
-            error_message = f"Timed out collecting docker logs for {definition.target}."
-            error_message += (
-                " Retry with a narrower since/until window to limit the requested log output."
-            )
-            return CollectSourceError(
-                source_key=definition.source_key,
-                source_type=definition.source_type,
-                target=definition.target,
-                description=definition.description,
-                stream=definition.stream,
-                parser_type=definition.parser_type,
-                normalization_profile=definition.normalization_profile,
-                default_noise_profile=definition.default_noise_profile,
-                error=error_message,
-                retry_tips=[
-                    "Retry with a narrower since/until window to keep docker log output bounded."
-                ],
-            )
-        except DockerException:
-            return CollectSourceError(
-                source_key=definition.source_key,
-                source_type=definition.source_type,
-                target=definition.target,
-                description=definition.description,
-                stream=definition.stream,
-                parser_type=definition.parser_type,
-                normalization_profile=definition.normalization_profile,
-                default_noise_profile=definition.default_noise_profile,
-                error="Docker Engine API is not available in the current runtime.",
-                retry_tips=["Retry in a runtime where the Docker socket is mounted and reachable."],
-            )
+        except DockerLogGatewayError as error:
+            if error.error_code == "docker_log_timeout":
+                error_message = error.message
+                error_message += (
+                    " Retry with a narrower since/until window to limit the requested log output."
+                )
+                return self._build_docker_timeout_error(definition, error_message=error_message)
+            if error.error_code == "docker_engine_unavailable":
+                return self._build_docker_unavailable_error(definition)
+            return self._build_docker_source_error(definition, error=error.message)
         return LogSnapshotFilePayload(
             source_key=definition.source_key,
             source_type=definition.source_type,
@@ -1017,6 +972,115 @@ class LogCollectionService:
             output_file=persisted_output_file,
             line_count=line_count,
             byte_count=byte_count,
+        )
+
+    def _resolve_docker_log_container(
+        self,
+        definition: SourceDefinition,
+    ) -> str | CollectSourceError:
+        """Resolve the concrete Docker container name used for one docker log source."""
+
+        try:
+            docker_log_gateway = self._get_docker_log_gateway()
+            if definition.compose_project and definition.compose_service:
+                resolved_container = docker_log_gateway.resolve_container_by_project_service(
+                    project_name=definition.compose_project,
+                    service_name=definition.compose_service,
+                )
+                if resolved_container is None:
+                    return self._build_docker_source_error(
+                        definition,
+                        error=(
+                            "No running docker container found for Compose project "
+                            f"{definition.compose_project!r} service "
+                            f"{definition.compose_service!r}."
+                        ),
+                    )
+                return resolved_container.name
+
+            resolved_container = docker_log_gateway.resolve_container_by_name(definition.target)
+            if resolved_container is None:
+                return self._build_docker_source_error(
+                    definition,
+                    error=(
+                        f"Configured container {definition.target!r} is not available "
+                        "in the current runtime."
+                    ),
+                )
+            return resolved_container.name
+        except DockerLogGatewayError as error:
+            if error.error_code == "docker_engine_unavailable":
+                return self._build_docker_unavailable_error(definition)
+            return self._build_docker_source_error(definition, error=error.message)
+
+    def _get_docker_log_gateway(self) -> DockerLogGatewayProtocol:
+        """Return the configured Docker log gateway, creating the SDK gateway lazily."""
+
+        if self.docker_log_gateway is None:
+            self.docker_log_gateway = DockerLogGateway.from_env()
+        return self.docker_log_gateway
+
+    @staticmethod
+    def _build_docker_source_error(
+        definition: SourceDefinition,
+        *,
+        error: str,
+    ) -> CollectSourceError:
+        """Return a source-level Docker collection error with stable retry tips."""
+
+        return CollectSourceError(
+            source_key=definition.source_key,
+            source_type=definition.source_type,
+            target=definition.target,
+            description=definition.description,
+            stream=definition.stream,
+            parser_type=definition.parser_type,
+            normalization_profile=definition.normalization_profile,
+            default_noise_profile=definition.default_noise_profile,
+            error=error,
+            retry_tips=[
+                "Verify the container name in the manifest or retry with a different source."
+            ],
+        )
+
+    @staticmethod
+    def _build_docker_timeout_error(
+        definition: SourceDefinition,
+        *,
+        error_message: str,
+    ) -> CollectSourceError:
+        """Return a source-level Docker timeout error."""
+
+        return CollectSourceError(
+            source_key=definition.source_key,
+            source_type=definition.source_type,
+            target=definition.target,
+            description=definition.description,
+            stream=definition.stream,
+            parser_type=definition.parser_type,
+            normalization_profile=definition.normalization_profile,
+            default_noise_profile=definition.default_noise_profile,
+            error=error_message,
+            retry_tips=[
+                "Retry with a narrower since/until window to keep docker log output bounded."
+            ],
+        )
+
+    @staticmethod
+    def _build_docker_unavailable_error(definition: SourceDefinition) -> CollectSourceError:
+        """Return a source-level Docker Engine unavailable error."""
+
+        return CollectSourceError(
+            source_key=definition.source_key,
+            source_type=definition.source_type,
+            target=definition.target,
+            description=definition.description,
+            stream=definition.stream,
+            parser_type=definition.parser_type,
+            normalization_profile=definition.normalization_profile,
+            default_noise_profile=definition.default_noise_profile,
+            error="Docker Engine API is not available in the current runtime.",
+            retry_tips=["Retry in a runtime where the Docker socket is mounted and reachable."],
         )
 
     @staticmethod

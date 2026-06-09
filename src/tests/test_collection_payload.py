@@ -6,23 +6,20 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from docker.errors import DockerException
 from fastmcp.server.auth import AccessToken
-from pytest_mock import MockerFixture
-from requests import exceptions as requests_exceptions
 
 from conf import settings
 from core.types import LogWorkspace
 from exception import InvalidTimeFilterError
 from manifests.loader import list_project_manifests, load_project_manifest
 from manifests.models import SourceDefinition
+from services.docker_log_gateway import DockerLogGatewayError, ResolvedDockerContainer
 from services.log_collection import CollectSourceError, DockerTimeFilters, LogCollectionService
 from services.project_authorization import ProjectAuthorizationError, ProjectAuthorizationService
 from services.project_manifest import ProjectManifestService
 from tests.conftest import (
     TEST_FILE_SOURCE_ROOT,
     TEST_MANIFESTS_DIR,
-    FakeDockerClient,
     copy_manifest_and_log_fixtures,
     override_settings,
     runtime_test_manifest,
@@ -33,6 +30,46 @@ from tools.models import SnapshotWorkspace
 SESSION_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+){2,}-[a-f0-9]{4}$")
 SESSION_ID = "gentle-river-finds-a8f2"
 SECOND_SESSION_ID = "quiet-field-opens-b1c2"
+
+
+class FakeDockerLogGateway:
+    def __init__(self) -> None:
+        self.resolved_by_name: dict[str, ResolvedDockerContainer | None] = {}
+        self.resolved_by_project_service: dict[tuple[str, str], ResolvedDockerContainer | None] = {}
+        self.name_calls: list[str] = []
+        self.project_service_calls: list[tuple[str, str]] = []
+        self.stream_calls: list[tuple[str, dict[str, int | str | datetime]]] = []
+        self.stream_exception: DockerLogGatewayError | None = None
+        self.resolve_exception: DockerLogGatewayError | None = None
+
+    def resolve_container_by_name(self, container_name: str) -> ResolvedDockerContainer | None:
+        if self.resolve_exception is not None:
+            raise self.resolve_exception
+        self.name_calls.append(container_name)
+        return self.resolved_by_name.get(container_name)
+
+    def resolve_container_by_project_service(
+        self,
+        *,
+        project_name: str,
+        service_name: str,
+    ) -> ResolvedDockerContainer | None:
+        if self.resolve_exception is not None:
+            raise self.resolve_exception
+        self.project_service_calls.append((project_name, service_name))
+        return self.resolved_by_project_service.get((project_name, service_name))
+
+    def stream_logs(
+        self,
+        *,
+        container_name: str,
+        logs_kwargs: dict[str, int | str | datetime],
+    ):
+        if self.stream_exception is not None:
+            raise self.stream_exception
+        self.stream_calls.append((container_name, dict(logs_kwargs)))
+        yield b"log line 1\n"
+        yield b"log line 2\n"
 
 
 async def build_collect_logs(
@@ -422,8 +459,6 @@ async def test_build_collect_logs_persists_large_file_without_inline_logs(
 
 
 def test_collect_source_reports_docker_timeout_with_time_window_tip(
-    fake_docker_client: FakeDockerClient,
-    mocker: MockerFixture,
     tmp_path: Path,
 ) -> None:
     definition = SourceDefinition(
@@ -438,18 +473,20 @@ def test_collect_source_reports_docker_timeout_with_time_window_tip(
         default_noise_profile="noise",
         stream="stdout",
     )
-    fake_docker_client.logs_exception = requests_exceptions.Timeout()
-
-    mocker.patch(
-        "services.log_collection.docker.from_env",
-        return_value=fake_docker_client,
+    gateway = FakeDockerLogGateway()
+    gateway.resolved_by_name["backend-container"] = ResolvedDockerContainer(
+        name="backend-container",
+        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
+    )
+    gateway.stream_exception = DockerLogGatewayError(
+        message="Timed out collecting docker logs for backend-container.",
+        error_code="docker_log_timeout",
     )
 
-    result = collect_source(
+    result = LogCollectionService(docker_log_gateway=gateway).collect_source(
         definition,
         output_file=tmp_path / "backend-timeout.log",
-        since=None,
-        until=None,
+        time_filters=DockerTimeFilters(since=None, until=None),
     )
 
     assert isinstance(result, CollectSourceError)
@@ -460,8 +497,6 @@ def test_collect_source_reports_docker_timeout_with_time_window_tip(
 
 
 def test_collect_source_uses_docker_sdk_filters(
-    fake_docker_client: FakeDockerClient,
-    mocker: MockerFixture,
     tmp_path: Path,
 ) -> None:
     definition = SourceDefinition(
@@ -476,17 +511,20 @@ def test_collect_source_uses_docker_sdk_filters(
         default_noise_profile="noise",
         stream="stdout",
     )
-
-    mocker.patch(
-        "services.log_collection.docker.from_env",
-        return_value=fake_docker_client,
+    gateway = FakeDockerLogGateway()
+    gateway.resolved_by_name["backend-container"] = ResolvedDockerContainer(
+        name="backend-container",
+        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
     )
 
-    result = collect_source(
+    result = LogCollectionService(docker_log_gateway=gateway).collect_source(
         definition,
         output_file=tmp_path / "backend-filters.log",
-        since="30m",
-        until="10m",
+        time_filters=LogCollectionService.validate_and_normalize_time_filters(
+            sources=[definition],
+            since="30m",
+            until="10m",
+        ),
     )
 
     assert result["output_file"] == str(tmp_path / "backend-filters.log")
@@ -495,10 +533,8 @@ def test_collect_source_uses_docker_sdk_filters(
     assert (tmp_path / "backend-filters.log").read_text(encoding="utf-8") == (
         "log line 1\nlog line 2\n"
     )
-    captured = fake_docker_client.captured_logs_kwargs
-    assert captured["timestamps"] is True
-    assert captured["stdout"] is True
-    assert captured["stderr"] is True
+    assert len(gateway.stream_calls) == 1
+    captured = gateway.stream_calls[0][1]
     captured_since = captured["since"]
     captured_until = captured["until"]
     assert isinstance(captured_since, datetime)
@@ -513,8 +549,6 @@ def test_normalize_docker_time_filter_raises_specific_error() -> None:
 
 
 def test_collect_source_streams_persisted_docker_logs_without_following(
-    fake_docker_client: FakeDockerClient,
-    mocker: MockerFixture,
     tmp_path: Path,
 ) -> None:
     definition = SourceDefinition(
@@ -529,14 +563,14 @@ def test_collect_source_streams_persisted_docker_logs_without_following(
         default_noise_profile="noise",
         stream="stdout",
     )
-
-    mocker.patch(
-        "services.log_collection.docker.from_env",
-        return_value=fake_docker_client,
+    gateway = FakeDockerLogGateway()
+    gateway.resolved_by_name["backend-container"] = ResolvedDockerContainer(
+        name="backend-container",
+        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
     )
 
     output_file = tmp_path / "backend.log"
-    result = LogCollectionService().collect_source(
+    result = LogCollectionService(docker_log_gateway=gateway).collect_source(
         definition,
         output_file=output_file,
         time_filters=DockerTimeFilters(
@@ -549,9 +583,108 @@ def test_collect_source_streams_persisted_docker_logs_without_following(
     assert result["line_count"] == 2
     assert result["byte_count"] == 22
     assert output_file.read_text(encoding="utf-8") == "log line 1\nlog line 2\n"
-    captured = fake_docker_client.captured_logs_kwargs
-    assert captured["stream"] is True
-    assert captured["follow"] is False
+    assert len(gateway.stream_calls) == 1
+    assert gateway.stream_calls[0][0] == "backend-container"
+
+
+def test_collect_source_uses_injected_docker_log_gateway_for_explicit_target(
+    tmp_path: Path,
+) -> None:
+    gateway = FakeDockerLogGateway()
+    gateway.resolved_by_name["backend-container"] = ResolvedDockerContainer(
+        name="backend-container",
+        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
+    )
+    definition = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="backend-container",
+        description="Backend logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="backend",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream="stdout",
+    )
+
+    output_file = tmp_path / "backend.log"
+    result = LogCollectionService(docker_log_gateway=gateway).collect_source(
+        definition,
+        output_file=output_file,
+        time_filters=DockerTimeFilters(since=None, until=None),
+    )
+
+    assert result["output_file"] == str(output_file)
+    assert result["line_count"] == 2
+    assert output_file.read_text(encoding="utf-8") == "log line 1\nlog line 2\n"
+    assert gateway.name_calls == ["backend-container"]
+    assert gateway.project_service_calls == []
+    assert gateway.stream_calls == [("backend-container", {})]
+
+
+def test_collect_source_resolves_compose_project_service_target(
+    tmp_path: Path,
+) -> None:
+    gateway = FakeDockerLogGateway()
+    gateway.resolved_by_project_service[("portfolio-stage", "be")] = ResolvedDockerContainer(
+        name="portfolio-stage-be-1",
+        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
+    )
+    definition = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="configured-container",
+        compose_project="portfolio-stage",
+        compose_service="be",
+        description="Backend logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="backend",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream="stdout",
+    )
+
+    result = LogCollectionService(docker_log_gateway=gateway).collect_source(
+        definition,
+        output_file=tmp_path / "backend.log",
+        time_filters=DockerTimeFilters(since=None, until=None),
+    )
+
+    assert result["target"] == "configured-container"
+    assert result["line_count"] == 2
+    assert gateway.name_calls == []
+    assert gateway.project_service_calls == [("portfolio-stage", "be")]
+    assert gateway.stream_calls == [("portfolio-stage-be-1", {})]
+
+
+def test_resolve_docker_log_container_returns_stream_target_name() -> None:
+    gateway = FakeDockerLogGateway()
+    gateway.resolved_by_project_service[("portfolio-stage", "be")] = ResolvedDockerContainer(
+        name="portfolio-stage-be-1",
+        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
+    )
+    definition = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="configured-container",
+        compose_project="portfolio-stage",
+        compose_service="be",
+        description="Backend logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="backend",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream="stdout",
+    )
+
+    service = LogCollectionService(docker_log_gateway=gateway)
+
+    resolved_target = service._resolve_docker_log_container(definition)
+
+    assert resolved_target == "portfolio-stage-be-1"
 
 
 def test_collect_source_streams_persisted_file_logs_to_output_file(tmp_path) -> None:
@@ -681,7 +814,6 @@ def test_collect_source_rejects_relative_file_target(tmp_path: Path) -> None:
 
 
 def test_collect_source_reports_docker_api_unavailable(
-    mocker: MockerFixture,
     tmp_path: Path,
 ) -> None:
     definition = SourceDefinition(
@@ -696,17 +828,16 @@ def test_collect_source_reports_docker_api_unavailable(
         default_noise_profile="noise",
         stream="stdout",
     )
+    gateway = FakeDockerLogGateway()
+    gateway.resolve_exception = DockerLogGatewayError(
+        message="Docker Engine API is not available in the current runtime.",
+        error_code="docker_engine_unavailable",
+    )
 
-    def fake_from_env(timeout: int) -> object:
-        raise DockerException("socket unavailable")
-
-    mocker.patch("services.log_collection.docker.from_env", side_effect=fake_from_env)
-
-    result = collect_source(
+    result = LogCollectionService(docker_log_gateway=gateway).collect_source(
         definition,
         output_file=tmp_path / "backend-unavailable.log",
-        since=None,
-        until=None,
+        time_filters=DockerTimeFilters(since=None, until=None),
     )
 
     assert isinstance(result, CollectSourceError)
