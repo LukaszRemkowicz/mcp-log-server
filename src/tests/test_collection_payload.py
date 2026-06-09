@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import UTC, datetime, timedelta
@@ -198,6 +199,47 @@ async def test_build_collect_logs_collects_requested_file_source(
     assert not (latest_dir / "snapshot_metadata.json").exists()
     assert not (logs_dir / "workflow" / "landingpage" / "workflow_inventory.json").exists()
     assert archive_dir.exists()
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("db")
+async def test_build_collect_logs_persists_collection_diagnostics_for_failed_sources(
+    tmp_path: Path,
+    valid_access_token: AccessToken,
+) -> None:
+    fixture_root = copy_manifest_and_log_fixtures(tmp_path)
+    manifest_path = fixture_root / "manifests" / "landingpage.json"
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    app_file_source = next(
+        source for source in manifest_payload["sources"] if source["source_key"] == "app_file"
+    )
+    app_file_source["target"] = str(fixture_root / "logs" / "landingpage" / "missing.log")
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+    logs_dir = tmp_path / "collected-logs"
+
+    with override_settings(LOGS_DIR=logs_dir):
+        payload = await build_collect_logs(
+            valid_access_token,
+            requested_project_name="landingpage",
+            requested_source_keys=["app_file"],
+            workspace=LogWorkspace.WORKFLOW,
+            manifests_dir=fixture_root / "manifests",
+            since=None,
+            until=None,
+        )
+
+    sources_by_key = {source.source_key: source for source in payload.sources}
+    assert sources_by_key["app_file"].status == "unavailable"
+    diagnostics = sources_by_key["__collection_diagnostics"]
+    assert diagnostics.status == "collected"
+    assert diagnostics.output_file == "workflow/landingpage/latest/collection_diagnostics.json"
+    diagnostics_path = logs_dir / diagnostics.output_file
+    diagnostics_payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert diagnostics_payload["artifact_type"] == "collection_diagnostics"
+    assert diagnostics_payload["failed_source_count"] == 1
+    assert diagnostics_payload["failed_sources"][0]["source_key"] == "app_file"
+    assert diagnostics_payload["failed_sources"][0]["status"] == "unavailable"
+    assert "File source not found" in diagnostics_payload["failed_sources"][0]["error"]
 
 
 @pytest.mark.anyio

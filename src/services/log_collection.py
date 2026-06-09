@@ -27,6 +27,11 @@ from database.services.collect_logs import CollectLogsSourceService as CollectLo
 from exception import InvalidTimeFilterError, MissingSessionIdError
 from manifests.models import Manifest, SourceDefinition
 from tools.models import CollectedSourcePayload, ProjectCollectLogsPayload, SnapshotWorkspace
+from utils.log_snapshots import (
+    COLLECTION_DIAGNOSTICS_DESCRIPTION,
+    COLLECTION_DIAGNOSTICS_FILE_NAME,
+    COLLECTION_DIAGNOSTICS_SOURCE_KEY,
+)
 
 from .docker_log_gateway import DockerLogGateway, DockerLogGatewayError, DockerLogGatewayProtocol
 from .log_snapshots import LogSnapshotService
@@ -431,7 +436,64 @@ class LogCollectionService:
                     time_filters=time_filters,
                 )
             )
+        diagnostics_result = self._build_collection_diagnostics_result(
+            collected_results,
+            snapshot_dir=snapshot_dir,
+        )
+        if diagnostics_result is not None:
+            collected_results.append(diagnostics_result)
         return collected_results
+
+    @staticmethod
+    def _build_collection_diagnostics_result(
+        collected_results: list[SourceCollectionResult],
+        *,
+        snapshot_dir: Path,
+    ) -> SourceCollectionResult | None:
+        """Persist a sidecar diagnostics artifact for failed source collections."""
+
+        failed_results = [result for result in collected_results if result.status == "unavailable"]
+        if not failed_results:
+            return None
+
+        output_file = snapshot_dir / COLLECTION_DIAGNOSTICS_FILE_NAME
+        diagnostics_payload = {
+            "artifact_type": "collection_diagnostics",
+            "failed_source_count": len(failed_results),
+            "failed_sources": [
+                {
+                    "source_key": result.source_key,
+                    "source_type": result.source_type,
+                    "target": result.target,
+                    "description": result.description,
+                    "stream": result.stream,
+                    "status": result.status,
+                    "error": result.error,
+                    "retry_tips": result.retry_tips,
+                }
+                for result in failed_results
+            ],
+        }
+        content = json.dumps(diagnostics_payload, indent=2, sort_keys=True) + "\n"
+        output_file.write_text(content, encoding="utf-8")
+        byte_count = len(content.encode("utf-8"))
+        line_count = content.count("\n")
+        return SourceCollectionResult(
+            source_key=COLLECTION_DIAGNOSTICS_SOURCE_KEY,
+            source_type="file",
+            target=COLLECTION_DIAGNOSTICS_FILE_NAME,
+            description=COLLECTION_DIAGNOSTICS_DESCRIPTION,
+            stream=None,
+            parser_type="collection_diagnostics",
+            normalization_profile=None,
+            default_noise_profile=None,
+            status="collected",
+            output_file=str(output_file),
+            line_count=line_count,
+            byte_count=byte_count,
+            error=None,
+            retry_tips=[],
+        )
 
     @staticmethod
     def _build_feedback(

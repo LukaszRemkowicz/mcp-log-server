@@ -16,6 +16,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+COLLECTION_DIAGNOSTICS_SOURCE_KEY = "__collection_diagnostics"
+COLLECTION_DIAGNOSTICS_FILE_NAME = "collection_diagnostics.json"
+COLLECTION_DIAGNOSTICS_DESCRIPTION = "Deterministic collection runtime diagnostics."
+
+
+def is_collection_diagnostics_source_key(source_key: str) -> bool:
+    """Return whether a source key points at the collection diagnostics artifact."""
+
+    return source_key == COLLECTION_DIAGNOSTICS_SOURCE_KEY
+
 
 def resolve_workflow_snapshot_dir(project_output_dir: Path, archive_name: str | None) -> Path:
     """Resolve a workflow snapshot directory from latest/archive request inputs.

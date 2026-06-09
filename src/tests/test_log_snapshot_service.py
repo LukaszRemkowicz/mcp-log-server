@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 import pytest
 
@@ -51,15 +51,18 @@ def build_collect_logs_source(
     source_key: str,
     file_name: str | None,
     storage_root: Path,
+    source_type: Literal["docker", "file"] = "docker",
+    description: str = "Backend logs.",
+    target: str = "backend-container",
 ) -> CollectLogsSourceOut:
     """Create one collected source contract for snapshot-service tests."""
 
     return CollectLogsSourceOut(
         id=source_id,
         source_key=source_key,
-        source_type="docker",
-        target="backend-container",
-        description="Backend logs.",
+        source_type=source_type,
+        target=target,
+        description=description,
         stream="stdout",
         parser_type="python_json",
         normalization_profile="backend_app",
@@ -360,6 +363,71 @@ def test_grep_snapshot_returns_matches_from_db_source_files(tmp_path) -> None:
         "workflow/landingpage/latest/nginx.log",
     ]
     assert [match.line_number for match in matches] == [2, 1]
+
+
+def test_grep_snapshot_skips_collection_diagnostics_by_default(tmp_path) -> None:
+    service = LogSnapshotService()
+    backend_file = tmp_path / "workflow" / "landingpage" / "latest" / "backend.log"
+    diagnostics_file = (
+        tmp_path / "workflow" / "landingpage" / "latest" / "collection_diagnostics.json"
+    )
+    backend_file.parent.mkdir(parents=True)
+    backend_file.write_text("INFO boot\nERROR backend failed\n", encoding="utf-8")
+    diagnostics_file.write_text('{"error": "ERROR docker socket unavailable"}\n', encoding="utf-8")
+    sources = [
+        build_collect_logs_source(
+            source_id=1,
+            source_key="backend",
+            file_name="workflow/landingpage/latest/backend.log",
+            storage_root=tmp_path,
+        ),
+        build_collect_logs_source(
+            source_id=2,
+            source_key="__collection_diagnostics",
+            file_name="workflow/landingpage/latest/collection_diagnostics.json",
+            storage_root=tmp_path,
+            source_type="file",
+            description="Collection diagnostics.",
+            target="collection_diagnostics.json",
+        ),
+    ]
+    metadata = LogSnapshotMetadata(
+        project_name="landingpage",
+        workspace=LogWorkspace.WORKFLOW,
+        collected_at="2026-05-06T10:00:00+00:00",
+        files=[service.source_to_file_payload(source) for source in sources],
+    )
+    context = SnapshotContext(
+        project_name="landingpage",
+        caller_id=1,
+        snapshot_dir=backend_file.parent,
+        metadata=metadata,
+        sources=sources,
+    )
+
+    default_result = service.grep_snapshot(
+        context,
+        grep="ERROR",
+        source_keys=None,
+        match_offset=0,
+        max_matches=10,
+    )
+    explicit_result = service.grep_snapshot(
+        context,
+        grep="ERROR",
+        source_keys=["__collection_diagnostics"],
+        match_offset=0,
+        max_matches=10,
+    )
+
+    assert not isinstance(default_result, SnapshotGrepError)
+    default_matches, default_total_match_count = default_result
+    assert default_total_match_count == 1
+    assert [match.source_key for match in default_matches] == ["backend"]
+    assert not isinstance(explicit_result, SnapshotGrepError)
+    explicit_matches, explicit_total_match_count = explicit_result
+    assert explicit_total_match_count == 1
+    assert [match.source_key for match in explicit_matches] == ["__collection_diagnostics"]
 
 
 def test_grep_snapshot_supports_extended_regex_or_patterns(tmp_path) -> None:
