@@ -232,13 +232,19 @@ This is a development-ready JWT flow, not a final Keycloak production rollout.
 
 ## Current Manifest Model
 
-The current bundled sample manifest is:
+Project manifests are runtime inventory/config for collector-style MCP tools.
+They are not prompts and not workflow payloads.
 
-- `src/manifests/projects/landingpage.json`
+This repository may use `src/manifests/projects` as a local development
+manifest directory, but that directory is not the production source of truth.
+Production manifests should come from the operational repository that owns
+them, such as the new `devops/` project, and be uploaded or updated into the
+MCP database with the manifest commands.
 
-This is runtime project inventory/config for future collector-style tools.
-
-It is not a prompt and not a workflow payload.
+File source targets must be absolute paths as seen by the MCP container. In
+production Compose, host `/var/log` is mounted at `/host/var/log`, and host
+`/etc/nginx/logs` is mounted at `/host/etc/nginx/logs`. Manifest targets are
+literal paths; MCP does not expand dated filename templates.
 
 ## Current Docker Paths
 

@@ -180,6 +180,21 @@ Production deploys should run through Doppler and the release scripts. The app
 fails fast when required production database/JWT secrets are missing or known
 local placeholders are used.
 
+Project manifests are data, not MCP application code. This repository may use
+`src/manifests/projects` for local development examples, but production
+manifests should come from the operational project that owns them, such as the
+new `devops/` project. Pass that manifest directory to the upload/update
+commands with `--path`.
+
+In production, file source paths must be written as paths visible inside the
+MCP container. `docker-compose.prod.yml` mounts host `/var/log` as
+`/host/var/log` and host `/etc/nginx/logs` as `/host/etc/nginx/logs`, so a host
+log like `/var/log/app/app.jsonl` should be configured as
+`/host/var/log/app/app.jsonl` in the manifest. Manifest targets are literal
+absolute paths; date templates are not expanded. For dated log files, use a
+stable current path, a host-side symlink/logrotate convention, or update the
+manifest from the owning ops repository.
+
 The local and production app containers may mount `/var/run/docker.sock` so MCP
 collection and inspection tools can read approved Docker metadata and logs. The
 app process still runs as the non-root `app` user. On Linux hosts where the

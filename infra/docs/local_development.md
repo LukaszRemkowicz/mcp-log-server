@@ -228,6 +228,11 @@ uv run commands upload-project-manifest --path src/manifests/projects landingpag
 uv run commands upload-project-manifest --path src/manifests/projects --all
 ```
 
+`src/manifests/projects` is a convenient local development location, not the
+production source of truth. Production project manifests should be supplied by
+the operational repository that owns them, such as the new `devops/` project,
+and passed to these commands with `--path`.
+
 Upload is create-only. Existing project manifests are reported and left
 untouched. To update an existing manifest, run:
 
@@ -269,3 +274,10 @@ Runtime MCP tools read project manifests from the database. Manifest JSON files
 are source input for the upload/update commands, not runtime app settings and
 not the lookup path for `collect_logs`, `list_projects`, or manifest-backed
 analysis.
+
+Manifest file source targets must be absolute paths as seen from inside the MCP
+container. In production, `docker-compose.prod.yml` mounts host `/var/log` at
+`/host/var/log` and host `/etc/nginx/logs` at `/host/etc/nginx/logs`. For
+example, host `/var/log/app/app.jsonl` should be written in the manifest as
+`/host/var/log/app/app.jsonl`. Targets are literal paths; dated filename
+templates are not expanded.

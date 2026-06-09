@@ -186,9 +186,17 @@ Manifests and logs are intentionally separate:
 
 - manifest JSON paths are passed to `uv run commands upload-project-manifest`
   and `uv run commands update-project-manifest` with `--path`
+- this repository may use `src/manifests/projects` for local manifest examples,
+  but production manifests should be provided by the operational repository
+  that owns them, such as `devops/`
 - runtime MCP tools read persisted manifest rows from the database
 - file-backed manifest source targets must be absolute paths, so each source
   declares exactly where its log file lives
+- in production Compose, host `/var/log` is visible inside MCP as
+  `/host/var/log`, and host `/etc/nginx/logs` is visible as
+  `/host/etc/nginx/logs`
+- manifest file targets are literal paths; dated filename templates are not
+  expanded by MCP
 
 - `MCP_HOST`
   Host address the FastMCP service binds inside the running process.

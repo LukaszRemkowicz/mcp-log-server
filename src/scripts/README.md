@@ -78,6 +78,10 @@ uv run commands update-project-manifest --help
 These commands may run the update inside the Docker Compose app service. That
 keeps manifest writes pointed at the same runtime environment as the MCP server.
 
+`src/manifests/projects` is useful for local development examples. Production
+manifests should come from the operational project that owns them, such as the
+new `devops/` project, and be passed with `--path`.
+
 `upload-project-manifest` is create-only. Existing manifest rows are left
 unchanged. Use `update-project-manifest` for an existing project, or `--all`
 to update every manifest JSON file from the selected path:
@@ -91,6 +95,12 @@ uv run commands update-project-manifest \
   --path src/manifests/projects \
   --all
 ```
+
+For file sources, write the path as the MCP container sees it. Production
+Compose mounts host `/var/log` at `/host/var/log` and host `/etc/nginx/logs` at
+`/host/etc/nginx/logs`. Paths are literal, so use a stable current filename or
+update the manifest from the owning ops repository when a dated filename
+changes.
 
 The outer command finds the running Compose app service with:
 
