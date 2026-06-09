@@ -539,6 +539,66 @@ def test_collect_source_reports_docker_timeout_with_time_window_tip(
     ]
 
 
+def test_collect_sources_keeps_file_source_when_docker_source_fails(
+    tmp_path: Path,
+) -> None:
+    source_file = tmp_path / "source.log"
+    source_file.write_text("file line 1\nfile line 2\n", encoding="utf-8")
+    file_definition = SourceDefinition(
+        source_key="app_file",
+        source_type="file",
+        target=str(source_file),
+        description="Application file logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream=None,
+    )
+    docker_definition = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="backend-container",
+        description="Backend logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="backend",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream="stdout",
+    )
+    gateway = FakeDockerLogGateway()
+    gateway.resolve_exception = DockerLogGatewayError(
+        message="Docker Engine API is not available in the current runtime.",
+        error_code="docker_engine_unavailable",
+    )
+    snapshot_dir = tmp_path / "snapshot"
+    snapshot_dir.mkdir()
+
+    results = LogCollectionService(docker_log_gateway=gateway).collect_sources(
+        sources=[file_definition, docker_definition],
+        snapshot_dir=snapshot_dir,
+        time_filters=DockerTimeFilters(since=None, until=None),
+    )
+
+    results_by_key = {result.source_key: result for result in results}
+    assert results_by_key["app_file"].status == "collected"
+    assert (snapshot_dir / "app_file.log").read_text(encoding="utf-8") == (
+        "file line 1\nfile line 2\n"
+    )
+    assert results_by_key["backend"].status == "unavailable"
+    assert results_by_key["backend"].error == (
+        "Docker Engine API is not available in the current runtime."
+    )
+    diagnostics = results_by_key["__collection_diagnostics"]
+    assert diagnostics.status == "collected"
+    assert diagnostics.output_file == str(snapshot_dir / "collection_diagnostics.json")
+    diagnostics_payload = json.loads((snapshot_dir / "collection_diagnostics.json").read_text())
+    assert diagnostics_payload["failed_source_count"] == 1
+    assert diagnostics_payload["failed_sources"][0]["source_key"] == "backend"
+
+
 def test_collect_source_uses_docker_sdk_filters(
     tmp_path: Path,
 ) -> None:
