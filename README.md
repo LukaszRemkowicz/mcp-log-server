@@ -56,6 +56,28 @@ documentation categories, not auth scopes.
 | Container inspection | `inspect_containers_health`, `inspect_container_detail`, `stat_container_path`, `read_container_file`, `list_container_directory` | Inspect approved manifest-bounded containers and paths without mutating container state. |
 | MCP service diagnostics | `get_mcp_service_status`, `get_mcp_health_check` | Check MCP server/runtime health during development and operations. |
 
+## Snapshot Storage And Cleanup
+
+`collect_logs` saves raw log snapshots under the configured `LOGS_DIR`. These
+files are the source of truth for later reads, searches, and analysis.
+
+Workflow snapshots are shared per project. Each project has one current
+`latest` snapshot. When a new workflow snapshot is collected, the previous
+`latest` snapshot moves into that project's archive.
+
+Archive cleanup runs the next time that same project is collected. Archives
+older than `WORKFLOW_ARCHIVE_RETENTION` are removed together with their database
+metadata, so snapshot tools do not point at files that no longer exist.
+
+Session snapshots are separate from workflow snapshots. They are kept under the
+session area in `LOGS_DIR` and old session folders are cleaned according to
+`LOG_SNAPSHOT_RETENTION` when new session snapshots are prepared.
+
+Filtered views, grouped errors, incident bundles, and proxy activity reports are
+derived responses built from those raw snapshots. Collection diagnostics are
+saved inside the same snapshot directory, so they follow the same cleanup
+behavior as the logs they describe.
+
 ## Layout
 
 ```text

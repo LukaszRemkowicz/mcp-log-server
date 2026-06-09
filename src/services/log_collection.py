@@ -27,6 +27,7 @@ from database.services.collect_logs import CollectLogsSourceService as CollectLo
 from exception import InvalidTimeFilterError, MissingSessionIdError
 from manifests.models import Manifest, SourceDefinition
 from tools.models import CollectedSourcePayload, ProjectCollectLogsPayload, SnapshotWorkspace
+from tools.utils import parse_snapshot_retention
 from utils.log_snapshots import (
     COLLECTION_DIAGNOSTICS_DESCRIPTION,
     COLLECTION_DIAGNOSTICS_FILE_NAME,
@@ -564,6 +565,7 @@ class LogCollectionService:
         """Archive previous latest and create the DB object that owns workflow snapshot_dir."""
 
         await self.archive_latest_for_project(project_name)
+        await self.prune_workflow_archives_for_project(project_name)
         return await self.collect_logs_db_service.create(
             CollectLogsCreate(
                 workspace=LogWorkspace.WORKFLOW,
@@ -646,6 +648,29 @@ class LogCollectionService:
             archive_name=archive_name,
             snapshot_dir=archive_snapshot_dir,
         )
+
+    async def prune_workflow_archives_for_project(self, project_name: str) -> None:
+        """Prune expired workflow archives together with their DB metadata."""
+
+        archive_root = self.snapshot_service.storage.workflow_archive_dir(project_name)
+        if not archive_root.exists():
+            return
+
+        cutoff = datetime.now(UTC) - parse_snapshot_retention(settings.WORKFLOW_ARCHIVE_RETENTION)
+        archived_rows = await self.collect_logs_db_service.list_workflow_archives(project_name)
+        rows_by_archive_name = {
+            row.archive_name: row for row in archived_rows if row.archive_name is not None
+        }
+        for archive_dir in archive_root.iterdir():
+            if not archive_dir.is_dir():
+                continue
+            archive_modified_at = datetime.fromtimestamp(archive_dir.stat().st_mtime, UTC)
+            if archive_modified_at >= cutoff:
+                continue
+            shutil.rmtree(archive_dir)
+            archived_row = rows_by_archive_name.get(archive_dir.name)
+            if archived_row is not None:
+                await self.collect_logs_db_service.delete(archived_row.id)
 
     @staticmethod
     def _archived_snapshot_dir(snapshot_dir: str, archive_name: str) -> str:

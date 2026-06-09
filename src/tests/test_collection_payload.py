@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -11,6 +12,7 @@ from fastmcp.server.auth import AccessToken
 
 from conf import settings
 from core.types import LogWorkspace
+from database.services.collect_logs import CollectLogsService as CollectLogsDBService
 from exception import InvalidTimeFilterError
 from manifests.loader import list_project_manifests, load_project_manifest
 from manifests.models import SourceDefinition
@@ -350,6 +352,65 @@ async def test_workflow_archive_files_are_tracked_without_inventory_json(
     assert (archived_snapshot / "app_file.log").read_text(encoding="utf-8") == (
         "first\nsecond\nthird\n"
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("db")
+async def test_workflow_archive_retention_prunes_file_and_db_metadata(
+    tmp_path: Path,
+    valid_access_token: AccessToken,
+) -> None:
+    fixture_root = copy_manifest_and_log_fixtures(tmp_path)
+    log_file = fixture_root / "logs" / "landingpage" / "app_file.log"
+    logs_dir = tmp_path / "collected-logs"
+
+    with override_settings(LOGS_DIR=logs_dir, WORKFLOW_ARCHIVE_RETENTION="1d"):
+        log_file.write_text("first\n", encoding="utf-8")
+        await build_collect_logs(
+            valid_access_token,
+            requested_project_name="landingpage",
+            requested_source_keys=["app_file"],
+            workspace=LogWorkspace.WORKFLOW,
+            manifests_dir=fixture_root / "manifests",
+            since=None,
+            until=None,
+        )
+        await asyncio.sleep(1.1)
+        log_file.write_text("second\n", encoding="utf-8")
+        await build_collect_logs(
+            valid_access_token,
+            requested_project_name="landingpage",
+            requested_source_keys=["app_file"],
+            workspace=LogWorkspace.WORKFLOW,
+            manifests_dir=fixture_root / "manifests",
+            since=None,
+            until=None,
+        )
+
+        archive_root = logs_dir / "workflow" / "landingpage" / "archive"
+        archived_snapshot = next(path for path in archive_root.iterdir() if path.is_dir())
+        archive_name = archived_snapshot.name
+        old_timestamp = (datetime.now(UTC) - timedelta(seconds=5)).timestamp()
+        os.utime(archived_snapshot, (old_timestamp, old_timestamp))
+
+    with override_settings(LOGS_DIR=logs_dir, WORKFLOW_ARCHIVE_RETENTION="1s"):
+        log_file.write_text("third\n", encoding="utf-8")
+        await build_collect_logs(
+            valid_access_token,
+            requested_project_name="landingpage",
+            requested_source_keys=["app_file"],
+            workspace=LogWorkspace.WORKFLOW,
+            manifests_dir=fixture_root / "manifests",
+            since=None,
+            until=None,
+        )
+
+    assert not archived_snapshot.exists()
+    archived_metadata = await CollectLogsDBService().get_archive_with_sources(
+        project_name="landingpage",
+        archive_name=archive_name,
+    )
+    assert archived_metadata is None
 
 
 @pytest.mark.anyio

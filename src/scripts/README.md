@@ -1,11 +1,13 @@
-# Typer Commands
+# Command-Line Helpers
 
-This directory contains the project Typer command app exposed through the
-`commands` entrypoint in `pyproject.toml`.
+This directory contains command-line helpers for local setup and maintenance.
+They are exposed through the `commands` entrypoint in `pyproject.toml`.
 
-Use it for local developer operations that belong to the MCP log server itself,
-not for MCP tool calls. MCP tools are served by FastMCP; Typer commands are
-host-side maintenance and setup helpers.
+Use these commands for project setup tasks such as generating development JWTs
+or uploading project manifests. They are not MCP tools. MCP tools are called
+through the FastMCP HTTP server.
+
+Run examples from the repository root unless a command says otherwise.
 
 ## Discovery
 
@@ -21,14 +23,15 @@ Show one command's arguments and defaults:
 uv run commands generate-dev-jwt --help
 ```
 
-Command implementations live under `src/scripts/commands/`. The root Typer app
-is `src/scripts/main.py`.
+Command implementations live under `src/scripts/commands/`. The root command
+app is `src/scripts/main.py`.
 
 ## Commands
 
 ### `generate-dev-jwt`
 
-Generate signed local development JWTs for MCP clients.
+Generate signed local development JWTs for MCP clients. These tokens are for
+local development and manual curl checks only.
 
 The command prints JSON containing:
 
@@ -60,7 +63,7 @@ path and does not print the tokens to the console. Parent directories are
 created automatically. Without `--output-file`, the JSON is printed to stdout.
 
 The JWTs are signed with the local development settings. Regenerate them when
-they expire, when scopes change, or when the expected identity claims change.
+they expire, when scopes change, or when identity claims change.
 
 ### Manifest Commands
 
@@ -72,8 +75,8 @@ uv run commands upload-project-manifest --help
 uv run commands update-project-manifest --help
 ```
 
-These commands may proxy work into the Docker Compose app service so they run
-against the same runtime environment as the MCP server.
+These commands may run the update inside the Docker Compose app service. That
+keeps manifest writes pointed at the same runtime environment as the MCP server.
 
 `upload-project-manifest` is create-only. Existing manifest rows are left
 unchanged. Use `update-project-manifest` for an existing project, or `--all`

@@ -1,6 +1,10 @@
 # Operational Scripts
 
-This directory contains operational scripts that stay outside MCP tool internals.
+This directory contains operational scripts for backups, restores, releases,
+deploys, and production log access. These scripts are for operators and
+maintainers; they are separate from MCP tools.
+
+Run examples from the repository root.
 
 Supported environments:
 

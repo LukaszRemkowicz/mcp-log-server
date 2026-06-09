@@ -571,18 +571,13 @@ class LogSnapshotService:
         This method:
 
         - resolves the project's workflow `latest` and `archive` directories
-        - applies archive retention cleanup
         - recreates an empty `latest` directory for direct writes
         """
 
         latest_output_dir: Path = Path(snapshot_dir)
         if not latest_output_dir.is_absolute():
             latest_output_dir = self.storage.path(latest_output_dir)
-        archive_dir: Path = self.storage.ensure_dir(latest_output_dir.parent / "archive")
-        cleanup_old_snapshot_dirs(
-            archive_dir,
-            retention=parse_snapshot_retention(settings.WORKFLOW_ARCHIVE_RETENTION),
-        )
+        self.storage.ensure_dir(latest_output_dir.parent / "archive")
         if latest_output_dir.exists():
             shutil.rmtree(latest_output_dir)
         latest_output_dir.mkdir(parents=True, exist_ok=True)
