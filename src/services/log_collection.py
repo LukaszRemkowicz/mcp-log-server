@@ -26,12 +26,7 @@ from database.services.collect_logs import CollectLogsService as CollectLogsDBSe
 from database.services.collect_logs import CollectLogsSourceService as CollectLogsSourceDBService
 from exception import InvalidTimeFilterError, MissingSessionIdError
 from manifests.models import Manifest, SourceDefinition
-from tools.models import (
-    CollectedSourcePayload,
-    LogSnapshotFilePayload,
-    ProjectCollectLogsPayload,
-    SnapshotWorkspace,
-)
+from tools.models import CollectedSourcePayload, ProjectCollectLogsPayload, SnapshotWorkspace
 
 from .docker_log_gateway import DockerLogGateway, DockerLogGatewayError, DockerLogGatewayProtocol
 from .log_snapshots import LogSnapshotService
@@ -78,12 +73,13 @@ class BuildLogsError(BaseModel):
     retry_tips: list[str]
 
 
-class CollectSourceError(BaseModel):
-    """Collection failure for one manifest source inside an otherwise valid run.
+class SourceCollectionResult(BaseModel):
+    """Internal per-source collection result before DB persistence.
 
-    A source failure does not stop the whole project artifact. Successful
-    sources are still persisted, while this model is converted into an
-    `unavailable` source entry in the final response.
+    Collection adapters return this shape for both success and unavailable
+    cases. Public MCP payloads and DB models are built later from this internal
+    boundary instead of inferring source state from unrelated success/error
+    model classes.
     """
 
     source_key: str
@@ -94,13 +90,72 @@ class CollectSourceError(BaseModel):
     parser_type: str | None
     normalization_profile: str | None
     default_noise_profile: str | None
-    error: str
+    status: Literal["collected", "unavailable"]
+    output_file: str | None = None
+    line_count: int = 0
+    byte_count: int = 0
+    error: str | None = None
     retry_tips: list[str]
 
     def __getitem__(self, key: str) -> object:
         """Allow concise dict-style assertions while keeping a typed model contract."""
 
         return getattr(self, key)
+
+    @classmethod
+    def collected(
+        cls,
+        definition: SourceDefinition,
+        *,
+        output_file: Path,
+        line_count: int,
+        byte_count: int,
+    ) -> SourceCollectionResult:
+        """Build the internal success result for one collected source."""
+
+        return cls(
+            source_key=definition.source_key,
+            source_type=definition.source_type,
+            target=definition.target,
+            description=definition.description,
+            stream=definition.stream,
+            parser_type=definition.parser_type,
+            normalization_profile=definition.normalization_profile,
+            default_noise_profile=definition.default_noise_profile,
+            status="collected",
+            output_file=str(output_file),
+            line_count=line_count,
+            byte_count=byte_count,
+            error=None,
+            retry_tips=[],
+        )
+
+    @classmethod
+    def unavailable(
+        cls,
+        definition: SourceDefinition,
+        *,
+        error: str,
+        retry_tips: list[str],
+    ) -> SourceCollectionResult:
+        """Build the internal unavailable result for one failed source."""
+
+        return cls(
+            source_key=definition.source_key,
+            source_type=definition.source_type,
+            target=definition.target,
+            description=definition.description,
+            stream=definition.stream,
+            parser_type=definition.parser_type,
+            normalization_profile=definition.normalization_profile,
+            default_noise_profile=definition.default_noise_profile,
+            status="unavailable",
+            output_file=None,
+            line_count=0,
+            byte_count=0,
+            error=error,
+            retry_tips=retry_tips,
+        )
 
 
 class LogCollectionService:
@@ -364,10 +419,10 @@ class LogCollectionService:
         sources: list[SourceDefinition],
         snapshot_dir: Path,
         time_filters: DockerTimeFilters,
-    ) -> list[LogSnapshotFilePayload | CollectSourceError]:
+    ) -> list[SourceCollectionResult]:
         """Collect all resolved sources into the prepared snapshot directory."""
 
-        collected_results: list[LogSnapshotFilePayload | CollectSourceError] = []
+        collected_results: list[SourceCollectionResult] = []
         for source in sources:
             collected_results.append(
                 self.collect_source(
@@ -403,7 +458,7 @@ class LogCollectionService:
         self,
         *,
         collect_logs_payload: CollectLogsCreate,
-        collected_results: list[LogSnapshotFilePayload | CollectSourceError],
+        collected_results: list[SourceCollectionResult],
     ) -> CollectLogsWithSourcesOut:
         """Save CollectLogs and CollectLogsSource rows for the written snapshot files."""
 
@@ -417,7 +472,7 @@ class LogCollectionService:
         self,
         *,
         collect_logs_obj: CollectLogsOut,
-        collected_results: list[LogSnapshotFilePayload | CollectSourceError],
+        collected_results: list[SourceCollectionResult],
     ) -> CollectLogsWithSourcesOut:
         """Save CollectLogsSource objects for one existing CollectLogs artifact object."""
 
@@ -562,11 +617,11 @@ class LogCollectionService:
     def _build_source_create_payload(
         self,
         *,
-        result: LogSnapshotFilePayload | CollectSourceError,
+        result: SourceCollectionResult,
     ) -> CollectLogsSourceCreate:
         """Build one DB source payload from a collection result."""
 
-        if isinstance(result, CollectSourceError):
+        if result.status == "unavailable":
             return CollectLogsSourceCreate(
                 source_key=result.source_key,
                 source_type=result.source_type,
@@ -583,6 +638,7 @@ class LogCollectionService:
                 retry_tips=result.retry_tips,
             )
 
+        assert result.output_file is not None
         file_path = self.snapshot_service.storage.relative_name(Path(result.output_file))
         return CollectLogsSourceCreate(
             source_key=result.source_key,
@@ -605,7 +661,7 @@ class LogCollectionService:
         definition: SourceDefinition,
         output_file: Path,
         time_filters: DockerTimeFilters,
-    ) -> LogSnapshotFilePayload | CollectSourceError:
+    ) -> SourceCollectionResult:
         """Collect one manifest source through its deterministic adapter.
 
         File sources are copied directly. Docker sources are streamed from the
@@ -848,7 +904,7 @@ class LogCollectionService:
         definition: SourceDefinition,
         output_file: Path,
         time_filters: DockerTimeFilters,
-    ) -> LogSnapshotFilePayload | CollectSourceError:
+    ) -> SourceCollectionResult:
         """Collect one file-backed source declared by the manifest.
 
         File-backed sources must point at an explicit absolute path. Different
@@ -857,15 +913,8 @@ class LogCollectionService:
 
         target_path = Path(definition.target)
         if not target_path.is_absolute():
-            return CollectSourceError(
-                source_key=definition.source_key,
-                source_type=definition.source_type,
-                target=definition.target,
-                description=definition.description,
-                stream=definition.stream,
-                parser_type=definition.parser_type,
-                normalization_profile=definition.normalization_profile,
-                default_noise_profile=definition.default_noise_profile,
+            return SourceCollectionResult.unavailable(
+                definition,
                 error="File source target must be an absolute path.",
                 retry_tips=[
                     "Use an explicit absolute path in the persisted manifest source target."
@@ -873,15 +922,8 @@ class LogCollectionService:
             )
         path = target_path
         if not path.exists():
-            return CollectSourceError(
-                source_key=definition.source_key,
-                source_type=definition.source_type,
-                target=definition.target,
-                description=definition.description,
-                stream=definition.stream,
-                parser_type=definition.parser_type,
-                normalization_profile=definition.normalization_profile,
-                default_noise_profile=definition.default_noise_profile,
+            return SourceCollectionResult.unavailable(
+                definition,
                 error=f"File source not found: {definition.target}",
                 retry_tips=[
                     "Verify the file path in the manifest or retry with a different source."
@@ -893,18 +935,9 @@ class LogCollectionService:
             output_file,
             time_filters=time_filters,
         )
-        persisted_output_file = str(output_file)
-        return LogSnapshotFilePayload(
-            source_key=definition.source_key,
-            source_type=definition.source_type,
-            description=definition.description,
-            target=definition.target,
-            stream=definition.stream,
-            parser_type=definition.parser_type,
-            normalization_profile=definition.normalization_profile,
-            default_noise_profile=definition.default_noise_profile,
-            file_name=output_file.name,
-            output_file=persisted_output_file,
+        return SourceCollectionResult.collected(
+            definition,
+            output_file=output_file,
             line_count=line_count,
             byte_count=byte_count,
         )
@@ -914,7 +947,7 @@ class LogCollectionService:
         definition: SourceDefinition,
         output_file: Path,
         time_filters: DockerTimeFilters,
-    ) -> LogSnapshotFilePayload | CollectSourceError:
+    ) -> SourceCollectionResult:
         """Collect one docker-backed source through the Docker Engine API."""
 
         logs_kwargs: dict[str, int | str | datetime] = {}
@@ -924,7 +957,7 @@ class LogCollectionService:
             logs_kwargs["until"] = time_filters.until
 
         stream_target = self._resolve_docker_log_container(definition)
-        if isinstance(stream_target, CollectSourceError):
+        if isinstance(stream_target, SourceCollectionResult):
             return stream_target
         docker_log_gateway = self._get_docker_log_gateway()
 
@@ -959,17 +992,9 @@ class LogCollectionService:
             if error.error_code == "docker_engine_unavailable":
                 return self._build_docker_unavailable_error(definition)
             return self._build_docker_source_error(definition, error=error.message)
-        return LogSnapshotFilePayload(
-            source_key=definition.source_key,
-            source_type=definition.source_type,
-            description=definition.description,
-            target=definition.target,
-            stream=definition.stream,
-            parser_type=definition.parser_type,
-            normalization_profile=definition.normalization_profile,
-            default_noise_profile=definition.default_noise_profile,
-            file_name=output_file.name,
-            output_file=persisted_output_file,
+        return SourceCollectionResult.collected(
+            definition,
+            output_file=Path(persisted_output_file),
             line_count=line_count,
             byte_count=byte_count,
         )
@@ -977,7 +1002,7 @@ class LogCollectionService:
     def _resolve_docker_log_container(
         self,
         definition: SourceDefinition,
-    ) -> str | CollectSourceError:
+    ) -> str | SourceCollectionResult:
         """Resolve the concrete Docker container name used for one docker log source."""
 
         try:
@@ -1025,18 +1050,11 @@ class LogCollectionService:
         definition: SourceDefinition,
         *,
         error: str,
-    ) -> CollectSourceError:
+    ) -> SourceCollectionResult:
         """Return a source-level Docker collection error with stable retry tips."""
 
-        return CollectSourceError(
-            source_key=definition.source_key,
-            source_type=definition.source_type,
-            target=definition.target,
-            description=definition.description,
-            stream=definition.stream,
-            parser_type=definition.parser_type,
-            normalization_profile=definition.normalization_profile,
-            default_noise_profile=definition.default_noise_profile,
+        return SourceCollectionResult.unavailable(
+            definition,
             error=error,
             retry_tips=[
                 "Verify the container name in the manifest or retry with a different source."
@@ -1048,18 +1066,11 @@ class LogCollectionService:
         definition: SourceDefinition,
         *,
         error_message: str,
-    ) -> CollectSourceError:
+    ) -> SourceCollectionResult:
         """Return a source-level Docker timeout error."""
 
-        return CollectSourceError(
-            source_key=definition.source_key,
-            source_type=definition.source_type,
-            target=definition.target,
-            description=definition.description,
-            stream=definition.stream,
-            parser_type=definition.parser_type,
-            normalization_profile=definition.normalization_profile,
-            default_noise_profile=definition.default_noise_profile,
+        return SourceCollectionResult.unavailable(
+            definition,
             error=error_message,
             retry_tips=[
                 "Retry with a narrower since/until window to keep docker log output bounded."
@@ -1067,18 +1078,11 @@ class LogCollectionService:
         )
 
     @staticmethod
-    def _build_docker_unavailable_error(definition: SourceDefinition) -> CollectSourceError:
+    def _build_docker_unavailable_error(definition: SourceDefinition) -> SourceCollectionResult:
         """Return a source-level Docker Engine unavailable error."""
 
-        return CollectSourceError(
-            source_key=definition.source_key,
-            source_type=definition.source_type,
-            target=definition.target,
-            description=definition.description,
-            stream=definition.stream,
-            parser_type=definition.parser_type,
-            normalization_profile=definition.normalization_profile,
-            default_noise_profile=definition.default_noise_profile,
+        return SourceCollectionResult.unavailable(
+            definition,
             error="Docker Engine API is not available in the current runtime.",
             retry_tips=["Retry in a runtime where the Docker socket is mounted and reachable."],
         )

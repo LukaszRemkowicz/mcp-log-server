@@ -14,7 +14,7 @@ from exception import InvalidTimeFilterError
 from manifests.loader import list_project_manifests, load_project_manifest
 from manifests.models import SourceDefinition
 from services.docker_log_gateway import DockerLogGatewayError, ResolvedDockerContainer
-from services.log_collection import CollectSourceError, DockerTimeFilters, LogCollectionService
+from services.log_collection import DockerTimeFilters, LogCollectionService, SourceCollectionResult
 from services.project_authorization import ProjectAuthorizationError, ProjectAuthorizationService
 from services.project_manifest import ProjectManifestService
 from tests.conftest import (
@@ -489,7 +489,8 @@ def test_collect_source_reports_docker_timeout_with_time_window_tip(
         time_filters=DockerTimeFilters(since=None, until=None),
     )
 
-    assert isinstance(result, CollectSourceError)
+    assert isinstance(result, SourceCollectionResult)
+    assert result.status == "unavailable"
     assert "Retry with a narrower since/until window" in str(result["error"])
     assert result["retry_tips"] == [
         "Retry with a narrower since/until window to keep docker log output bounded."
@@ -716,6 +717,70 @@ def test_collect_source_streams_persisted_file_logs_to_output_file(tmp_path) -> 
     assert output_file.read_text(encoding="utf-8") == "log line 1\nlog line 2\n"
 
 
+def test_build_source_create_payload_uses_internal_collected_result(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    output_file = logs_dir / "workflow" / "landingpage" / "latest" / "app_file.log"
+    output_file.parent.mkdir(parents=True)
+    output_file.write_text("log line 1\nlog line 2\n", encoding="utf-8")
+    definition = SourceDefinition(
+        source_key="app_file",
+        source_type="file",
+        target=str(tmp_path / "source.log"),
+        description="Application file logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream=None,
+    )
+    result = SourceCollectionResult.collected(
+        definition,
+        output_file=output_file,
+        line_count=2,
+        byte_count=22,
+    )
+
+    with override_settings(LOGS_DIR=logs_dir):
+        payload = LogCollectionService()._build_source_create_payload(result=result)
+
+    assert payload.status == "collected"
+    assert payload.file == "workflow/landingpage/latest/app_file.log"
+    assert payload.line_count == 2
+    assert payload.error is None
+    assert payload.retry_tips == []
+
+
+def test_build_source_create_payload_uses_internal_unavailable_result() -> None:
+    definition = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="backend-container",
+        description="Backend logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="backend",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream="stdout",
+    )
+    result = SourceCollectionResult.unavailable(
+        definition,
+        error="Docker Engine API is not available in the current runtime.",
+        retry_tips=["Retry in a runtime where the Docker socket is mounted and reachable."],
+    )
+
+    payload = LogCollectionService()._build_source_create_payload(result=result)
+
+    assert payload.status == "unavailable"
+    assert payload.file is None
+    assert payload.line_count == 0
+    assert payload.error == "Docker Engine API is not available in the current runtime."
+    assert payload.retry_tips == [
+        "Retry in a runtime where the Docker socket is mounted and reachable."
+    ]
+
+
 def test_collect_source_filters_file_logs_by_time_window(tmp_path: Path) -> None:
     source_file = tmp_path / "nginx-access.log"
     source_file.write_text(
@@ -809,7 +874,8 @@ def test_collect_source_rejects_relative_file_target(tmp_path: Path) -> None:
         time_filters=DockerTimeFilters(since=None, until=None),
     )
 
-    assert isinstance(result, CollectSourceError)
+    assert isinstance(result, SourceCollectionResult)
+    assert result.status == "unavailable"
     assert result.error == "File source target must be an absolute path."
 
 
@@ -840,7 +906,8 @@ def test_collect_source_reports_docker_api_unavailable(
         time_filters=DockerTimeFilters(since=None, until=None),
     )
 
-    assert isinstance(result, CollectSourceError)
+    assert isinstance(result, SourceCollectionResult)
+    assert result.status == "unavailable"
     assert result["error"] == "Docker Engine API is not available in the current runtime."
     assert result["retry_tips"] == [
         "Retry in a runtime where the Docker socket is mounted and reachable."
