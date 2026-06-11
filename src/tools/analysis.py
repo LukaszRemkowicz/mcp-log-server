@@ -31,6 +31,7 @@ from tools.agent_hints import (
     GROUP_ERRORS_NEXT_STEP_TIPS,
     GROUP_ERRORS_TOOL_DESCRIPTION,
     INCIDENT_BUNDLE_NEXT_STEP_TIPS,
+    INSPECT_PROBE_BLOCKING_ACTIVITY_TOOL_DESCRIPTION,
     INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
     LOG_ANALYSIS_CAUTIONS,
     PROXY_ACTIVITY_NEXT_STEP_TIPS,
@@ -473,6 +474,78 @@ async def group_errors(
         },
     )
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
+
+
+@workflow_discoverable_tool(
+    LOGS_COLLECT_SCOPE,
+    mcp_description=INSPECT_PROBE_BLOCKING_ACTIVITY_TOOL_DESCRIPTION,
+)
+@project_authorized_tool
+async def inspect_probe_blocking_activity(
+    project_name: str,
+    session_id: str | None = None,
+    archive_name: str | None = None,
+    source_keys: list[str] | None = None,
+    source_key: str | None = None,
+) -> ToolResult:
+    """Correlate sensitive-path proxy probes with historical fail2ban events."""
+
+    context = await authorize_and_get_snapshot(
+        tool_name="inspect_probe_blocking_activity",
+        project_name=project_name,
+        session_id=session_id,
+        archive_name=archive_name,
+    )
+    if isinstance(context, ToolResult):
+        return context
+
+    try:
+        source_keys = resolve_source_keys_for_snapshot(source_keys, source_key)
+    except SourceKeyArgumentError as error:
+        return build_invalid_source_key_arguments_result(
+            message=str(error),
+            source_key=source_key,
+            source_keys=source_keys,
+        )
+
+    try:
+        payload = analysis_service.inspect_probe_blocking_activity(
+            context.metadata,
+            sources=context.sources,
+            requested_source_keys=source_keys,
+            requested_project_name=project_name,
+            project_name=context.project_name,
+        )
+    except ValueError as error:
+        return _build_analysis_source_key_error_result(
+            tool_name="inspect_probe_blocking_activity",
+            error=error,
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
+            requested_source_keys=source_keys,
+            max_groups=0,
+        )
+
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_probe_blocking_activity",
+            "session_id": payload.session_id,
+            "archive_name": archive_name,
+            "workspace": payload.workspace,
+            "searched_source_count": len(payload.searched_source_keys),
+            "suspicious_ip_count": payload.suspicious_ip_count,
+            "expected_ban_ip_count": payload.expected_ban_ip_count,
+            "observed_ban_ip_count": payload.observed_ban_ip_count,
+        },
+    )
+    response = dict(
+        analysis_cautions=LOG_ANALYSIS_CAUTIONS,
+        **payload.model_dump(mode="json"),
+    )
+    return ToolResult(content=[], structured_content=response)
 
 
 @workflow_discoverable_tool(

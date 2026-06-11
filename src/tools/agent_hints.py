@@ -65,6 +65,15 @@ INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION = (
     "snapshot files only; it does not run live proxy or shell commands."
 )
 
+INSPECT_PROBE_BLOCKING_ACTIVITY_TOOL_DESCRIPTION = (
+    "Inspect collected fail2ban plus nginx/Traefik access snapshot sources for "
+    "deterministic probe-blocking correlation. Returns sensitive-path probe "
+    "requests by IP, whether each IP should have crossed the configured retry "
+    "threshold, and whether historical fail2ban Ban or already-banned events "
+    "were observed. This tool reads snapshot files only and does not run live "
+    "fail2ban commands."
+)
+
 INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION = (
     "Inspect live fail2ban runtime state for a project such as vps-security "
     "through a fixed allowlist of fail2ban-client status commands. Returns "

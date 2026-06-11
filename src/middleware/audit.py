@@ -644,6 +644,8 @@ class AccessAuditMiddleware(Middleware):
         session_id = None
         if tool_name == "collect_logs":
             session_id = _prepare_collect_logs_arguments(context, workspace=workspace)
+        elif isinstance(arguments.get("session_id"), str):
+            session_id = arguments["session_id"]
         request_agent_session: AuthenticatedAgentSession | None = None
         if session_id is not None:
             agent_session_result = await _prepare_agent_session(
@@ -652,8 +654,10 @@ class AccessAuditMiddleware(Middleware):
                 session_id=session_id,
             )
             if isinstance(agent_session_result, AgentToolErrorResult):
-                return agent_session_result
-            request_agent_session = agent_session_result
+                if tool_name == "collect_logs":
+                    return agent_session_result
+            else:
+                request_agent_session = agent_session_result
         agent_call_pk: UUID | None = None
         if request_agent_session is not None:
             agent_call_result = await _create_agent_call(

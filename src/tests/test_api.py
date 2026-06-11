@@ -1254,9 +1254,96 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
     assert group_payload["matching_line_count"] == 19
 
 
+async def test_inspect_probe_blocking_activity_api_correlates_probe_and_fail2ban_events(
+    file_backed_project_context: FileBackedProjectContext,
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify probe-blocking diagnostics correlate proxy probes with fail2ban events."""
+
+    token = custom_jwt_token(
+        "all-project-workflow-client",
+        [LOGS_COLLECT_SCOPE],
+        "all-project-workflow-client",
+        {"client_type": "workflow_agent"},
+    )
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = await jsonrpc.post(
+            token=token,
+            data=build_collect_logs_request(
+                request_id="collect-vps-security-probe-blocking",
+                project_names=["vps-security"],
+                source_keys=["all"],
+                since="30d",
+            ),
+        )
+        response = await jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "inspect-probe-blocking-activity",
+                "method": "tools/call",
+                "params": {
+                    "name": "inspect_probe_blocking_activity",
+                    "arguments": {
+                        "project_name": "vps-security",
+                        "source_keys": ["fail2ban", "nginx_access", "traefik_access"],
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_probe_blocking_activity"
+    assert payload["project_name"] == "vps-security"
+    assert payload["searched_source_keys"] == ["fail2ban", "nginx_access", "traefik_access"]
+    assert payload["policy"] == {
+        "portfolio-nginx-probes": {"findtime": "1m", "maxretry": 3, "bantime": "-1"},
+        "portfolio-traefik-probes": {"findtime": "1m", "maxretry": 3, "bantime": "-1"},
+    }
+    assert payload["suspicious_ip_count"] == 4
+    assert payload["suspicious_request_count"] == 8
+    assert payload["expected_ban_ip_count"] == 1
+    assert payload["observed_ban_ip_count"] == 3
+    assert payload["expected_but_not_observed"] == []
+
+    nginx_record = next(
+        item
+        for item in payload["suspicious_ips"]
+        if item["ip"] == "203.0.113.10" and item["jail"] == "portfolio-nginx-probes"
+    )
+    assert nginx_record["request_count"] == 4
+    assert nginx_record["paths"] == ["/.env", "/.git/config", "/phpmyadmin/index.php", "/wp-admin"]
+    assert nginx_record["expected_ban"] is True
+    assert nginx_record["observed_ban"] is True
+    assert nginx_record["ban_count"] == 1
+    assert nginx_record["already_banned_count"] == 1
+    assert nginx_record["last_ban_at"] == "2026-05-18 09:40:01"
+
+    unobserved_record = next(
+        item
+        for item in payload["suspicious_ips"]
+        if item["ip"] == "198.51.100.99" and item["jail"] == "portfolio-traefik-probes"
+    )
+    assert unobserved_record["expected_ban"] is False
+    assert unobserved_record["observed_ban"] is False
+
+
 @pytest.mark.parametrize(
     "tool_name",
-    ["group_errors", "build_incident_bundle", "create_filtered_view", "inspect_proxy_activity"],
+    [
+        "group_errors",
+        "build_incident_bundle",
+        "create_filtered_view",
+        "inspect_proxy_activity",
+        "inspect_probe_blocking_activity",
+    ],
 )
 async def test_analysis_tools_api_support_single_source_alias(
     file_backed_project_context: FileBackedProjectContext,
@@ -1298,7 +1385,13 @@ async def test_analysis_tools_api_support_single_source_alias(
 
 @pytest.mark.parametrize(
     "tool_name",
-    ["group_errors", "build_incident_bundle", "create_filtered_view", "inspect_proxy_activity"],
+    [
+        "group_errors",
+        "build_incident_bundle",
+        "create_filtered_view",
+        "inspect_proxy_activity",
+        "inspect_probe_blocking_activity",
+    ],
 )
 async def test_analysis_tools_api_reject_conflicting_source_key_arguments(
     file_backed_project_context: FileBackedProjectContext,
