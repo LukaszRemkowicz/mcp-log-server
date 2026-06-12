@@ -1,18 +1,15 @@
-# Tool: `prepare_log_report`
+# Tool Selection: Final Report Readiness
 
 Purpose:
-- return the prepared log-monitoring payload for the current scheduled job
+- describe when the LLM should stop requesting tools and return `final_report`
 
-When to use:
-- when you need the current log findings before writing the final analysis
-- when the job has log scope and no prepared log report has been retrieved yet
+Use `final_report` when:
+- deterministic tool results explain application errors, proxy status distribution, and security noise
+- high 4xx ratios have denominators and a scanner-vs-application-path interpretation
+- zero-line and unavailable sources are recorded as coverage gaps
+- optional security skills have been fetched when suspicious evidence requires them
 
-When not to use:
-- when the current job is not a log-monitoring job
-- when the same prepared log report has already been returned and no new context exists
+Do not use a fake `prepare_log_report` tool.
+Return the `final_report` action directly when evidence is sufficient.
 
-Output shape:
-- structured log report payload for the current job
-- includes severity, summary, findings, recommendations, and trend data when available
-- may include deterministic `probe_blocking_context` data describing suspicious
-  probe IPs, fail2ban policy thresholds, and observed ban activity
+Final report output shape is defined by `monitoring_log_response_format.md`.

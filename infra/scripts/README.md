@@ -1,6 +1,10 @@
 # Operational Scripts
 
-This directory contains operational scripts that stay outside MCP tool internals.
+This directory contains operational scripts for backups, restores, releases,
+deploys, and production log access. These scripts are for operators and
+maintainers; they are separate from MCP tools.
+
+Run examples from the repository root.
 
 Supported environments:
 
@@ -110,7 +114,7 @@ Build behavior:
 - refuses to build with uncommitted changes unless `EMERGENCY=true`
 - supports `NO_CACHE=true` when a full rebuild is required
 - records the last built tag under the script state directory
-- prunes older local images while keeping recent history
+- prunes older local images, keeping only the built tag
 
 Local compose intentionally does not use tagged app images. For local
 development, use:
@@ -118,6 +122,28 @@ development, use:
 ```bash
 docker compose up --build
 ```
+
+## Release
+
+Build and deploy one tagged prod release:
+
+```bash
+TAG=v1.2.3 infra/scripts/release/release.sh
+```
+
+For non-interactive automation, pass approval explicitly:
+
+```bash
+AUTO_APPROVE=true TAG=v1.2.3 infra/scripts/release/release.sh
+```
+
+Release behavior:
+
+- validates the same prod environment and tag as the lower-level scripts
+- runs `release/build.sh`
+- runs `release/deploy.sh`
+- keeps backup, migration, confirmation, and health-check behavior inside
+  `deploy.sh`
 
 ## Deploy
 
@@ -139,9 +165,6 @@ AUTO_APPROVE=true TAG=v1.2.3 infra/scripts/release/deploy.sh
 Deploy behavior:
 
 - verifies the local image `prod-mcp-log-server:<TAG>` exists
-- creates the production Postgres host data directory before starting `db`;
-  default: `/var/lib/mcp-log-server/postgresql`, override with
-  `POSTGRES_DATA_DIR`
 - exposes the MCP HTTP endpoint through the existing Traefik stack at
   `https://mcp.${SITE_DOMAIN}/mcp`
 - includes `docker-compose.fail2ban.yml` by default so the internal
@@ -158,20 +181,13 @@ Deploy behavior:
   exposes `get_mcp_health_check`
 - records the deployed tag under the script state directory after health passes
 
-Production Postgres data is a host bind mount, not a Compose-managed Docker
-volume. Normal Docker volume prune commands will not delete it. Do not point
-`POSTGRES_DATA_DIR` at a temporary directory.
+After deploy records `current_tag`, host-side `uv run shell` and
+`uv run command ...` helpers use that tag as the default `TAG` when the caller
+does not provide one.
 
-To prevent accidentally booting an empty production database after changing or
-losing the host path, deploy and prod backup commands expect this marker file to
-exist:
-
-```text
-$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION
-```
-
-For a brand-new environment only, initialize deliberately with
-`ALLOW_EMPTY_POSTGRES_DATA_DIR=true` and usually `SKIP_BACKUP=true`.
+Production Postgres data is stored in the Compose-managed `postgres-data`
+Docker volume. Keep database backups current before Docker volume cleanup or
+host maintenance.
 
 Dry run:
 
@@ -210,5 +226,5 @@ infra/scripts/logs.sh db
 Useful options:
 
 - `TAIL_LINES=500` changes the number of lines shown.
-- `COMPOSE_PROJECT_NAME=mcp-log-server-prod` overrides the Docker Compose
+- `COMPOSE_PROJECT_NAME=mcp` overrides the Docker Compose
   project name when needed.

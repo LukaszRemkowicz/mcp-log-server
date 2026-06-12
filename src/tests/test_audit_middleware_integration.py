@@ -98,6 +98,81 @@ async def test_audit_middleware_persists_agent_call_for_collect_logs(
 
 
 @pytest.mark.anyio
+@pytest.mark.usefixtures("db")
+async def test_audit_middleware_persists_agent_call_for_session_analysis_tool(
+    mocker: MockerFixture,
+) -> None:
+    """Verify session analysis tools get AgentCall timing rows."""
+
+    token = AccessToken(
+        token="test-token",
+        client_id="codex-client",
+        scopes=["logs:collect"],
+        claims={
+            "sub": "codex-subject",
+            "client_type": "codex",
+        },
+    )
+    mocker.patch("middleware.audit.get_access_token", return_value=token)
+    request = SimpleNamespace(state=SimpleNamespace())
+    mocker.patch("middleware.audit.get_http_request", return_value=request)
+    caller = await McpCaller.objects.get(
+        client_id="codex-client",
+        client_type="codex",
+        workspace=LogWorkspace.SESSION,
+    )
+    session = await AgentSession.objects.create(
+        name=generate_session_id(),
+        caller=caller,
+    )
+    context = MiddlewareContext(
+        message=mt.CallToolRequestParams(
+            name="group_errors",
+            arguments={
+                "project_name": "landingpage",
+                "session_id": session.name,
+                "source_keys": ["backend"],
+            },
+        )
+    )
+    middleware = AccessAuditMiddleware()
+
+    async def call_next(
+        next_context: MiddlewareContext[mt.CallToolRequestParams],
+    ) -> ToolResult:
+        return ToolResult(
+            content=[],
+            structured_content={
+                "action": next_context.message.name,
+                "session_id": session.name,
+            },
+        )
+
+    result = await middleware.on_call_tool(
+        context,
+        cast(CallNext[mt.CallToolRequestParams, ToolResult], call_next),
+    )
+
+    rows = await AgentCall.objects.filter(session__name=session.name).order_by("created_at")
+    assert result.structured_content == {
+        "action": "group_errors",
+        "session_id": session.name,
+    }
+    assert len(rows) == 1
+    assert rows[0].tool_name == "group_errors"
+    assert rows[0].project_name == "landingpage"
+    assert rows[0].source_keys == ["backend"]
+    assert rows[0].arguments == {
+        "project_name": "landingpage",
+        "session_id": session.name,
+        "source_keys": ["backend"],
+    }
+    assert rows[0].success is True
+    assert rows[0].duration_seconds is not None
+    assert rows[0].error_code is None
+
+
+@pytest.mark.anyio
 async def test_audit_middleware_rejects_collect_logs_workspace_argument(
     mocker: MockerFixture,
 ) -> None:

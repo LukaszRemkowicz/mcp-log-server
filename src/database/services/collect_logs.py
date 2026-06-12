@@ -48,6 +48,19 @@ class CollectLogsService:
         await obj.fetch_related("session")
         return await self._to_out_with_sources(obj)
 
+    async def update_resolved_source_keys(
+        self,
+        collect_logs_id: int,
+        resolved_source_keys: list[str],
+    ) -> CollectLogsOut:
+        """Update the manifest source keys that produced usable snapshot files."""
+
+        obj = await self.model.objects.get(id=collect_logs_id)
+        obj.resolved_source_keys = resolved_source_keys
+        await obj.save(update_fields=["resolved_source_keys"])
+        await obj.fetch_related("session")
+        return self._to_out(obj)
+
     async def get_latest(self, project_name: str) -> CollectLogsOut | None:
         """Return current latest workflow row for one project."""
 
@@ -104,6 +117,19 @@ class CollectLogsService:
             return None
         await obj.fetch_related("session")
         return await self._to_out_with_sources(obj)
+
+    async def list_workflow_archives(self, project_name: str) -> list[CollectLogsOut]:
+        """Return archived workflow rows for one project."""
+
+        objects = await self.model.objects.filter(
+            project_name=project_name,
+            workspace=LogWorkspace.WORKFLOW,
+            archive_name__not_isnull=True,
+            is_latest=False,
+        ).all()
+        for obj in objects:
+            await obj.fetch_related("session")
+        return [self._to_out(obj) for obj in objects]
 
     @staticmethod
     def _to_out(obj: CollectLogs) -> CollectLogsOut:
@@ -176,6 +202,11 @@ class CollectLogsService:
         obj.archive_name = archive_name
         obj.snapshot_dir = snapshot_dir
         await obj.save()
+
+    async def delete(self, collect_logs_id: int) -> None:
+        """Delete one collect_logs row and its cascade-owned source rows."""
+
+        await self.model.objects.filter(id=collect_logs_id).delete()
 
 
 class CollectLogsSourceService:

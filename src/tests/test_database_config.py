@@ -9,7 +9,8 @@ from typing import Any, cast
 import pytest
 from pytest_mock import MockerFixture
 
-import database.cli as database_cli
+import cli.db as database_cli
+import cli.test as test_cli
 import database.config as database_config
 import database.ensure_test_database as ensure_test_database_module
 from auth.mcp_caller_model import get_mcp_caller_model
@@ -72,8 +73,8 @@ def test_makemigrations_runs_aerich_migrate(
         calls.append((args, capture_output, check, env))
         return subprocess.CompletedProcess(args, 0, stdout="generated\n", stderr="")
 
-    mocker.patch("database.cli.subprocess.run", fake_run)
-    mocker.patch.dict("database.cli.os.environ", {}, clear=True)
+    mocker.patch("cli.db.subprocess.run", fake_run)
+    mocker.patch.dict("cli.db.os.environ", {}, clear=True)
 
     result = database_cli._run_makemigrations(["--name", "add_agent_calls"])
 
@@ -108,8 +109,8 @@ def test_makemigrations_normalizes_aerich_filename(
         )
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    mocker.patch("database.cli.subprocess.run", fake_run)
-    mocker.patch("database.cli.MIGRATIONS_DIR", migrations_dir)
+    mocker.patch("cli.db.subprocess.run", fake_run)
+    mocker.patch("cli.db.MIGRATIONS_DIR", migrations_dir)
 
     result = database_cli._run_makemigrations([])
 
@@ -141,8 +142,8 @@ def test_makemigrations_accepts_positional_suffix(
         (migrations_dir / "2_20260517120000_update.py").write_text("upgrade\n", encoding="utf-8")
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    mocker.patch("database.cli.subprocess.run", fake_run)
-    mocker.patch("database.cli.MIGRATIONS_DIR", migrations_dir)
+    mocker.patch("cli.db.subprocess.run", fake_run)
+    mocker.patch("cli.db.MIGRATIONS_DIR", migrations_dir)
 
     result = database_cli._run_makemigrations(["Remove agent call redundant fields"])
 
@@ -174,8 +175,8 @@ def test_makemigrations_slugifies_aerich_name_option(
         (migrations_dir / "2_20260517120000_update.py").write_text("upgrade\n", encoding="utf-8")
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    mocker.patch("database.cli.subprocess.run", fake_run)
-    mocker.patch("database.cli.MIGRATIONS_DIR", migrations_dir)
+    mocker.patch("cli.db.subprocess.run", fake_run)
+    mocker.patch("cli.db.MIGRATIONS_DIR", migrations_dir)
 
     result = database_cli._run_makemigrations(["--name", "Remove agent call redundant fields"])
 
@@ -209,8 +210,8 @@ def test_makemigrations_initializes_aerich_when_required(
             )
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    mocker.patch("database.cli.subprocess.run", fake_run)
-    mocker.patch.dict("database.cli.os.environ", {}, clear=True)
+    mocker.patch("cli.db.subprocess.run", fake_run)
+    mocker.patch.dict("cli.db.os.environ", {}, clear=True)
 
     result = database_cli._run_makemigrations([])
 
@@ -246,7 +247,7 @@ def test_makemigrations_initializes_aerich_when_maybe_required(
             )
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    mocker.patch("database.cli.subprocess.run", fake_run)
+    mocker.patch("cli.db.subprocess.run", fake_run)
 
     result = database_cli._run_makemigrations([])
 
@@ -270,9 +271,9 @@ def test_migration_commands_preserve_explicit_database_env(
         captured_envs.append(env)
         return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
 
-    mocker.patch("database.cli.subprocess.run", fake_run)
+    mocker.patch("cli.db.subprocess.run", fake_run)
     mocker.patch.dict(
-        "database.cli.os.environ",
+        "cli.db.os.environ",
         {"DATABASE_HOST": "db", "DATABASE_PORT": "5432"},
     )
 
@@ -284,26 +285,33 @@ def test_migration_commands_preserve_explicit_database_env(
 
 
 def test_test_command_runs_compose_test_container(mocker: MockerFixture) -> None:
-    calls: list[list[str]] = []
+    calls: list[tuple[list[str], dict[str, str] | None]] = []
 
-    def fake_run(args: list[str]) -> subprocess.CompletedProcess[str]:
-        calls.append(args)
+    def fake_run(
+        args: list[str],
+        *,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        calls.append((args, env))
         return subprocess.CompletedProcess(args, 0)
 
-    mocker.patch("database.cli.subprocess.run", fake_run)
+    mocker.patch("cli.test.subprocess.run", fake_run)
 
-    result = database_cli._run_test()
+    result = test_cli._run_test()
 
     assert result == 0
-    assert calls == [
-        [
-            "docker",
-            "compose",
-            "run",
-            "--rm",
-            "test",
-        ]
+    assert len(calls) == 1
+    command, env = calls[0]
+    assert command == [
+        "docker",
+        "compose",
+        "run",
+        "--rm",
+        "--build",
+        "test",
     ]
+    assert env is not None
+    assert env["DATABASE_PORT_HOST"] == "0"
 
 
 @pytest.mark.anyio

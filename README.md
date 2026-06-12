@@ -39,7 +39,7 @@ authenticated MCP deploy health checks.
 | Detailed operational scripts runbook | [infra/scripts/README.md](infra/scripts/README.md) |
 | MCP curl workflow and agent playbook | [infra/docs/mcp_workflow_playbook.md](infra/docs/mcp_workflow_playbook.md) |
 | Tests, checks, CI, release validation | [infra/docs/quality_checks.md](infra/docs/quality_checks.md) |
-| Typer command reference | [src/scripts/README.md](src/scripts/README.md) |
+| CLI command reference | [src/cli/README.md](src/cli/README.md) |
 | Repository foundation notes | [infra/docs/repository_foundation.md](infra/docs/repository_foundation.md) |
 
 ## Tool Groups
@@ -55,6 +55,28 @@ documentation categories, not auth scopes.
 | Snapshot analysis and derived views | `create_filtered_view`, `group_errors`, `build_incident_bundle`, `inspect_proxy_activity`, `suggest_followup_window` | Build deterministic cleaned views, grouped summaries, proxy diagnostics, incident bundles, and recollection windows. |
 | Container inspection | `inspect_containers_health`, `inspect_container_detail`, `stat_container_path`, `read_container_file`, `list_container_directory` | Inspect approved manifest-bounded containers and paths without mutating container state. |
 | MCP service diagnostics | `get_mcp_service_status`, `get_mcp_health_check` | Check MCP server/runtime health during development and operations. |
+
+## Snapshot Storage And Cleanup
+
+`collect_logs` saves raw log snapshots under the configured `LOGS_DIR`. These
+files are the source of truth for later reads, searches, and analysis.
+
+Workflow snapshots are shared per project. Each project has one current
+`latest` snapshot. When a new workflow snapshot is collected, the previous
+`latest` snapshot moves into that project's archive.
+
+Archive cleanup runs the next time that same project is collected. Archives
+older than `WORKFLOW_ARCHIVE_RETENTION` are removed together with their database
+metadata, so snapshot tools do not point at files that no longer exist.
+
+Session snapshots are separate from workflow snapshots. They are kept under the
+session area in `LOGS_DIR` and old session folders are cleaned according to
+`LOG_SNAPSHOT_RETENTION` when new session snapshots are prepared.
+
+Filtered views, grouped errors, incident bundles, and proxy activity reports are
+derived responses built from those raw snapshots. Collection diagnostics are
+saved inside the same snapshot directory, so they follow the same cleanup
+behavior as the logs they describe.
 
 ## Layout
 
@@ -98,7 +120,7 @@ doppler run -- docker compose up --build
 Generate local JWTs for curl/manual MCP checks:
 
 ```bash
-uv run commands generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
+uv run command generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
 export WORKFLOW_AGENT_JWT="$(jq -r '.workflow_agent' .agent/DEV_JWT_TOKENS.json)"
 export CODEX_AGENT_JWT="$(jq -r '.codex_agent' .agent/DEV_JWT_TOKENS.json)"
 ```
@@ -133,17 +155,16 @@ uv run migrate
 uv run makemigrations <short_name>
 
 # Upload all project manifests into the database
-uv run commands upload-project-manifest --path src/manifests/projects --all
+uv run command upload-project-manifest --all
 
 # Update one existing project manifest
-uv run commands update-project-manifest --path src/manifests/projects --project landingpage
+uv run command update-project-manifest --project landingpage
 
 # Update all existing project manifests
-uv run commands update-project-manifest --path src/manifests/projects --all
+uv run command update-project-manifest --all
 
-# Update an existing production manifest from the host
-COMMANDS_COMPOSE_PROJECT_NAME=mcp-log-server-prod COMMANDS_APP_SERVICE=app \
-  uv run commands update-project-manifest --path src/manifests/projects --all
+# Update existing production manifests from the host
+uv run command update-project-manifest --all
 
 # Build a tagged production image
 TAG=v1.2.3 infra/scripts/release/build.sh
@@ -152,11 +173,32 @@ TAG=v1.2.3 infra/scripts/release/build.sh
 TAG=v1.2.3 infra/scripts/release/deploy.sh
 ```
 
+After a successful deploy records `current_tag`, host-side `uv run shell` and
+`uv run command ...` helpers default `TAG` from that file when `TAG` is not
+already set.
+
 ## Production Notes
 
 Production deploys should run through Doppler and the release scripts. The app
 fails fast when required production database/JWT secrets are missing or known
 local placeholders are used.
+
+Project manifests are data, not MCP application code. This repository may use
+`src/manifests/projects` for local development examples, but production
+manifests should come from the operational project that owns them, such as the
+new `devops/` project. Configure `PROJECT_MANIFESTS_HOST_PATH` with that host
+directory and Compose mounts it at `PROJECT_MANIFESTS_PATH` inside the app
+container. The upload/update commands default to `PROJECT_MANIFESTS_PATH`, so
+normal production usage does not need `--path`.
+
+In production, file source paths must be written as paths visible inside the
+MCP container. `docker-compose.prod.yml` mounts host `/var/log` as
+`/host/var/log` and host `/etc/nginx/logs` as `/host/etc/nginx/logs`, so a host
+log like `/var/log/app/app.jsonl` should be configured as
+`/host/var/log/app/app.jsonl` in the manifest. Manifest targets are literal
+absolute paths; date templates are not expanded. For dated log files, use a
+stable current path, a host-side symlink/logrotate convention, or update the
+manifest from the owning ops repository.
 
 The local and production app containers may mount `/var/run/docker.sock` so MCP
 collection and inspection tools can read approved Docker metadata and logs. The

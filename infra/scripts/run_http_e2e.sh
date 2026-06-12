@@ -18,6 +18,7 @@ export DATABASE_PORT="${DATABASE_PORT:-${DATABASE_PORT_HOST:-5437}}"
 export DATABASE_NAME="${E2E_DATABASE_NAME:-mcp_log_server_test}"
 export DATABASE_USER="${DATABASE_USER:-mcp_log_server}"
 export DATABASE_PASSWORD="${DATABASE_PASSWORD:-mcp-log-server-local-password}"
+export COMMANDS_DISABLE_COMPOSE_BRIDGE=1
 
 if [[ "$DATABASE_NAME" != *_test ]]; then
   echo "Refusing to run HTTP E2E against non-test database: $DATABASE_NAME" >&2
@@ -165,7 +166,7 @@ async def main() -> None:
 
 asyncio.run(main())
 PY
-  uv run commands generate-dev-jwt --output-file "$TOKENS_FILE"
+  uv run command generate-dev-jwt --output-file "$TOKENS_FILE"
 )
 WORKFLOW_AGENT_JWT="$(jq -r '.workflow_agent' "$TOKENS_FILE")"
 CODEX_AGENT_JWT="$(jq -r '.codex_agent' "$TOKENS_FILE")"
@@ -174,10 +175,10 @@ export CODEX_AGENT_JWT
 
 (
   cd "$REPO_ROOT/src"
-  uv run python -m scripts.main upload-project-manifest-internal \
+  uv run python -m cli.main upload-project-manifest \
     --path "$MANIFESTS_DIR" \
     --all >/dev/null
-  uv run python -m scripts.main update-project-manifest-internal \
+  uv run python -m cli.main update-project-manifest \
     --path "$MANIFESTS_DIR" \
     --project landingpage >/dev/null
 )

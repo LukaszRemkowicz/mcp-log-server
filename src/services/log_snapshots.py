@@ -23,7 +23,11 @@ from tools.models import (
     SnapshotWorkspace,
 )
 from tools.utils import cleanup_old_snapshot_dirs, parse_snapshot_retention
-from utils.log_snapshots import build_snapshot_not_found_retry_tips, classify_snapshot_tool_error
+from utils.log_snapshots import (
+    build_snapshot_not_found_retry_tips,
+    classify_snapshot_tool_error,
+    is_collection_diagnostics_source_key,
+)
 
 DEFAULT_GREP_MATCH_LIMIT = 100
 MAX_GREP_MATCH_LINE_BYTES = 2000
@@ -415,7 +419,11 @@ class LogSnapshotService:
         selected_sources: list[CollectLogsSourceOut] = (
             [item for item in available_sources if item.source_key in set(source_keys or [])]
             if source_keys
-            else list(available_sources)
+            else [
+                item
+                for item in available_sources
+                if not is_collection_diagnostics_source_key(item.source_key)
+            ]
         )
         if not selected_sources:
             return [], 0
@@ -563,18 +571,13 @@ class LogSnapshotService:
         This method:
 
         - resolves the project's workflow `latest` and `archive` directories
-        - applies archive retention cleanup
         - recreates an empty `latest` directory for direct writes
         """
 
         latest_output_dir: Path = Path(snapshot_dir)
         if not latest_output_dir.is_absolute():
             latest_output_dir = self.storage.path(latest_output_dir)
-        archive_dir: Path = self.storage.ensure_dir(latest_output_dir.parent / "archive")
-        cleanup_old_snapshot_dirs(
-            archive_dir,
-            retention=parse_snapshot_retention(settings.WORKFLOW_ARCHIVE_RETENTION),
-        )
+        self.storage.ensure_dir(latest_output_dir.parent / "archive")
         if latest_output_dir.exists():
             shutil.rmtree(latest_output_dir)
         latest_output_dir.mkdir(parents=True, exist_ok=True)

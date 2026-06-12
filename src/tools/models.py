@@ -352,6 +352,58 @@ class ProxyRouteSignalPayload(BaseModel):
     last_seen: SnapshotLineReferencePayload
 
 
+class ProbeBlockingPolicyPayload(BaseModel):
+    """Fail2ban policy used to decide whether probe traffic should trigger a ban."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    findtime: str
+    maxretry: int
+    bantime: str
+
+
+class ProbeBlockingIpPayload(BaseModel):
+    """One suspicious IP correlated with fail2ban activity for one jail."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ip: str
+    jail: str
+    sources: list[str]
+    request_count: int
+    paths: list[str]
+    last_seen: str
+    maxretry: int
+    expected_ban: bool
+    observed_ban: bool
+    ban_count: int
+    unban_count: int
+    already_banned_count: int
+    last_ban_at: str
+    last_unban_at: str
+
+
+class InspectProbeBlockingActivityPayload(BaseModel):
+    """Structured response returned by `inspect_probe_blocking_activity`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_probe_blocking_activity"]
+    requested_project_name: str | None
+    project_name: str
+    workspace: SnapshotWorkspace
+    session_id: str | None
+    snapshot_dir: str
+    searched_source_keys: list[str]
+    policy: dict[str, ProbeBlockingPolicyPayload]
+    suspicious_ip_count: int
+    suspicious_request_count: int
+    expected_ban_ip_count: int
+    observed_ban_ip_count: int
+    expected_but_not_observed: list[str]
+    suspicious_ips: list[ProbeBlockingIpPayload]
+
+
 class Fail2banServiceStatusPayload(BaseModel):
     """Structured output from `fail2ban-client status`."""
 

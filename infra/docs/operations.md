@@ -37,6 +37,8 @@ TAG=v1.2.3 infra/scripts/release/deploy.sh
 
 For build and deploy, `TAG` may be provided through the environment. If it is
 omitted, the scripts use the exact Git tag checked out in the working tree.
+After deploy records `current_tag`, host-side `uv run shell` and
+`uv run command ...` helpers default `TAG` from that file when `TAG` is unset.
 
 The deploy script verifies the local image, creates a DB backup by default,
 applies committed migrations with `uv run migrate`, starts the app service, and

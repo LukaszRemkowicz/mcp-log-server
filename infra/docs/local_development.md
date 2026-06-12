@@ -152,10 +152,10 @@ with:
 
 ```toml
 [project.scripts]
-commands = "scripts.main:main"
-makemigrations = "database.cli:makemigrations"
-migrate = "database.cli:migrate"
-shell = "scripts.shell:main"
+command = "cli.main:main"
+makemigrations = "cli.db:makemigrations"
+migrate = "cli.db:migrate"
+shell = "cli.shell:main"
 
 [tool.aerich]
 tortoise_orm = "database.config.TORTOISE_ORM"
@@ -164,7 +164,7 @@ src_folder = "./src"
 ```
 
 Typer command documentation lives in
-[src/scripts/README.md](../../src/scripts/README.md).
+[src/cli/README.md](../../src/cli/README.md).
 
 Generate new migration files only after the related model structure has been
 reviewed and approved.
@@ -224,48 +224,50 @@ await CollectLogs.objects.filter(project_name="landingpage")
 Upload configured project manifests into the database:
 
 ```bash
-uv run commands upload-project-manifest --path src/manifests/projects landingpage
-uv run commands upload-project-manifest --path src/manifests/projects --all
+uv run command upload-project-manifest landingpage
+uv run command upload-project-manifest --all
 ```
+
+`src/manifests/projects` is a convenient local development location, not the
+production source of truth. Production project manifests should be supplied by
+the operational repository that owns them, such as the new `devops/` project,
+and passed to these commands with `--path`.
 
 Upload is create-only. Existing project manifests are reported and left
 untouched. To update an existing manifest, run:
 
 ```bash
-uv run commands update-project-manifest --path src/manifests/projects --project landingpage
+uv run command update-project-manifest --project landingpage
 ```
 
 To update every existing manifest from the configured directory, run:
 
 ```bash
-uv run commands update-project-manifest --path src/manifests/projects --all
+uv run command update-project-manifest --all
 ```
 
 Run this command on the host where the Docker Compose app service is running.
-It uses Docker SDK to execute a hidden internal command inside the app
-container, so database access uses Docker service DNS (`db:5432`) instead of
-host `127.0.0.1:5432`. The command reads manifests from `--path`; when omitted,
-`--path` defaults to the current working directory (`.`).
+Host-side `uv run command ...` bridges into the Compose app container when a
+deployed tag is available, so database access uses Docker service DNS
+(`db:5432`) instead of host `127.0.0.1:5432`. The command reads manifests from
+`PROJECT_MANIFESTS_PATH`; Compose mounts
+`${PROJECT_MANIFESTS_HOST_PATH}` at that container
+path.
 
-The command finds the running app container through two environment variables:
-
-- `COMMANDS_COMPOSE_PROJECT_NAME`
-  Compose project name. Default: `mcp-log-server`.
-- `COMMANDS_APP_SERVICE`
-  Compose service name. Default: `app`.
-
-Production deployments usually use the Compose project
-`mcp-log-server-prod`, so update production manifests with:
+Production can use the short command:
 
 ```bash
-COMMANDS_COMPOSE_PROJECT_NAME=mcp-log-server-prod \
-COMMANDS_APP_SERVICE=app \
-uv run commands update-project-manifest \
-  --path src/manifests/projects \
-  --all
+uv run command update-project-manifest --all
 ```
 
 Runtime MCP tools read project manifests from the database. Manifest JSON files
 are source input for the upload/update commands, not runtime app settings and
 not the lookup path for `collect_logs`, `list_projects`, or manifest-backed
 analysis.
+
+Manifest file source targets must be absolute paths as seen from inside the MCP
+container. In production, `docker-compose.prod.yml` mounts host `/var/log` at
+`/host/var/log` and host `/etc/nginx/logs` at `/host/etc/nginx/logs`. For
+example, host `/var/log/app/app.jsonl` should be written in the manifest as
+`/host/var/log/app/app.jsonl`. Targets are literal paths; dated filename
+templates are not expanded.

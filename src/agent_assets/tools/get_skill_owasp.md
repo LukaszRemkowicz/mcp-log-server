@@ -1,4 +1,4 @@
-# Tool: `get_skill_owasp`
+# Action: `read_skills` with `skill_names=["owasp_security"]`
 
 Purpose:
 - return the OWASP-focused monitoring skill for security-oriented log analysis
@@ -11,6 +11,9 @@ When not to use:
 - when the findings are clearly routine and no security interpretation is needed
 - when the OWASP skill was already retrieved in the current loop and no new evidence justifies repeating it
 
+Arguments:
+- `skill_names`: include `owasp_security`
+
 Output shape:
-- `skill_name`
-- `content`
+- `action`
+- `skills`

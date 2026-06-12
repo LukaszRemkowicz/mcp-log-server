@@ -38,7 +38,10 @@ from tools.models import (
 )
 from tools.utils import SourceKeyArgumentError, resolve_source_keys_for_snapshot
 from utils.log_preview import truncate_log_preview
-from utils.log_snapshots import build_snapshot_not_found_retry_tips
+from utils.log_snapshots import (
+    build_snapshot_not_found_retry_tips,
+    is_collection_diagnostics_source_key,
+)
 from utils.types import JSONObject, JSONValue
 
 logger: logging.Logger = get_logger("tools.snapshots")
@@ -570,7 +573,9 @@ async def grep_log_snapshot(
     matches, total_match_count = grep_result
     matched_source_keys: list[str] = sorted({match.source_key for match in matches})
     searched_source_keys: list[str] = source_keys or [
-        item.source_key for item in context.metadata.files
+        item.source_key
+        for item in context.metadata.files
+        if not is_collection_diagnostics_source_key(item.source_key)
     ]
     payload = GrepLogSnapshotPayload(
         action="grep_log_snapshot",

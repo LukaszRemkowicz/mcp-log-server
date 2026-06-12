@@ -47,7 +47,7 @@ from auth.scopes import WORKFLOW_BOOTSTRAP_SCOPE
 from decorators import list_workflow_discoverable_tool_registrations
 from dependencies import get_workflow_asset_loader
 from logging_config import get_logger
-from prompts.workflow import build_daily_log_prompt
+from prompts.workflow import build_daily_log_prompt, build_sitemap_analysis_prompt
 from skills.workflow import (
     WorkflowSkillMetadata,
     list_mandatory_workflow_skill_definitions,
@@ -88,8 +88,10 @@ class WorkflowBootstrapPayload(TypedDict):
     - the MCP tools visible for the current token and marked as
       workflow-discoverable
 
-    It does not include raw skill text. Skills are fetched later through MCP
-    resources so the workflow can stay token-efficient.
+    It does not include raw skill text. Mandatory skills are fetched by the
+    monitoring app before the first LLM call; optional skills can be fetched
+    later through MCP resources when the monitoring agent validates a
+    `read_skills` action.
 
     It also does not need to include the bootstrap tool itself. The caller has
     already used `analyze_daily_log_bundle` to obtain this payload. The `tools`
@@ -167,6 +169,20 @@ def build_workflow_bootstrap_payload(
     }
 
 
+def build_sitemap_workflow_bootstrap_payload(
+    asset_loader: WorkflowAssetLoader,
+) -> WorkflowBootstrapPayload:
+    """Assemble the structured bootstrap payload for sitemap analysis."""
+
+    return {
+        "workflow_name": "analyze_sitemap_bundle",
+        "prompt": build_sitemap_analysis_prompt(asset_loader),
+        "mandatory_skills": [],
+        "optional_skills": [],
+        "tools": [],
+    }
+
+
 @mcp.tool(auth=require_scopes(WORKFLOW_BOOTSTRAP_SCOPE))
 def analyze_daily_log_bundle(
     asset_loader: WorkflowAssetLoader = Depends(get_workflow_asset_loader),
@@ -182,9 +198,11 @@ def analyze_daily_log_bundle(
     - optional skill metadata
     - the workflow-discoverable follow-up tool inventory for the current JWT
 
-    The actual skill content is not embedded here. If the LLM decides it needs
-    a skill, the agent should fetch that skill later through `resources/read`
-    using the returned `skill://workflow/...` resource URIs.
+    The actual skill content is not embedded here. The monitoring app fetches
+    mandatory skills before its first LLM call. If the LLM later needs optional
+    bot-detection or security guidance, it should return a `read_skills` action
+    with skill names from `optional_skills`; the monitoring app validates that
+    request and reads the corresponding MCP skill resources.
 
     The returned `tools` field is intentionally a curated subset, not the full
     `tools/list` response. It highlights the deterministic MCP actions the
@@ -201,6 +219,27 @@ def analyze_daily_log_bundle(
             "mandatory_skill_count": len(payload["mandatory_skills"]),
             "optional_skill_count": len(payload["optional_skills"]),
             "tool_count": len(payload["tools"]),
+        },
+    )
+    return ToolResult(
+        content=[],
+        structured_content=payload,
+    )
+
+
+@mcp.tool(auth=require_scopes(WORKFLOW_BOOTSTRAP_SCOPE))
+def analyze_sitemap_bundle(
+    asset_loader: WorkflowAssetLoader = Depends(get_workflow_asset_loader),
+) -> ToolResult:
+    """Return the generic sitemap-analysis workflow bootstrap payload."""
+
+    payload = build_sitemap_workflow_bootstrap_payload(asset_loader)
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "analyze_sitemap_bundle",
+            "prompt_chars": len(payload["prompt"]),
         },
     )
     return ToolResult(

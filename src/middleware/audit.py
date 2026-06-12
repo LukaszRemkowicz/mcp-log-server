@@ -25,8 +25,9 @@ from typing import Any, cast
 from uuid import UUID
 
 import mcp.types as mt
-from fastmcp.exceptions import NotFoundError
-from fastmcp.resources.base import ResourceResult
+from fastmcp.exceptions import AuthorizationError, NotFoundError
+from fastmcp.resources.base import Resource, ResourceResult
+from fastmcp.resources.template import ResourceTemplate
 from fastmcp.server.auth import AccessToken
 from fastmcp.server.dependencies import get_access_token, get_http_request
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
@@ -510,7 +511,8 @@ async def _authenticate_mcp_caller(
             client_id=client_id,
             client_type=client_type,
             workspace=workspace,
-            allow_empty_projects=tool_name in {"get_mcp_service_status", "list_projects"},
+            allow_empty_projects=tool_name
+            in {"get_mcp_service_status", "list_projects", "mcp_discovery"},
             allow_any_workspace=allow_any_workspace,
         )
     except BaseORMException:
@@ -576,12 +578,83 @@ class AccessAuditMiddleware(Middleware):
         """Log one authenticated `tools/list` request after filtering completes."""
 
         token = get_access_token()
+        if token is not None:
+            caller_result = await _authenticate_mcp_caller(
+                token=token,
+                workspace=LogWorkspace.WORKFLOW,
+                tool_name="mcp_discovery",
+                allow_any_workspace=True,
+            )
+            if isinstance(caller_result, AgentToolErrorResult):
+                raise AuthorizationError(
+                    str((caller_result.structured_content or {}).get("message"))
+                )
         result = await call_next(context)
         logger.info(
             "mcp tools listed",
             extra={
                 "event": "mcp_list_tools",
                 "tool_count": len(result),
+                **_build_auth_fields(token),
+            },
+        )
+        return result
+
+    async def on_list_resources(
+        self,
+        context: MiddlewareContext[mt.ListResourcesRequest],
+        call_next: CallNext[mt.ListResourcesRequest, Sequence[Resource]],
+    ) -> Sequence[Resource]:
+        """Log one authenticated `resources/list` request after filtering completes."""
+
+        token = get_access_token()
+        if token is not None:
+            caller_result = await _authenticate_mcp_caller(
+                token=token,
+                workspace=LogWorkspace.WORKFLOW,
+                tool_name="mcp_discovery",
+                allow_any_workspace=True,
+            )
+            if isinstance(caller_result, AgentToolErrorResult):
+                raise AuthorizationError(
+                    str((caller_result.structured_content or {}).get("message"))
+                )
+        result = await call_next(context)
+        logger.info(
+            "mcp resources listed",
+            extra={
+                "event": "mcp_list_resources",
+                "resource_count": len(result),
+                **_build_auth_fields(token),
+            },
+        )
+        return result
+
+    async def on_list_resource_templates(
+        self,
+        context: MiddlewareContext[mt.ListResourceTemplatesRequest],
+        call_next: CallNext[mt.ListResourceTemplatesRequest, Sequence[ResourceTemplate]],
+    ) -> Sequence[ResourceTemplate]:
+        """Log authenticated `resources/templates/list` after filtering completes."""
+
+        token = get_access_token()
+        if token is not None:
+            caller_result = await _authenticate_mcp_caller(
+                token=token,
+                workspace=LogWorkspace.WORKFLOW,
+                tool_name="mcp_discovery",
+                allow_any_workspace=True,
+            )
+            if isinstance(caller_result, AgentToolErrorResult):
+                raise AuthorizationError(
+                    str((caller_result.structured_content or {}).get("message"))
+                )
+        result = await call_next(context)
+        logger.info(
+            "mcp resource templates listed",
+            extra={
+                "event": "mcp_list_resource_templates",
+                "resource_template_count": len(result),
                 **_build_auth_fields(token),
             },
         )
@@ -596,6 +669,17 @@ class AccessAuditMiddleware(Middleware):
 
         token = get_access_token()
         started_at = perf_counter()
+        if token is not None:
+            caller_result = await _authenticate_mcp_caller(
+                token=token,
+                workspace=LogWorkspace.WORKFLOW,
+                tool_name="mcp_discovery",
+                allow_any_workspace=True,
+            )
+            if isinstance(caller_result, AgentToolErrorResult):
+                raise AuthorizationError(
+                    str((caller_result.structured_content or {}).get("message"))
+                )
         result = await call_next(context)
         logger.info(
             "mcp resource read",
@@ -644,6 +728,8 @@ class AccessAuditMiddleware(Middleware):
         session_id = None
         if tool_name == "collect_logs":
             session_id = _prepare_collect_logs_arguments(context, workspace=workspace)
+        elif isinstance(arguments.get("session_id"), str):
+            session_id = arguments["session_id"]
         request_agent_session: AuthenticatedAgentSession | None = None
         if session_id is not None:
             agent_session_result = await _prepare_agent_session(
@@ -652,8 +738,10 @@ class AccessAuditMiddleware(Middleware):
                 session_id=session_id,
             )
             if isinstance(agent_session_result, AgentToolErrorResult):
-                return agent_session_result
-            request_agent_session = agent_session_result
+                if tool_name == "collect_logs":
+                    return agent_session_result
+            else:
+                request_agent_session = agent_session_result
         agent_call_pk: UUID | None = None
         if request_agent_session is not None:
             agent_call_result = await _create_agent_call(

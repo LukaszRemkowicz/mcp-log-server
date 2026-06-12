@@ -137,7 +137,6 @@ Currently implemented tools:
 
 Workflow skills are exposed as concrete read-only MCP resources, for example:
 
-- `skill://workflow/project_context`
 - `skill://workflow/severity_guide`
 - `skill://workflow/recommendations_guide`
 - `skill://workflow/bot_detection`
@@ -233,13 +232,19 @@ This is a development-ready JWT flow, not a final Keycloak production rollout.
 
 ## Current Manifest Model
 
-The current bundled sample manifest is:
+Project manifests are runtime inventory/config for collector-style MCP tools.
+They are not prompts and not workflow payloads.
 
-- `src/manifests/projects/landingpage.json`
+This repository may use `src/manifests/projects` as a local development
+manifest directory, but that directory is not the production source of truth.
+Production manifests should come from the operational repository that owns
+them, such as the new `devops/` project, and be uploaded or updated into the
+MCP database with the manifest commands.
 
-This is runtime project inventory/config for future collector-style tools.
-
-It is not a prompt and not a workflow payload.
+File source targets must be absolute paths as seen by the MCP container. In
+production Compose, host `/var/log` is mounted at `/host/var/log`, and host
+`/etc/nginx/logs` is mounted at `/host/etc/nginx/logs`. Manifest targets are
+literal paths; MCP does not expand dated filename templates.
 
 ## Current Docker Paths
 
@@ -272,9 +277,7 @@ Characteristics:
 - no file watching
 - runs `app` and `db` services
 - uses the official `postgres:18` image for the `db` service
-- persists database data in the host directory configured by
-  `POSTGRES_DATA_DIR` (`/var/lib/mcp-log-server/postgresql` by default), not in
-  a Compose-managed Docker volume
+- persists database data in the Compose-managed `postgres-data` Docker volume
 - binds the MCP HTTP host port to `127.0.0.1`
 - starts with `uv run python -m main`
 

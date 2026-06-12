@@ -8,11 +8,10 @@ from pathlib import Path
 from typing import cast
 
 from fastmcp.dependencies import CurrentAccessToken
-from fastmcp.server.auth import AccessToken, require_scopes
+from fastmcp.server.auth import AccessToken
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
 
-from app import mcp
 from auth.mcp_authorized_manifests import AuthorizedProjectManifests
 from auth.mcp_caller_context import get_request_mcp_caller
 from auth.scopes import LOGS_COLLECT_SCOPE
@@ -32,6 +31,7 @@ from tools.agent_hints import (
     GROUP_ERRORS_NEXT_STEP_TIPS,
     GROUP_ERRORS_TOOL_DESCRIPTION,
     INCIDENT_BUNDLE_NEXT_STEP_TIPS,
+    INSPECT_PROBE_BLOCKING_ACTIVITY_TOOL_DESCRIPTION,
     INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
     LOG_ANALYSIS_CAUTIONS,
     PROXY_ACTIVITY_NEXT_STEP_TIPS,
@@ -365,9 +365,9 @@ def _build_filtered_view_source_key_error_result(
     )
 
 
-@mcp.tool(
-    auth=require_scopes(LOGS_COLLECT_SCOPE),
-    description=GROUP_ERRORS_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    LOGS_COLLECT_SCOPE,
+    mcp_description=GROUP_ERRORS_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def group_errors(
@@ -476,9 +476,81 @@ async def group_errors(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(LOGS_COLLECT_SCOPE),
-    description=INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    LOGS_COLLECT_SCOPE,
+    mcp_description=INSPECT_PROBE_BLOCKING_ACTIVITY_TOOL_DESCRIPTION,
+)
+@project_authorized_tool
+async def inspect_probe_blocking_activity(
+    project_name: str,
+    session_id: str | None = None,
+    archive_name: str | None = None,
+    source_keys: list[str] | None = None,
+    source_key: str | None = None,
+) -> ToolResult:
+    """Correlate sensitive-path proxy probes with historical fail2ban events."""
+
+    context = await authorize_and_get_snapshot(
+        tool_name="inspect_probe_blocking_activity",
+        project_name=project_name,
+        session_id=session_id,
+        archive_name=archive_name,
+    )
+    if isinstance(context, ToolResult):
+        return context
+
+    try:
+        source_keys = resolve_source_keys_for_snapshot(source_keys, source_key)
+    except SourceKeyArgumentError as error:
+        return build_invalid_source_key_arguments_result(
+            message=str(error),
+            source_key=source_key,
+            source_keys=source_keys,
+        )
+
+    try:
+        payload = analysis_service.inspect_probe_blocking_activity(
+            context.metadata,
+            sources=context.sources,
+            requested_source_keys=source_keys,
+            requested_project_name=project_name,
+            project_name=context.project_name,
+        )
+    except ValueError as error:
+        return _build_analysis_source_key_error_result(
+            tool_name="inspect_probe_blocking_activity",
+            error=error,
+            project_name=project_name,
+            session_id=session_id,
+            archive_name=archive_name,
+            requested_source_keys=source_keys,
+            max_groups=0,
+        )
+
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_probe_blocking_activity",
+            "session_id": payload.session_id,
+            "archive_name": archive_name,
+            "workspace": payload.workspace,
+            "searched_source_count": len(payload.searched_source_keys),
+            "suspicious_ip_count": payload.suspicious_ip_count,
+            "expected_ban_ip_count": payload.expected_ban_ip_count,
+            "observed_ban_ip_count": payload.observed_ban_ip_count,
+        },
+    )
+    response = dict(
+        analysis_cautions=LOG_ANALYSIS_CAUTIONS,
+        **payload.model_dump(mode="json"),
+    )
+    return ToolResult(content=[], structured_content=response)
+
+
+@workflow_discoverable_tool(
+    LOGS_COLLECT_SCOPE,
+    mcp_description=INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def inspect_proxy_activity(
@@ -556,9 +628,9 @@ async def inspect_proxy_activity(
     return ToolResult(content=[], structured_content=response)
 
 
-@mcp.tool(
-    auth=require_scopes(LOGS_COLLECT_SCOPE),
-    description=BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    LOGS_COLLECT_SCOPE,
+    mcp_description=BUILD_INCIDENT_BUNDLE_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def build_incident_bundle(
@@ -658,9 +730,9 @@ async def build_incident_bundle(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(LOGS_COLLECT_SCOPE),
-    description=CREATE_FILTERED_VIEW_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    LOGS_COLLECT_SCOPE,
+    mcp_description=CREATE_FILTERED_VIEW_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def create_filtered_view(

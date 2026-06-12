@@ -20,14 +20,15 @@ dependencies = [
   "pydantic>=2.9.0",
   "tortoise-orm[asyncpg]>=0.25.1",
   "typer>=0.24.0",
+  "django-environ>=0.13.0",
 ]
 
 [project.scripts]
-commands = "scripts.main:main"
-makemigrations = "database.cli:makemigrations"
-migrate = "database.cli:migrate"
-shell = "scripts.shell:main"
-test = "database.cli:test"
+command = "cli.main:main"
+makemigrations = "cli.db:makemigrations"
+migrate = "cli.db:migrate"
+shell = "cli.shell:main"
+test = "cli.test:test"
 
 [dependency-groups]
 dev = [
@@ -39,7 +40,7 @@ dev = [
   "pytest>=8.3.0",
   "pytest-mock>=3.15.1",
   "ruff>=0.15.12",
-  "safety>=3.6.1",
+  "safety>=3.8.0",
 ]
 
 [tool.black]
@@ -72,7 +73,7 @@ constraint-dependencies = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/database", "src/scripts"]
+packages = ["src/cli", "src/database"]
 
 [tool.ruff]
 exclude = ["migrations"]
@@ -85,7 +86,7 @@ select = ["E", "F", "I", "UP"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
-testpaths = ["src/tests", "src/scripts/tests"]
+testpaths = ["src/tests", "src/cli/tests"]
 
 [tool.aerich]
 tortoise_orm = "database.config.TORTOISE_ORM"

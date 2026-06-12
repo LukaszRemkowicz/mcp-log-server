@@ -10,7 +10,6 @@ commands from callers.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
@@ -90,8 +89,8 @@ class Fail2banProxyHandler(BaseHTTPRequestHandler):
 def main() -> None:
     """Run the internal fail2ban proxy HTTP server."""
 
-    host = os.environ.get("FAIL2BAN_PROXY_HOST", "0.0.0.0")
-    port = int(os.environ.get("FAIL2BAN_PROXY_PORT", "8765"))
+    host = settings.FAIL2BAN_PROXY_HOST
+    port = settings.FAIL2BAN_PROXY_PORT
     server = ThreadingHTTPServer((host, port), Fail2banProxyHandler)
     server.serve_forever()
 

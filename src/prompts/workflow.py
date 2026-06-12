@@ -16,3 +16,9 @@ def build_daily_log_prompt(asset_loader: WorkflowAssetLoader) -> str:
             asset_loader.load_text("prompts/monitoring_log_response_format.md").strip(),
         ]
     )
+
+
+def build_sitemap_analysis_prompt(asset_loader: WorkflowAssetLoader) -> str:
+    """Build the prepared sitemap analysis prompt text."""
+
+    return asset_loader.load_text("prompts/sitemap_analysis_summary.md").strip()
