@@ -75,3 +75,35 @@ def test_main_dry_run_flag_can_follow_subcommand(
         "local",
         ["python", "-m", "cli.main", "generate-dev-jwt"],
     )
+
+
+def test_main_help_does_not_bridge_to_compose(
+    capsys: pytest.CaptureFixture[str],
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch.object(sys, "argv", ["command", "--help"])
+    mocker.patch("cli.main.should_bridge_to_compose", return_value=True)
+    run_compose_command = mocker.patch("cli.main.run_compose_command")
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli_main.main()
+
+    assert exit_info.value.code == 0
+    assert "Project maintenance commands for mcp-log-server" in capsys.readouterr().out
+    run_compose_command.assert_not_called()
+
+
+def test_subcommand_help_does_not_bridge_to_compose(
+    capsys: pytest.CaptureFixture[str],
+    mocker: MockerFixture,
+) -> None:
+    mocker.patch.object(sys, "argv", ["command", "upload-project-manifest", "--help"])
+    mocker.patch("cli.main.should_bridge_to_compose", return_value=True)
+    run_compose_command = mocker.patch("cli.main.run_compose_command")
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli_main.main()
+
+    assert exit_info.value.code == 0
+    assert "Upload one or all configured project manifests" in capsys.readouterr().out
+    run_compose_command.assert_not_called()

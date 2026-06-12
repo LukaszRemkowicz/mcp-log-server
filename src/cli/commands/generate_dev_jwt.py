@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -32,43 +33,53 @@ TOKEN_WORKSPACES = {
     "workflow_agent": LogWorkspace.WORKFLOW,
     "codex_agent": LogWorkspace.SESSION,
 }
+
+
+@dataclass(frozen=True, slots=True)
+class TokenCaller:
+    """Caller claims used for one generated token."""
+
+    client_id: str
+    client_type: str
+    allowed_projects: list[str]
+
+
 DEFAULT_TOKEN_CALLERS = {
-    "workflow_agent": {
-        "client_id": "workflow-agent",
-        "client_type": "workflow_agent",
-        "allowed_projects": ["all"],
-    },
-    "codex_agent": {
-        "client_id": "codex-agent",
-        "client_type": "codex",
-        "allowed_projects": ["all"],
-    },
+    "workflow_agent": TokenCaller(
+        client_id="workflow-agent",
+        client_type="workflow_agent",
+        allowed_projects=["all"],
+    ),
+    "codex_agent": TokenCaller(
+        client_id="codex-agent",
+        client_type="codex",
+        allowed_projects=["all"],
+    ),
 }
 
 
-async def _get_token_caller(token_name: str, workspace: LogWorkspace) -> McpCaller:
-    """Return the single DB caller row used for one generated token."""
+async def _get_token_caller(token_name: str, workspace: LogWorkspace) -> TokenCaller:
+    """Return DB caller claims, or default claims when no row exists."""
 
     callers = await McpCaller.objects.filter(workspace=workspace).order_by("id")
     if not callers:
-        default_caller = DEFAULT_TOKEN_CALLERS[token_name]
-        return await McpCaller.objects.create(
-            client_id=default_caller["client_id"],
-            client_type=default_caller["client_type"],
-            workspace=workspace,
-            allowed_projects=default_caller["allowed_projects"],
-        )
+        return DEFAULT_TOKEN_CALLERS[token_name]
     if len(callers) > 1:
         caller_names = ", ".join(f"{caller.client_id}/{caller.client_type}" for caller in callers)
         raise RuntimeError(
             f"Found multiple McpCaller rows for workspace '{workspace.value}' while generating "
             f"{token_name} token: {caller_names}. Keep one caller row per generated token."
         )
-    return callers[0]
+    caller = callers[0]
+    return TokenCaller(
+        client_id=caller.client_id,
+        client_type=caller.client_type,
+        allowed_projects=caller.allowed_projects,
+    )
 
 
-async def _get_token_callers() -> dict[str, McpCaller]:
-    """Return DB caller rows for generated token names."""
+async def _get_token_callers() -> dict[str, TokenCaller]:
+    """Return caller claims for generated token names."""
 
     return {
         token_name: await _get_token_caller(token_name, workspace)
@@ -79,7 +90,7 @@ async def _get_token_callers() -> dict[str, McpCaller]:
 def build_example_token_payloads(
     settings: Settings,
     *,
-    callers: dict[str, McpCaller],
+    callers: dict[str, TokenCaller],
     exp_time_hours: int | None = None,
 ) -> dict[str, dict[str, object]]:
     """Return example JWT payloads for local development clients."""
@@ -138,7 +149,7 @@ def build_example_token_payloads(
 def build_example_tokens(
     settings: Settings,
     *,
-    callers: dict[str, McpCaller],
+    callers: dict[str, TokenCaller],
     exp_time_hours: int | None = None,
 ) -> dict[str, str]:
     """Return signed example JWTs for local development."""
@@ -218,7 +229,7 @@ def generate_dev_jwt(
     --output-file when provided. Use these tokens for local MCP HTTP calls, curl
     examples, and E2E checks against the configured shared secret. The
     client_id, client_type, and allowed_projects claims come from McpCaller
-    database rows.
+    database rows when present, or built-in defaults when missing.
     """
 
     try:

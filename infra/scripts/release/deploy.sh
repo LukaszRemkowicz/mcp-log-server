@@ -57,6 +57,8 @@ JWT_AUDIENCE="${JWT_AUDIENCE:?JWT_AUDIENCE is required}"
 SITE_DOMAIN="${SITE_DOMAIN:?SITE_DOMAIN is required for Traefik MCP routing}"
 DOCKER_SOCKET_GID="${DOCKER_SOCKET_GID:?DOCKER_SOCKET_GID is required}"
 FAIL2BAN_LOG_GID="${FAIL2BAN_LOG_GID:?FAIL2BAN_LOG_GID is required}"
+PROJECT_MANIFESTS_HOST_PATH="${PROJECT_MANIFESTS_HOST_PATH:?PROJECT_MANIFESTS_HOST_PATH is required}"
+PROJECT_MANIFESTS_PATH="${PROJECT_MANIFESTS_PATH:-/app/project-manifests}"
 
 export \
     ENVIRONMENT \
@@ -70,7 +72,9 @@ export \
     JWT_AUDIENCE \
     SITE_DOMAIN \
     DOCKER_SOCKET_GID \
-    FAIL2BAN_LOG_GID
+    FAIL2BAN_LOG_GID \
+    PROJECT_MANIFESTS_HOST_PATH \
+    PROJECT_MANIFESTS_PATH
 
 cleanup() {
     rmdir "$LOCK_DIR" 2>/dev/null || true
@@ -95,6 +99,7 @@ printf "📦 Compose project: %s\n" "$COMPOSE_PROJECT_NAME"
 printf "🧾 Compose file: %s\n" "$COMPOSE_FILE"
 printf "🐳 Docker socket GID: %s\n" "$DOCKER_SOCKET_GID"
 printf "🧾 Fail2ban log GID: %s\n" "$FAIL2BAN_LOG_GID"
+printf "📁 Project manifests host path: %s\n" "$PROJECT_MANIFESTS_HOST_PATH"
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 if [[ "$ENABLE_FAIL2BAN_SOCKET" == "true" ]]; then
     if [[ ! -f "$FAIL2BAN_COMPOSE_FILE" ]]; then

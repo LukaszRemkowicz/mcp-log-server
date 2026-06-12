@@ -75,8 +75,9 @@ That prints a JSON payload with:
 - `created_at`
 - `updated_at`
 
-The command reads caller claims from `mcp_callers`. For an empty local database,
-it creates the default `workflow-agent` and `codex-agent` caller rows first.
+The command reads caller claims from `mcp_callers` when rows exist. If caller
+rows are missing, it uses built-in default claims without creating database
+rows.
 
 The usual local flow is to save it into `.agent/DEV_JWT_TOKENS.json`:
 

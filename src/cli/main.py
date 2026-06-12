@@ -17,6 +17,7 @@ from cli.utils import (
 )
 
 DRY_RUN_FLAGS = frozenset({"--dry-run", "-n"})
+HELP_FLAGS = frozenset({"--help", "-h"})
 
 app = typer.Typer(
     help=(
@@ -44,7 +45,7 @@ def _run(command_args: list[str]) -> None:
     """Run the project command app with explicit command args."""
 
     command_args, dry_run = _extract_dry_run(command_args)
-    if should_bridge_to_compose():
+    if should_bridge_to_compose() and not HELP_FLAGS.intersection(command_args):
         compose_command = ["python", "-m", "cli.main", *command_args]
         if dry_run:
             print(shlex.join(build_compose_command(get_current_environment(), compose_command)))

@@ -75,7 +75,7 @@ async def test_generate_dev_jwt_uses_custom_exp_time_hours(db: None) -> None:  #
 
 
 @pytest.mark.anyio
-async def test_generate_dev_jwt_creates_default_callers_when_missing(
+async def test_generate_dev_jwt_uses_default_claims_without_creating_callers_when_missing(
     db: None,  # noqa: ARG001
 ) -> None:
     await McpCaller.all().delete()
@@ -90,5 +90,5 @@ async def test_generate_dev_jwt_creates_default_callers_when_missing(
     assert codex_claims["client_id"] == "codex-agent"
     assert codex_claims["client_type"] == "codex"
     assert codex_claims["allowed_projects"] == ["all"]
-    assert await McpCaller.objects.filter(workspace=LogWorkspace.WORKFLOW).count() == 1
-    assert await McpCaller.objects.filter(workspace=LogWorkspace.SESSION).count() == 1
+    assert await McpCaller.objects.filter(workspace=LogWorkspace.WORKFLOW).count() == 0
+    assert await McpCaller.objects.filter(workspace=LogWorkspace.SESSION).count() == 0

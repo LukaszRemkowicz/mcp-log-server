@@ -65,8 +65,9 @@ created automatically. Without `--output-file`, the JSON is printed to stdout.
 The JWTs are signed with the local development settings. Regenerate them when
 they expire, when scopes change, or when identity claims change.
 
-The command reads caller claims from `mcp_callers`. For an empty local database,
-it creates the default `workflow-agent` and `codex-agent` caller rows first.
+The command reads caller claims from `mcp_callers` when rows exist. If caller
+rows are missing, it uses built-in default claims without creating database
+rows.
 
 ### Manifest Commands
 

@@ -2899,12 +2899,13 @@ async def test_tool_call_api_rejects_jwt_without_client_id(
             },
         },
     )
-    payload = response.json()["result"]["structuredContent"]
+    result = response.json()["result"]
+    error_text = result["content"][0]["text"]
 
     assert response.status_code == 200
-    assert response.json()["result"]["isError"] is True
-    assert payload["status"] == "error"
-    assert payload["error_code"] == "invalid_client_id"
+    assert result["isError"] is True
+    assert "Authenticated JWT must include a non-empty client_id." in error_text
+    assert "client_id" in error_text
 
 
 async def test_tool_call_api_rejects_jwt_for_unregistered_client(
@@ -2932,14 +2933,48 @@ async def test_tool_call_api_rejects_jwt_for_unregistered_client(
             },
         },
     )
-    payload = response.json()["result"]["structuredContent"]
+    result = response.json()["result"]
+    error_text = result["content"][0]["text"]
 
     assert response.status_code == 200
-    assert response.json()["result"]["isError"] is True
-    assert payload["status"] == "error"
-    assert payload["error_code"] == "mcp_client_not_authorized"
-    assert payload["details"] == {
-        "client_id": "unregistered-agent",
-        "client_type": "codex",
-        "workspace": "session",
-    }
+    assert result["isError"] is True
+    assert "Authenticated MCP client is not allowed to call tools." in error_text
+
+
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("tools/list", {}),
+        ("resources/list", {}),
+        ("resources/templates/list", {}),
+        ("resources/read", {"uri": "skill://workflow/severity_guide"}),
+    ],
+)
+async def test_discovery_api_rejects_jwt_for_unregistered_client(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    method: str,
+    params: dict[str, object],
+) -> None:
+    """Verify discovery and resource reads require a matching McpCaller row."""
+
+    token = custom_jwt_token(
+        "unregistered-agent",
+        [PROJECTS_READ_SCOPE, WORKFLOW_SKILLS_READ_SCOPE],
+        "unregistered-agent",
+        {"client_type": "codex"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": f"unregistered-{method}",
+            "method": method,
+            "params": params,
+        },
+    )
+    payload = response.json()["error"]
+
+    assert response.status_code == 200
+    assert "Authenticated MCP client is not allowed to call tools." in payload["message"]
