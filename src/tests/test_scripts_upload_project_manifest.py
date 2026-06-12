@@ -51,10 +51,15 @@ class FakeProjectManifestService:
 
 
 @asynccontextmanager
-async def fake_database_context() -> AsyncIterator[None]:
+async def fake_database_lifespan(_app: object = None) -> AsyncIterator[None]:
     """Avoid opening real DB connections in command tests."""
 
     yield
+
+
+@pytest.fixture(autouse=True)
+def _fake_database_lifespan(monkeypatch) -> None:
+    monkeypatch.setattr("decorators.database_lifespan", fake_database_lifespan)
 
 
 def _write_manifest(manifests_dir, project_key: str) -> None:
@@ -89,7 +94,6 @@ def test_upload_project_manifest_uploads_one_project(monkeypatch, tmp_path) -> N
     fake_service = FakeProjectManifestService()
 
     monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
-    monkeypatch.setattr(upload_command, "database_context", fake_database_context)
 
     result = runner.invoke(
         app,
@@ -110,7 +114,6 @@ def test_upload_project_manifest_uploads_all_projects(monkeypatch, tmp_path) -> 
     fake_service = FakeProjectManifestService()
 
     monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
-    monkeypatch.setattr(upload_command, "database_context", fake_database_context)
 
     result = runner.invoke(
         app,
@@ -133,7 +136,6 @@ def test_upload_project_manifest_reports_existing_without_update(
     fake_service.existing_project_keys.add("landingpage")
 
     monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
-    monkeypatch.setattr(upload_command, "database_context", fake_database_context)
 
     result = runner.invoke(
         app,
@@ -159,7 +161,6 @@ def test_update_project_manifest_updates_existing_project(
     fake_service.existing_project_keys.add("landingpage")
 
     monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
-    monkeypatch.setattr(upload_command, "database_context", fake_database_context)
 
     result = runner.invoke(
         app,
@@ -189,7 +190,6 @@ def test_update_project_manifest_updates_all_existing_projects(
     fake_service.existing_project_keys.update({"alpha", "zeta"})
 
     monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
-    monkeypatch.setattr(upload_command, "database_context", fake_database_context)
 
     result = runner.invoke(
         app,
@@ -215,7 +215,6 @@ def test_update_project_manifest_updates_all_and_reports_missing_projects(
     fake_service.existing_project_keys.add("landingpage")
 
     monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
-    monkeypatch.setattr(upload_command, "database_context", fake_database_context)
 
     result = runner.invoke(
         app,
@@ -239,7 +238,6 @@ def test_update_project_manifest_reports_missing_project(
     fake_service = FakeProjectManifestService()
 
     monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
-    monkeypatch.setattr(upload_command, "database_context", fake_database_context)
 
     result = runner.invoke(
         app,
@@ -334,7 +332,6 @@ def test_upload_project_manifest_defaults_to_configured_manifest_path(
     fake_service = FakeProjectManifestService()
 
     monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
-    monkeypatch.setattr(upload_command, "database_context", fake_database_context)
     monkeypatch.setattr(
         upload_command.settings,
         "PROJECT_MANIFESTS_PATH",

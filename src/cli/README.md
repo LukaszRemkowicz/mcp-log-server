@@ -69,6 +69,34 @@ The command reads caller claims from `mcp_callers` when rows exist. If caller
 rows are missing, it uses built-in default claims without creating database
 rows.
 
+### `slow-analysis-calls`
+
+Review slow snapshot-analysis MCP calls from existing audit metadata. This is
+an operator command, not an MCP tool, and is meant for production maintainers
+debugging expensive snapshot-analysis paths.
+
+Default usage:
+
+```bash
+uv run command slow-analysis-calls
+```
+
+Useful filters:
+
+```bash
+uv run command slow-analysis-calls \
+  --min-duration 2 \
+  --tool-name inspect_proxy_activity \
+  --project-name landingpage \
+  --limit 20
+```
+
+The output lists tool name, duration, caller workspace, project, requested
+source keys, sanitized selector arguments, and best-effort collected source line
+counts matched from `collect_logs` metadata. When no matching snapshot metadata
+can be identified, the timing row is still printed with line-count context
+marked unavailable.
+
 ### Manifest Commands
 
 Manifest commands upload or update runtime project manifest rows from JSON

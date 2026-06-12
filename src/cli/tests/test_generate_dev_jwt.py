@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from base64 import urlsafe_b64decode
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -34,9 +36,17 @@ async def _fake_token_response(
     }
 
 
+@asynccontextmanager
+async def fake_database_lifespan(_app: object = None) -> AsyncIterator[None]:
+    """Avoid opening real DB connections in command tests."""
+
+    yield
+
+
 def test_generate_dev_jwt_command_prints_example_tokens(mocker) -> None:
+    mocker.patch("decorators.database_lifespan", fake_database_lifespan)
     mocker.patch(
-        "cli.commands.generate_dev_jwt._build_example_token_response_with_database",
+        "cli.commands.generate_dev_jwt.build_example_token_response",
         _fake_token_response,
     )
 
@@ -57,8 +67,9 @@ def test_generate_dev_jwt_command_passes_custom_exp_time_hours(mocker) -> None:
         "updated_at": "2026-05-18T00:00:00Z",
     }
     build_response = mocker.AsyncMock(return_value=expected_payload)
+    mocker.patch("decorators.database_lifespan", fake_database_lifespan)
     mocker.patch(
-        "cli.commands.generate_dev_jwt._build_example_token_response_with_database",
+        "cli.commands.generate_dev_jwt.build_example_token_response",
         build_response,
     )
 
@@ -71,8 +82,9 @@ def test_generate_dev_jwt_command_passes_custom_exp_time_hours(mocker) -> None:
 
 
 def test_generate_dev_jwt_command_writes_tokens_to_output_file(mocker) -> None:
+    mocker.patch("decorators.database_lifespan", fake_database_lifespan)
     mocker.patch(
-        "cli.commands.generate_dev_jwt._build_example_token_response_with_database",
+        "cli.commands.generate_dev_jwt.build_example_token_response",
         _fake_token_response,
     )
 
