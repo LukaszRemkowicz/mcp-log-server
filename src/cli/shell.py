@@ -1,15 +1,131 @@
 """Developer shell with project helpers preloaded."""
 
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
+import sys
 from typing import Any
 
-os.environ.setdefault("DATABASE_HOST", "127.0.0.1")
-os.environ.setdefault("DATABASE_PORT", os.environ.get("DATABASE_PORT_HOST", "5437"))
-
+from cli.utils import (
+    get_commands_app_service,
+    get_commands_compose_project_name,
+    should_start_shell_repl,
+)
 from conf import settings
+
+MCP_PROJECT_SLUG = "mcp-log-server"
+
+
+def _running_inside_container() -> bool:
+    """Return whether this shell is already running inside a container."""
+
+    return os.path.exists("/.dockerenv")
+
+
+def _find_running_mcp_app_container() -> str | None:
+    """Return the running production MCP app container name when available."""
+
+    project_name = get_commands_compose_project_name()
+    service_name = get_commands_app_service()
+    if project_name:
+        container_name = _find_running_compose_service_container(
+            project_name=project_name,
+            service_name=service_name,
+        )
+        if container_name is not None:
+            return container_name
+
+    result = subprocess.run(
+        [
+            "docker",
+            "ps",
+            "--filter",
+            f"label=com.docker.compose.service={service_name}",
+            "--filter",
+            "status=running",
+            "--format",
+            '{{.Names}}\t{{.Image}}\t{{.Label "com.docker.compose.project"}}',
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        container_name, image_name, compose_project = _parse_container_candidate(line)
+        if any(
+            MCP_PROJECT_SLUG in value for value in (container_name, image_name, compose_project)
+        ):
+            return container_name
+    return None
+
+
+def _find_running_compose_service_container(
+    *,
+    project_name: str,
+    service_name: str,
+) -> str | None:
+    """Return the running Compose service container name for an explicit project."""
+
+    result = subprocess.run(
+        [
+            "docker",
+            "ps",
+            "--filter",
+            f"label=com.docker.compose.project={project_name}",
+            "--filter",
+            f"label=com.docker.compose.service={service_name}",
+            "--filter",
+            "status=running",
+            "--format",
+            "{{.Names}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    container_names = [name.strip() for name in result.stdout.splitlines() if name.strip()]
+    return container_names[0] if container_names else None
+
+
+def _parse_container_candidate(line: str) -> tuple[str, str, str]:
+    """Return container discovery fields from one docker-ps formatted line."""
+
+    parts = [part.strip() for part in line.split("\t", maxsplit=2)]
+    while len(parts) < 3:
+        parts.append("")
+    return parts[0], parts[1], parts[2]
+
+
+def reexec_inside_running_mcp_app_container_if_needed() -> None:
+    """Run host-side `uv run shell` inside the production app container when present."""
+
+    if _running_inside_container():
+        return
+    container_name = _find_running_mcp_app_container()
+    if container_name is None:
+        return
+    docker_args = ["docker", "exec", "-it"]
+    docker_args.extend([container_name, "uv", "run", "shell"])
+    os.execvp("docker", docker_args)
+
+
+def _loaded_from_shell_entrypoint() -> bool:
+    """Return whether this module is being loaded by the shell console script."""
+
+    return os.path.basename(sys.argv[0]) in {"shell", "shell.py"}
+
+
+if _loaded_from_shell_entrypoint():
+    reexec_inside_running_mcp_app_container_if_needed()
+
 from core.types import LogWorkspace
 from database.config import TORTOISE_ORM
 from database.lifecycle import close_database, initialize_database
@@ -20,8 +136,6 @@ from database.services.project_manifests import ProjectManifestService
 from database.types import AgentCallEvent, CollectLogsSourceStatus, LogSourceType, LogStream
 from services.agent_calls import AgentCallAuditService, AgentCallCreateError
 from services.log_collection import LogCollectionService
-
-SHELL_EXIT_AFTER_BOOT_ENV = "MCP_SHELL_EXIT_AFTER_BOOT"
 
 SHELL_IMPORT_LINES = [
     "from conf import settings",
@@ -127,5 +241,4 @@ def run_shell(*, start_repl: bool = True) -> int:
 def main() -> None:
     """Run the developer shell command."""
 
-    start_repl = os.getenv(SHELL_EXIT_AFTER_BOOT_ENV) != "1"
-    raise SystemExit(run_shell(start_repl=start_repl))
+    raise SystemExit(run_shell(start_repl=should_start_shell_repl()))

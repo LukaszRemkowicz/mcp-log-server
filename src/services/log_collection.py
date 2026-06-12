@@ -40,6 +40,9 @@ from .session_ids import SESSION_ID_MAX_LENGTH, generate_session_id
 
 _DOCKER_DURATION_PATTERN = re.compile(r"(?P<value>\d+)(?P<unit>[smhd])")
 _RAW_NGINX_TIMESTAMP_PATTERN = re.compile(r"\[(?P<timestamp>\d{2}/[A-Za-z]{3}/\d{4}:[^\]]+)\]")
+_NGINX_ERROR_TIMESTAMP_PATTERN = re.compile(
+    r"^(?P<timestamp>\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})\s+"
+)
 _FAIL2BAN_TIMESTAMP_PATTERN = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:,\d+)?"
 )
@@ -353,6 +356,10 @@ class LogCollectionService:
             snapshot_dir=snapshot_dir,
             time_filters=time_filters,
         )
+        collected_source_keys = self._build_collected_manifest_source_keys(
+            source_keys=source_keys,
+            collected_results=collected_results,
+        )
 
         requested_source_keys = [*source_keys, *missing_source_keys]
         collect_logs_obj = await self.save_logs_to_db(
@@ -364,7 +371,7 @@ class LogCollectionService:
                 snapshot_dir=snapshot_dir.as_posix(),
                 is_latest=False,
                 requested_source_keys=requested_source_keys,
-                resolved_source_keys=source_keys,
+                resolved_source_keys=collected_source_keys,
                 unknown_requested_source_keys=missing_source_keys,
                 requested_since=since,
                 requested_until=until,
@@ -413,11 +420,31 @@ class LogCollectionService:
             snapshot_dir=snapshot_dir,
             time_filters=time_filters,
         )
+        collected_source_keys = self._build_collected_manifest_source_keys(
+            source_keys=source_keys,
+            collected_results=collected_results,
+        )
         collect_logs_obj = await self.save_sources_to_db(
             collect_logs_obj=workflow_collect_logs_obj,
             collected_results=collected_results,
+            resolved_source_keys=collected_source_keys,
         )
         return self._build_project_payload(collect_logs_obj)
+
+    @staticmethod
+    def _build_collected_manifest_source_keys(
+        *,
+        source_keys: list[str],
+        collected_results: list[SourceCollectionResult],
+    ) -> list[str]:
+        """Return requested manifest source keys with usable persisted log snapshots."""
+
+        collected_result_keys = {
+            result.source_key
+            for result in collected_results
+            if result.status == "collected" and result.output_file
+        }
+        return [source_key for source_key in source_keys if source_key in collected_result_keys]
 
     def collect_sources(
         self,
@@ -536,6 +563,7 @@ class LogCollectionService:
         *,
         collect_logs_obj: CollectLogsOut,
         collected_results: list[SourceCollectionResult],
+        resolved_source_keys: list[str] | None = None,
     ) -> CollectLogsWithSourcesOut:
         """Save CollectLogsSource objects for one existing CollectLogs artifact object."""
 
@@ -548,6 +576,11 @@ class LogCollectionService:
                 for result in collected_results
             ],
         )
+        if resolved_source_keys is not None:
+            await self.collect_logs_db_service.update_resolved_source_keys(
+                collect_logs_obj.id,
+                resolved_source_keys,
+            )
         return await self.collect_logs_db_service.get_with_sources(collect_logs_obj.id)
 
     async def create_workflow_collect_logs_obj(
@@ -577,7 +610,7 @@ class LogCollectionService:
                 ).as_posix(),
                 is_latest=True,
                 requested_source_keys=[*source_keys, *missing_source_keys],
-                resolved_source_keys=source_keys,
+                resolved_source_keys=[],
                 unknown_requested_source_keys=missing_source_keys,
                 requested_since=since,
                 requested_until=until,
@@ -884,6 +917,13 @@ class LogCollectionService:
                 raw_nginx_match.group("timestamp"),
                 "%d/%b/%Y:%H:%M:%S %z",
             ).astimezone(UTC)
+
+        nginx_error_match = _NGINX_ERROR_TIMESTAMP_PATTERN.match(stripped_line)
+        if nginx_error_match is not None:
+            return datetime.strptime(
+                nginx_error_match.group("timestamp"),
+                "%Y/%m/%d %H:%M:%S",
+            ).replace(tzinfo=UTC)
 
         fail2ban_match = _FAIL2BAN_TIMESTAMP_PATTERN.match(stripped_line)
         if fail2ban_match is not None:

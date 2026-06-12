@@ -9,6 +9,8 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from conf import settings
+
 MIGRATIONS_DIR = Path("migrations/models")
 
 INIT_DB_REQUIRED_MESSAGES = (
@@ -22,7 +24,7 @@ def _database_env() -> dict[str, str]:
 
     env = os.environ.copy()
     env.setdefault("DATABASE_HOST", "127.0.0.1")
-    env.setdefault("DATABASE_PORT", env.get("DATABASE_PORT_HOST", "5437"))
+    env.setdefault("DATABASE_PORT", str(settings.DATABASE_PORT_HOST))
     return env
 
 
@@ -159,12 +161,6 @@ def _run_makemigrations(args: Sequence[str]) -> int:
         return error.returncode
 
 
-def _run_test() -> int:
-    """Run the full Docker Compose test container suite."""
-
-    return subprocess.run(["docker", "compose", "run", "--rm", "test"]).returncode
-
-
 def makemigrations() -> None:
     """Generate migration files for current Tortoise models."""
 
@@ -175,9 +171,3 @@ def migrate() -> None:
     """Apply committed migration files."""
 
     raise SystemExit(_run_aerich(["upgrade", *sys.argv[1:]]).returncode)
-
-
-def test() -> None:
-    """Run tests through the Docker Compose test container."""
-
-    raise SystemExit(_run_test())

@@ -114,7 +114,7 @@ Build behavior:
 - refuses to build with uncommitted changes unless `EMERGENCY=true`
 - supports `NO_CACHE=true` when a full rebuild is required
 - records the last built tag under the script state directory
-- prunes older local images while keeping recent history
+- prunes older local images, keeping only the built tag
 
 Local compose intentionally does not use tagged app images. For local
 development, use:
@@ -159,6 +159,10 @@ Deploy behavior:
   exposes `get_mcp_health_check`
 - records the deployed tag under the script state directory after health passes
 
+After deploy records `current_tag`, host-side `uv run shell` and
+`uv run commands ...` helpers use that tag as the default `TAG` when the caller
+does not provide one.
+
 Production Postgres data is stored in the Compose-managed `postgres-data`
 Docker volume. Keep database backups current before Docker volume cleanup or
 host maintenance.
@@ -200,5 +204,5 @@ infra/scripts/logs.sh db
 Useful options:
 
 - `TAIL_LINES=500` changes the number of lines shown.
-- `COMPOSE_PROJECT_NAME=mcp-log-server-prod` overrides the Docker Compose
+- `COMPOSE_PROJECT_NAME=mcp` overrides the Docker Compose
   project name when needed.

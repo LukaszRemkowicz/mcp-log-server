@@ -65,7 +65,7 @@ as `86400` seconds.
 Generate example JWTs locally:
 
 ```bash
-uv run commands generate-dev-jwt
+uv run command generate-dev-jwt
 ```
 
 That prints a JSON payload with:
@@ -75,10 +75,13 @@ That prints a JSON payload with:
 - `created_at`
 - `updated_at`
 
+The command reads caller claims from `mcp_callers`. For an empty local database,
+it creates the default `workflow-agent` and `codex-agent` caller rows first.
+
 The usual local flow is to save it into `.agent/DEV_JWT_TOKENS.json`:
 
 ```bash
-uv run commands generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
+uv run command generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
 ```
 
 When `--output-file` is provided, the command writes the token JSON to that
@@ -89,7 +92,7 @@ The command also accepts explicit identity claim overrides when you need
 tokens for a different local caller:
 
 ```bash
-uv run commands generate-dev-jwt \
+uv run command generate-dev-jwt \
   --codex-client-id local-codex \
   --codex-client-type codex
 ```
@@ -184,8 +187,8 @@ These settings control how the local FastMCP HTTP server starts.
 
 Manifests and logs are intentionally separate:
 
-- manifest JSON paths are passed to `uv run commands upload-project-manifest`
-  and `uv run commands update-project-manifest` with `--path`
+- manifest JSON paths are passed to `uv run command upload-project-manifest`
+  and `uv run command update-project-manifest` with `--path`
 - this repository may use `src/manifests/projects` for local manifest examples,
   but production manifests should be provided by the operational repository
   that owns them, such as `devops/`

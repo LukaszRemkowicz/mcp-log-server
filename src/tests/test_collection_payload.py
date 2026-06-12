@@ -231,6 +231,8 @@ async def test_build_collect_logs_persists_collection_diagnostics_for_failed_sou
         )
 
     sources_by_key = {source.source_key: source for source in payload.sources}
+    assert payload["requested_source_keys"] == ["app_file"]
+    assert payload["resolved_source_keys"] == []
     assert sources_by_key["app_file"].status == "unavailable"
     diagnostics = sources_by_key["__collection_diagnostics"]
     assert diagnostics.status == "collected"
@@ -1011,10 +1013,14 @@ def test_parse_log_line_timestamp_supports_file_log_formats() -> None:
     fail2ban_timestamp = service.parse_log_line_timestamp(
         "2026-05-18 09:38:55,771 fail2ban.filter [123]: INFO Found 203.0.113.10"
     )
+    nginx_error_timestamp = service.parse_log_line_timestamp(
+        "2026/05/18 09:54:03 [error] 42#42: *99 upstream timed out"
+    )
 
     assert raw_nginx_timestamp == datetime(2026, 1, 26, 13, 35, 2, tzinfo=UTC)
     assert json_nginx_timestamp == datetime(2026, 5, 18, 9, 38, 45, tzinfo=UTC)
     assert fail2ban_timestamp == datetime(2026, 5, 18, 9, 38, 55, tzinfo=UTC)
+    assert nginx_error_timestamp == datetime(2026, 5, 18, 9, 54, 3, tzinfo=UTC)
 
 
 def test_collect_source_rejects_relative_file_target(tmp_path: Path) -> None:

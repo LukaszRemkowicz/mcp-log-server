@@ -1,7 +1,7 @@
 # Command-Line Helpers
 
 This directory contains command-line helpers for local setup and maintenance.
-They are exposed through the `commands` entrypoint in `pyproject.toml`.
+They are exposed through the `command` entrypoint in `pyproject.toml`.
 
 Use these commands for project setup tasks such as generating development JWTs
 or uploading project manifests. They are not MCP tools. MCP tools are called
@@ -14,17 +14,17 @@ Run examples from the repository root unless a command says otherwise.
 List available commands:
 
 ```bash
-uv run commands --help
+uv run command --help
 ```
 
 Show one command's arguments and defaults:
 
 ```bash
-uv run commands generate-dev-jwt --help
+uv run command generate-dev-jwt --help
 ```
 
-Command implementations live under `src/scripts/commands/`. The root command
-app is `src/scripts/main.py`.
+Command implementations live under `src/cli/commands/`. The root command app
+is `src/cli/main.py`.
 
 ## Commands
 
@@ -43,19 +43,19 @@ The command prints JSON containing:
 Default usage:
 
 ```bash
-uv run commands generate-dev-jwt
+uv run command generate-dev-jwt
 ```
 
 Save fresh tokens for curl or local MCP checks:
 
 ```bash
-uv run commands generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
+uv run command generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
 ```
 
 Generate longer-lived development tokens, with the lifetime expressed in hours:
 
 ```bash
-uv run commands generate-dev-jwt --exp-time 720
+uv run command generate-dev-jwt --exp-time 720
 ```
 
 When `--output-file` is provided, the command writes the token JSON to that
@@ -65,14 +65,17 @@ created automatically. Without `--output-file`, the JSON is printed to stdout.
 The JWTs are signed with the local development settings. Regenerate them when
 they expire, when scopes change, or when identity claims change.
 
+The command reads caller claims from `mcp_callers`. For an empty local database,
+it creates the default `workflow-agent` and `codex-agent` caller rows first.
+
 ### Manifest Commands
 
 Manifest commands upload or update runtime project manifest rows from JSON
 files:
 
 ```bash
-uv run commands upload-project-manifest --help
-uv run commands update-project-manifest --help
+uv run command upload-project-manifest --help
+uv run command update-project-manifest --help
 ```
 
 These commands may run the update inside the Docker Compose app service. That
@@ -80,19 +83,19 @@ keeps manifest writes pointed at the same runtime environment as the MCP server.
 
 `src/manifests/projects` is useful for local development examples. Production
 manifests should come from the operational project that owns them, such as the
-new `devops/` project, and be passed with `--path`.
+new `devops/` project. Configure `PROJECT_MANIFESTS_HOST_PATH` with that host
+directory; Compose mounts it at `PROJECT_MANIFESTS_PATH` inside the app
+container.
 
 `upload-project-manifest` is create-only. Existing manifest rows are left
 unchanged. Use `update-project-manifest` for an existing project, or `--all`
 to update every manifest JSON file from the selected path:
 
 ```bash
-uv run commands update-project-manifest \
-  --path src/manifests/projects \
+uv run command update-project-manifest \
   --project vps-security
 
-uv run commands update-project-manifest \
-  --path src/manifests/projects \
+uv run command update-project-manifest \
   --all
 ```
 
@@ -102,19 +105,28 @@ Compose mounts host `/var/log` at `/host/var/log` and host `/etc/nginx/logs` at
 update the manifest from the owning ops repository when a dated filename
 changes.
 
-The outer command finds the running Compose app service with:
+The command defaults to `PROJECT_MANIFESTS_PATH`. Local and production Compose
+mount `${PROJECT_MANIFESTS_HOST_PATH}` there, so the
+host command can stay short while the Typer code reads ordinary JSON files from
+inside the app container.
 
-- `COMMANDS_COMPOSE_PROJECT_NAME`
-  Compose project name. Default: `mcp-log-server`.
-- `COMMANDS_APP_SERVICE`
-  Compose service name. Default: `app`.
+Host-side commands use `settings.ENVIRONMENT` to choose the Compose file:
 
-For production, the Compose project is usually `mcp-log-server-prod`, so run:
+- `dev`, `development`, or `local` use `docker-compose.yml`
+- `prod` or `production` use `docker-compose.prod.yml`
+
+The common case stays short:
 
 ```bash
-COMMANDS_COMPOSE_PROJECT_NAME=mcp-log-server-prod \
-COMMANDS_APP_SERVICE=app \
-uv run commands update-project-manifest \
-  --path src/manifests/projects \
+uv run command update-project-manifest \
   --all
 ```
+
+Preview the Docker Compose command without running it:
+
+```bash
+uv run command --dry-run generate-dev-jwt
+```
+
+Production commands read the deployed tag from `current_tag` under the
+production state directory and pass it into Docker Compose for image selection.

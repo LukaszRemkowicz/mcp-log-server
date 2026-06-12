@@ -1,7 +1,11 @@
+name: mcp-local
+
 services:
   db:
-    container_name: mcp-db
     image: mcp-db:18
+    env_file:
+      - path: .env
+        required: false
     build:
       context: .
       dockerfile: docker/db/Dockerfile
@@ -26,6 +30,9 @@ services:
       retries: 5
 
   app:
+    env_file:
+      - path: .env
+        required: false
     build:
       context: .
       dockerfile: docker/app/Dockerfile
@@ -36,7 +43,17 @@ services:
     volumes:
       - ./src:/app/src
       - ./migrations:/app/migrations
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./uv.lock:/app/uv.lock:ro
       - ${LOGS_DIR_HOST:-./logs}:${LOGS_DIR:-/app/logs}
+      - type: bind
+        source: ${PROJECT_MANIFESTS_HOST_PATH:-${PROJECT_MANIFESTS_PATH}}
+        target: /app/project-manifests
+        read_only: true
+      - type: bind
+        source: ${AGENT_MONITORING_LOGS_HOST_PATH:-../agent-monitoring/logs}
+        target: /host/var/log/agent-monitoring
+        read_only: true
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "${DOCKER_SOCKET_GID:-0}"
@@ -50,11 +67,8 @@ services:
       FAIL2BAN_SOCKET_PATH: ${FAIL2BAN_SOCKET_PATH:-/var/run/fail2ban/fail2ban.sock}
       MCP_HOST: 0.0.0.0
       MCP_PORT: ${MCP_PORT:-8001}
+      PROJECT_MANIFESTS_PATH: /app/project-manifests
       PYTHONPATH: /app/src
-      # Used by `uv run commands ...` to find this Compose app service.
-      # Must match the Compose project name and the `services.app` key.
-      COMMANDS_COMPOSE_PROJECT_NAME: mcp-log-server
-      COMMANDS_APP_SERVICE: app
     ports:
       - "127.0.0.1:${MCP_PORT_HOST:-8001}:${MCP_PORT:-8001}"
     command:
@@ -65,6 +79,9 @@ services:
       ]
 
   test:
+    env_file:
+      - path: .env
+        required: false
     build:
       context: .
       dockerfile: docker/app/Dockerfile
@@ -76,6 +93,8 @@ services:
     volumes:
       - ./src:/app/src
       - ./migrations:/app/migrations
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./uv.lock:/app/uv.lock:ro
       - ./logs:/app/logs
     environment:
       LOGS_DIR: /app/logs
@@ -87,10 +106,6 @@ services:
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8001
       PYTHONPATH: /app/src
-      # Used by command tests when they execute through the Compose test service.
-      # Must match the Compose project name and the `services.app` key.
-      COMMANDS_COMPOSE_PROJECT_NAME: mcp-log-server
-      COMMANDS_APP_SERVICE: app
     command:
       [
         "sh",

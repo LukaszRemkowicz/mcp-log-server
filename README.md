@@ -39,7 +39,7 @@ authenticated MCP deploy health checks.
 | Detailed operational scripts runbook | [infra/scripts/README.md](infra/scripts/README.md) |
 | MCP curl workflow and agent playbook | [infra/docs/mcp_workflow_playbook.md](infra/docs/mcp_workflow_playbook.md) |
 | Tests, checks, CI, release validation | [infra/docs/quality_checks.md](infra/docs/quality_checks.md) |
-| Typer command reference | [src/scripts/README.md](src/scripts/README.md) |
+| CLI command reference | [src/cli/README.md](src/cli/README.md) |
 | Repository foundation notes | [infra/docs/repository_foundation.md](infra/docs/repository_foundation.md) |
 
 ## Tool Groups
@@ -120,7 +120,7 @@ doppler run -- docker compose up --build
 Generate local JWTs for curl/manual MCP checks:
 
 ```bash
-uv run commands generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
+uv run command generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
 export WORKFLOW_AGENT_JWT="$(jq -r '.workflow_agent' .agent/DEV_JWT_TOKENS.json)"
 export CODEX_AGENT_JWT="$(jq -r '.codex_agent' .agent/DEV_JWT_TOKENS.json)"
 ```
@@ -155,17 +155,16 @@ uv run migrate
 uv run makemigrations <short_name>
 
 # Upload all project manifests into the database
-uv run commands upload-project-manifest --path src/manifests/projects --all
+uv run command upload-project-manifest --all
 
 # Update one existing project manifest
-uv run commands update-project-manifest --path src/manifests/projects --project landingpage
+uv run command update-project-manifest --project landingpage
 
 # Update all existing project manifests
-uv run commands update-project-manifest --path src/manifests/projects --all
+uv run command update-project-manifest --all
 
-# Update an existing production manifest from the host
-COMMANDS_COMPOSE_PROJECT_NAME=mcp-log-server-prod COMMANDS_APP_SERVICE=app \
-  uv run commands update-project-manifest --path src/manifests/projects --all
+# Update existing production manifests from the host
+uv run command update-project-manifest --all
 
 # Build a tagged production image
 TAG=v1.2.3 infra/scripts/release/build.sh
@@ -173,6 +172,10 @@ TAG=v1.2.3 infra/scripts/release/build.sh
 # Deploy an already-built production image
 TAG=v1.2.3 infra/scripts/release/deploy.sh
 ```
+
+After a successful deploy records `current_tag`, host-side `uv run shell` and
+`uv run command ...` helpers default `TAG` from that file when `TAG` is not
+already set.
 
 ## Production Notes
 
@@ -183,8 +186,10 @@ local placeholders are used.
 Project manifests are data, not MCP application code. This repository may use
 `src/manifests/projects` for local development examples, but production
 manifests should come from the operational project that owns them, such as the
-new `devops/` project. Pass that manifest directory to the upload/update
-commands with `--path`.
+new `devops/` project. Configure `PROJECT_MANIFESTS_HOST_PATH` with that host
+directory and Compose mounts it at `PROJECT_MANIFESTS_PATH` inside the app
+container. The upload/update commands default to `PROJECT_MANIFESTS_PATH`, so
+normal production usage does not need `--path`.
 
 In production, file source paths must be written as paths visible inside the
 MCP container. `docker-compose.prod.yml` mounts host `/var/log` as

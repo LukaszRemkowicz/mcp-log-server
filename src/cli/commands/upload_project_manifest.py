@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -11,6 +10,7 @@ from typing import Annotated, Literal
 
 import typer
 
+from conf import settings
 from database.config import TORTOISE_ORM
 from database.lifecycle import close_database, initialize_database
 from database.models import ProjectManifest
@@ -19,19 +19,6 @@ from database.services.project_manifests import ProjectManifestService
 from decorators import async_
 from manifests.loader import list_project_manifests, load_project_manifest
 from manifests.models import Manifest
-from scripts.docker_commands import DockerCommandService
-
-# Values are injected by docker-compose.yml and docker-compose.prod.yml on the app service.
-# They must match the Compose project name and the `services.app` key.
-COMMANDS_COMPOSE_PROJECT_NAME = os.environ.get(
-    "COMMANDS_COMPOSE_PROJECT_NAME",
-    "mcp-log-server",
-)
-COMMANDS_APP_SERVICE = os.environ.get(
-    "COMMANDS_APP_SERVICE",
-    "app",
-)
-CONTAINER_MANIFESTS_DIR = "/tmp/mcp-log-server-manifests"
 
 ProjectManifestCommandStatus = Literal["created", "exists", "updated", "missing"]
 
@@ -209,7 +196,7 @@ def _echo_upload_results(results: list[ProjectManifestCommandResult]) -> None:
             continue
         typer.echo(
             f"Project manifest {item.project_key} already exists and was not changed. "
-            f"To update it, run: uv run commands update-project-manifest "
+            f"To update it, run: uv run command update-project-manifest "
             f"--project {item.project_key}"
         )
     typer.echo(
@@ -232,7 +219,7 @@ def _echo_update_results(results: list[ProjectManifestCommandResult]) -> None:
             continue
         typer.echo(
             f"Project manifest {item.project_key} does not exist. "
-            f"To create it, run: uv run commands upload-project-manifest {item.project_key}"
+            f"To create it, run: uv run command upload-project-manifest {item.project_key}"
         )
     typer.echo(
         f"Update summary: updated {updated_count}, missing {missing_count}, total {len(results)}."
@@ -240,7 +227,7 @@ def _echo_update_results(results: list[ProjectManifestCommandResult]) -> None:
 
 
 @async_
-async def upload_project_manifest_internal(
+async def upload_project_manifest(
     project_name: Annotated[
         str | None,
         typer.Argument(help="Project key to load from <path>/<project>.json."),
@@ -250,9 +237,12 @@ async def upload_project_manifest_internal(
         typer.Option("--all", help="Upload every manifest JSON file from --path."),
     ] = False,
     path: Annotated[
-        Path,
-        typer.Option("--path", help="Directory with project manifest JSON files."),
-    ] = Path("."),
+        Path | None,
+        typer.Option(
+            "--path",
+            help="Directory with project manifest JSON files. Defaults to PROJECT_MANIFESTS_PATH.",
+        ),
+    ] = None,
 ) -> None:
     """Upload one or all configured project manifests into the database."""
 
@@ -260,7 +250,7 @@ async def upload_project_manifest_internal(
         raise typer.BadParameter("Use either PROJECT_NAME or --all, not both.")
 
     manifests = _load_manifests(
-        manifests_dir=path,
+        manifests_dir=path or settings.PROJECT_MANIFESTS_PATH,
         project_name=project_name,
         all_projects=all_projects,
     )
@@ -272,7 +262,7 @@ async def upload_project_manifest_internal(
 
 
 @async_
-async def update_project_manifest_internal(
+async def update_project_manifest(
     project_name: Annotated[
         str | None,
         typer.Option(
@@ -288,9 +278,12 @@ async def update_project_manifest_internal(
         ),
     ] = False,
     path: Annotated[
-        Path,
-        typer.Option("--path", help="Directory with project manifest JSON files."),
-    ] = Path("."),
+        Path | None,
+        typer.Option(
+            "--path",
+            help="Directory with project manifest JSON files. Defaults to PROJECT_MANIFESTS_PATH.",
+        ),
+    ] = None,
 ) -> None:
     """Update one or all configured project manifests in the database."""
 
@@ -300,7 +293,7 @@ async def update_project_manifest_internal(
         raise typer.BadParameter("Provide --project PROJECT_NAME or use --all.")
 
     manifests = _load_manifests(
-        manifests_dir=path,
+        manifests_dir=path or settings.PROJECT_MANIFESTS_PATH,
         project_name=project_name,
         all_projects=all_projects,
     )
@@ -309,141 +302,3 @@ async def update_project_manifest_internal(
         service=ProjectManifestService(),
     )
     _echo_update_results(results)
-
-
-def _run_internal_manifest_command(
-    command: list[str],
-    *,
-    manifest_files: list[Path] | None = None,
-) -> None:
-    """Run one hidden manifest command inside the Docker Compose app service.
-
-    Set COMMANDS_COMPOSE_PROJECT_NAME and COMMANDS_APP_SERVICE when the running
-    Compose project/service names differ from the local defaults
-    (mcp-log-server/app), for example production mcp-log-server-prod/app.
-    """
-
-    docker_service = DockerCommandService()
-    try:
-        if manifest_files is not None:
-            docker_service.copy_files_to_compose_service(
-                project_name=COMMANDS_COMPOSE_PROJECT_NAME,
-                service_name=COMMANDS_APP_SERVICE,
-                files=manifest_files,
-                target_dir=CONTAINER_MANIFESTS_DIR,
-            )
-        result = docker_service.run_compose_service_command(
-            project_name=COMMANDS_COMPOSE_PROJECT_NAME,
-            service_name=COMMANDS_APP_SERVICE,
-            command=command,
-        )
-    except ValueError as error:
-        raise typer.BadParameter(str(error)) from error
-
-    if result.output:
-        typer.echo(result.output.rstrip())
-    if result.exit_code != 0:
-        raise typer.Exit(result.exit_code)
-
-
-def _manifest_files_for_container_copy(
-    *,
-    manifests_dir: Path,
-    project_name: str | None,
-    all_projects: bool,
-) -> list[Path]:
-    """Validate selected manifests and return matching JSON files for container copy."""
-
-    manifests = _load_manifests(
-        manifests_dir=manifests_dir,
-        project_name=project_name,
-        all_projects=all_projects,
-    )
-    manifest_root = manifests_dir.expanduser()
-    return [manifest_root / f"{manifest.project_key}.json" for manifest in manifests]
-
-
-def upload_project_manifest(
-    project_name: Annotated[
-        str | None,
-        typer.Argument(help="Project key to load from <path>/<project>.json."),
-    ] = None,
-    all_projects: Annotated[
-        bool,
-        typer.Option("--all", help="Upload every manifest JSON file from --path."),
-    ] = False,
-    path: Annotated[
-        Path,
-        typer.Option("--path", help="Directory with project manifest JSON files."),
-    ] = Path("."),
-) -> None:
-    """Run the manifest upload command inside the Docker Compose app service.
-
-    Uses COMMANDS_COMPOSE_PROJECT_NAME and COMMANDS_APP_SERVICE to find the
-    running app service. Defaults are mcp-log-server/app; production usually
-    needs COMMANDS_COMPOSE_PROJECT_NAME=mcp-log-server-prod.
-    """
-
-    if all_projects and project_name is not None:
-        raise typer.BadParameter("Use either PROJECT_NAME or --all, not both.")
-    if project_name is None and not all_projects:
-        raise typer.BadParameter("Provide PROJECT_NAME or use --all.")
-
-    manifest_files = _manifest_files_for_container_copy(
-        manifests_dir=path,
-        project_name=project_name,
-        all_projects=all_projects,
-    )
-    command = ["uv", "run", "python", "-m", "scripts.main", "upload-project-manifest-internal"]
-    command.extend(["--path", CONTAINER_MANIFESTS_DIR])
-    if all_projects:
-        command.append("--all")
-    elif project_name is not None:
-        command.append(project_name)
-    _run_internal_manifest_command(command, manifest_files=manifest_files)
-
-
-def update_project_manifest(
-    project_name: Annotated[
-        str | None,
-        typer.Option(
-            "--project",
-            help="Project key to update from <path>/<project>.json. Required unless --all is used.",
-        ),
-    ] = None,
-    all_projects: Annotated[
-        bool,
-        typer.Option(
-            "--all",
-            help="Update every manifest JSON file from --path instead of using --project.",
-        ),
-    ] = False,
-    path: Annotated[
-        Path,
-        typer.Option("--path", help="Directory with project manifest JSON files."),
-    ] = Path("."),
-) -> None:
-    """Run the manifest update command inside the Docker Compose app service.
-
-    Uses COMMANDS_COMPOSE_PROJECT_NAME and COMMANDS_APP_SERVICE to find the
-    running app service. Defaults are mcp-log-server/app; production usually
-    needs COMMANDS_COMPOSE_PROJECT_NAME=mcp-log-server-prod.
-    """
-
-    if all_projects and project_name is not None:
-        raise typer.BadParameter("Use either --project or --all, not both.")
-    if project_name is None and not all_projects:
-        raise typer.BadParameter("Provide --project PROJECT_NAME or use --all.")
-
-    manifest_files = _manifest_files_for_container_copy(
-        manifests_dir=path,
-        project_name=project_name,
-        all_projects=all_projects,
-    )
-    command = ["uv", "run", "python", "-m", "scripts.main", "update-project-manifest-internal"]
-    command.extend(["--path", CONTAINER_MANIFESTS_DIR])
-    if all_projects:
-        command.append("--all")
-    elif project_name is not None:
-        command.extend(["--project", project_name])
-    _run_internal_manifest_command(command, manifest_files=manifest_files)

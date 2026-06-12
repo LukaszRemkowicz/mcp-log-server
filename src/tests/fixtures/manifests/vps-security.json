@@ -29,6 +29,18 @@
       "inspect_path_prefixes": []
     },
     {
+      "source_key": "nginx_runtime",
+      "source_type": "file",
+      "target": "/app/src/tests/fixtures/logs/vps-security/nginx_runtime.log",
+      "description": "Production nginx runtime/error log for ingress diagnostics.",
+      "required": false,
+      "parser_type": "plain_text",
+      "normalization_profile": "proxy_access",
+      "retention_class": "medium",
+      "default_noise_profile": "web_noise",
+      "inspect_path_prefixes": []
+    },
+    {
       "source_key": "traefik_access",
       "source_type": "file",
       "target": "/app/src/tests/fixtures/logs/vps-security/traefik_access.log",

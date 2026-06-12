@@ -83,7 +83,7 @@ log_step 5 6 "Record built tag"
 printf "%s\n" "$TAG" > "$STATE_DIR/built_tag"
 log_info "Built tag file: $STATE_DIR/built_tag"
 
-# Step 6: prune older local images for this repository, keeping recent history.
+# Step 6: prune older local images for this repository, keeping only this tag.
 log_step 6 6 "Prune older local images"
 prune_local_images "${ENVIRONMENT}-mcp-log-server" "$TAG"
 

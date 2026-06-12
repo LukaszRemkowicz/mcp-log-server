@@ -1,3 +1,5 @@
+name: mcp
+
 services:
   db:
     image: postgres:18
@@ -43,14 +45,15 @@ services:
       JWT_ISSUER: ${JWT_ISSUER}
       JWT_AUDIENCE: ${JWT_AUDIENCE}
       FAIL2BAN_SOCKET_PATH: ${FAIL2BAN_SOCKET_PATH:-/var/run/fail2ban/fail2ban.sock}
-      # Used by `uv run commands ...` to find this Compose app service.
-      # Must match the Compose project name and the `services.app` key.
-      COMMANDS_COMPOSE_PROJECT_NAME: mcp-log-server
-      COMMANDS_APP_SERVICE: app
+      PROJECT_MANIFESTS_PATH: ${PROJECT_MANIFESTS_PATH:-/app/project-manifests}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/log:/host/var/log:ro
       - /etc/nginx/logs:/host/etc/nginx/logs:ro
+      - type: bind
+        source: ${PROJECT_MANIFESTS_HOST_PATH}
+        target: ${PROJECT_MANIFESTS_PATH:-/app/project-manifests}
+        read_only: true
     group_add:
       - "${DOCKER_SOCKET_GID:-0}"
       - "${FAIL2BAN_LOG_GID:-1}"

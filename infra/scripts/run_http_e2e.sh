@@ -174,10 +174,10 @@ export CODEX_AGENT_JWT
 
 (
   cd "$REPO_ROOT/src"
-  uv run python -m scripts.main upload-project-manifest-internal \
+  uv run python -m cli.main upload-project-manifest \
     --path "$MANIFESTS_DIR" \
     --all >/dev/null
-  uv run python -m scripts.main update-project-manifest-internal \
+  uv run python -m cli.main update-project-manifest \
     --path "$MANIFESTS_DIR" \
     --project landingpage >/dev/null
 )

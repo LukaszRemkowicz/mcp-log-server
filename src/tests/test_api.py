@@ -1220,9 +1220,10 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
     assert collect_payload["resolved_source_keys"] == [
         "fail2ban",
         "nginx_access",
+        "nginx_runtime",
         "traefik_access",
     ]
-    assert [source["line_count"] for source in collect_payload["sources"]] == [20, 12, 12]
+    assert [source["line_count"] for source in collect_payload["sources"]] == [20, 12, 1, 12]
     assert grep_response.status_code == 200
     assert grep_response.json()["result"]["isError"] is False
     assert grep_payload["match_count"] == 8

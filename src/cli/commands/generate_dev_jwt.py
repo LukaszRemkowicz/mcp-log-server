@@ -32,6 +32,18 @@ TOKEN_WORKSPACES = {
     "workflow_agent": LogWorkspace.WORKFLOW,
     "codex_agent": LogWorkspace.SESSION,
 }
+DEFAULT_TOKEN_CALLERS = {
+    "workflow_agent": {
+        "client_id": "workflow-agent",
+        "client_type": "workflow_agent",
+        "allowed_projects": ["all"],
+    },
+    "codex_agent": {
+        "client_id": "codex-agent",
+        "client_type": "codex",
+        "allowed_projects": ["all"],
+    },
+}
 
 
 async def _get_token_caller(token_name: str, workspace: LogWorkspace) -> McpCaller:
@@ -39,9 +51,12 @@ async def _get_token_caller(token_name: str, workspace: LogWorkspace) -> McpCall
 
     callers = await McpCaller.objects.filter(workspace=workspace).order_by("id")
     if not callers:
-        raise RuntimeError(
-            f"Missing McpCaller row for workspace '{workspace.value}' while generating "
-            f"{token_name} token."
+        default_caller = DEFAULT_TOKEN_CALLERS[token_name]
+        return await McpCaller.objects.create(
+            client_id=default_caller["client_id"],
+            client_type=default_caller["client_type"],
+            workspace=workspace,
+            allowed_projects=default_caller["allowed_projects"],
         )
     if len(callers) > 1:
         caller_names = ", ".join(f"{caller.client_id}/{caller.client_type}" for caller in callers)
@@ -224,6 +239,3 @@ def generate_dev_jwt(
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
     output_file.write_text(f"{token_json}\n")
-
-
-__all__ = ["generate_dev_jwt"]

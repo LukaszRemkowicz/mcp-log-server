@@ -15,7 +15,7 @@ Important response note:
 For local development, generate fresh example JWTs with:
 
 ```bash
-uv run commands generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
+uv run command generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
 ```
 
 Refresh them when:
