@@ -1123,6 +1123,12 @@ async def test_inspect_proxy_activity_api_groups_proxy_status_signals(
     assert payload["parsed_proxy_line_count"] == 8
     assert payload["http_status_line_count"] == 6
     assert payload["upstream_error_count"] == 1
+    assert payload["truncated"] is False
+    assert payload["returned_route_group_count"] == 5
+    assert payload["distinct_route_group_count"] == 5
+    assert payload["distinct_route_group_count_is_exact"] is True
+    assert payload["omitted_route_group_count"] == 0
+    assert payload["route_groups_omitted"] is False
     assert payload["status_class_counts"] == [
         {"status_class": "2xx", "count": 1},
         {"status_class": "3xx", "count": 2},

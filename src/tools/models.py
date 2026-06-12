@@ -463,6 +463,11 @@ class InspectProxyActivityPayload(BaseModel):
     upstream_error_count: int
     max_groups: int
     truncated: bool
+    returned_route_group_count: int
+    distinct_route_group_count: int
+    distinct_route_group_count_is_exact: bool
+    omitted_route_group_count: int
+    route_groups_omitted: bool
     status_class_counts: list[ProxyStatusClassCountPayload]
     top_routes: list[ProxyRouteSignalPayload]
 

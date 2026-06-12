@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from core.types import LogWorkspace
 from database.fields import FileReference
 from database.schemas import CollectLogsSourceOut
 from services.log_analysis import LogAnalysisService
+from tools.models import LogSnapshotFilePayload, LogSnapshotMetadata
 
 
 def _proxy_source(path: Path, *, source_key: str = "nginx") -> CollectLogsSourceOut:
@@ -23,6 +25,31 @@ def _proxy_source(path: Path, *, source_key: str = "nginx") -> CollectLogsSource
         line_count=3,
         error=None,
         retry_tips=[],
+    )
+
+
+def _metadata(path: Path) -> LogSnapshotMetadata:
+    return LogSnapshotMetadata(
+        project_name="landingpage",
+        workspace=LogWorkspace.WORKFLOW,
+        session_id="phase-16c",
+        collected_at="2026-05-18T10:00:00Z",
+        files=[
+            LogSnapshotFilePayload(
+                source_key="nginx",
+                source_type="file",
+                description="nginx access log",
+                target=path.as_posix(),
+                stream=None,
+                parser_type="json",
+                normalization_profile="proxy_access",
+                default_noise_profile=None,
+                file_name=path.name,
+                output_file=path.as_posix(),
+                line_count=3,
+                byte_count=path.stat().st_size,
+            )
+        ],
     )
 
 
@@ -118,6 +145,75 @@ def test_proxy_activity_keeps_late_repeated_upstream_route_when_groups_are_bound
     assert analysis.top_routes[0].status_code == 502
     assert analysis.top_routes[0].count == 3
     assert analysis.top_routes[0].is_upstream_error is True
+
+
+def test_proxy_activity_reports_omitted_route_groups_explicitly(tmp_path: Path) -> None:
+    """The public proxy payload should expose returned and omitted route counts."""
+
+    log_file = tmp_path / "nginx.log"
+    log_file.write_text(
+        "\n".join(
+            [
+                '{"status": 404, "request": "GET /admin HTTP/1.1"}',
+                '{"status": 502, "request": "POST /api/orders HTTP/1.1"}',
+                '{"status": 301, "request": "GET /old HTTP/1.1"}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = LogAnalysisService().inspect_proxy_activity(
+        _metadata(log_file),
+        sources=[_proxy_source(log_file)],
+        requested_source_keys=None,
+        max_groups=1,
+        requested_project_name="landingpage",
+        project_name="landingpage",
+    )
+
+    assert payload.truncated is True
+    assert payload.returned_route_group_count == 1
+    assert payload.distinct_route_group_count == 3
+    assert payload.distinct_route_group_count_is_exact is True
+    assert payload.omitted_route_group_count == 2
+    assert payload.route_groups_omitted is True
+
+
+def test_proxy_activity_marks_distinct_route_count_as_estimated_after_candidate_overflow(
+    tmp_path: Path,
+) -> None:
+    """When candidate tracking overflows, the distinct group count is a lower bound."""
+
+    log_file = tmp_path / "nginx.log"
+    log_file.write_text(
+        "\n".join(
+            [
+                *(
+                    f'{{"status": 404, "request": "GET /noise-{index} HTTP/1.1"}}'
+                    for index in range(40)
+                ),
+                '{"status": 502, "request": "POST /late-api HTTP/1.1"}',
+                '{"status": 502, "request": "POST /late-api HTTP/1.1"}',
+                '{"status": 502, "request": "POST /late-api HTTP/1.1"}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = LogAnalysisService().inspect_proxy_activity(
+        _metadata(log_file),
+        sources=[_proxy_source(log_file)],
+        requested_source_keys=None,
+        max_groups=1,
+        requested_project_name="landingpage",
+        project_name="landingpage",
+    )
+
+    assert payload.route_groups_omitted is True
+    assert payload.distinct_route_group_count_is_exact is False
+    assert payload.distinct_route_group_count > payload.returned_route_group_count
+    assert payload.top_routes[0].path == "/late-api"
+    assert payload.top_routes[0].count == 3
 
 
 def test_proxy_activity_maps_traefik_downstream_status_fields(tmp_path: Path) -> None:

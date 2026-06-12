@@ -377,6 +377,7 @@ class ProxyActivityAnalysis:
     status_class_counts: list[ProxyStatusClassCountPayload]
     top_routes: list[ProxyRouteSignalPayload]
     total_route_group_count: int
+    route_group_count_is_exact: bool
 
 
 @dataclass(slots=True)
@@ -682,6 +683,14 @@ class LogAnalysisService:
             upstream_error_count=analysis.upstream_error_count,
             max_groups=max_groups,
             truncated=analysis.total_route_group_count > max_groups,
+            returned_route_group_count=len(analysis.top_routes),
+            distinct_route_group_count=analysis.total_route_group_count,
+            distinct_route_group_count_is_exact=analysis.route_group_count_is_exact,
+            omitted_route_group_count=max(
+                0,
+                analysis.total_route_group_count - len(analysis.top_routes),
+            ),
+            route_groups_omitted=analysis.total_route_group_count > max_groups,
             status_class_counts=analysis.status_class_counts,
             top_routes=analysis.top_routes,
         )
@@ -756,6 +765,7 @@ class LogAnalysisService:
             ],
             top_routes=sorted_routes[:max_groups],
             total_route_group_count=len(route_candidates) + int(route_group_overflowed),
+            route_group_count_is_exact=not route_group_overflowed,
         )
 
     @staticmethod

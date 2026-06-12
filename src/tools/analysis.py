@@ -618,6 +618,10 @@ async def inspect_proxy_activity(
             "upstream_error_count": payload.upstream_error_count,
             "top_route_count": len(payload.top_routes),
             "truncated": payload.truncated,
+            "returned_route_group_count": payload.returned_route_group_count,
+            "distinct_route_group_count": payload.distinct_route_group_count,
+            "distinct_route_group_count_is_exact": payload.distinct_route_group_count_is_exact,
+            "omitted_route_group_count": payload.omitted_route_group_count,
         },
     )
     response = dict(
