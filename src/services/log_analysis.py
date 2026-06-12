@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import re
 from collections import defaultdict
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -40,8 +41,11 @@ from tools.models import (
 )
 
 MAX_ANALYSIS_LINE_BYTES = 2000
+MIN_PROXY_ROUTE_CANDIDATES = 32
+PROXY_ROUTE_CANDIDATE_MULTIPLIER = 4
 StatusClass = Literal["1xx", "2xx", "3xx", "4xx", "5xx"]
 STATUS_CLASSES: tuple[StatusClass, ...] = ("1xx", "2xx", "3xx", "4xx", "5xx")
+ProxyRouteKey = tuple[str | None, str | None, str | None, int]
 
 _UUID_PATTERN = re.compile(
     r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
@@ -332,6 +336,14 @@ class ProxyRouteAccumulator:
             first_seen=self.first_seen,
             last_seen=self.last_seen,
         )
+
+
+@dataclass(slots=True)
+class ProxyRouteCandidate:
+    """Bounded first-pass candidate for later exact route aggregation."""
+
+    estimated_count: int
+    is_upstream_error: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -682,67 +694,42 @@ class LogAnalysisService:
     ) -> ProxyActivityAnalysis:
         """Aggregate status classes and route/status clusters for proxy logs."""
 
-        route_groups: dict[
-            tuple[str | None, str | None, str | None, int],
-            ProxyRouteAccumulator,
-        ] = {}
-        route_group_overflowed = False
+        route_candidates: dict[ProxyRouteKey, ProxyRouteCandidate] = {}
         status_counts: dict[StatusClass, int] = defaultdict(int)
         total_line_count = 0
         parsed_proxy_line_count = 0
         http_status_line_count = 0
         upstream_error_count = 0
 
-        for item in sources:
-            file_ref = cast(FileReference, item.file)
-            try:
-                with open(file_ref.path, encoding="utf-8", errors="replace") as file:
-                    for line_number, raw_line in enumerate(file, start=1):
-                        total_line_count += 1
-                        line = raw_line.rstrip("\n")
-                        payload = self._parse_json_line(line)
-                        if payload is None:
-                            continue
-                        event = self._parse_proxy_line(
-                            source_key=item.source_key,
-                            output_file=file_ref.name,
-                            line_number=line_number,
-                            raw_line=line,
-                            payload=payload,
-                        )
-                        parsed_proxy_line_count += 1
-                        status_code = event.status_code
-                        status_class = event.status_class
-                        if status_code is None or status_class is None:
-                            continue
-                        http_status_line_count += 1
-                        status_counts[status_class] += 1
-                        if status_code in {502, 503, 504}:
-                            upstream_error_count += 1
-                        route_key = (
-                            event.host,
-                            event.method,
-                            event.path,
-                            status_code,
-                        )
-                        route_group = route_groups.get(route_key)
-                        if route_group is None:
-                            if len(route_groups) >= max_groups:
-                                route_group_overflowed = True
-                                continue
-                            route_group = ProxyRouteAccumulator(
-                                path=event.path,
-                                host=event.host,
-                                method=event.method,
-                                status_code=status_code,
-                                status_class=status_class,
-                            )
-                            route_groups[route_key] = route_group
-                        route_group.add(event)
-            except ValueError as error:
-                raise ValueError("Requested persisted source file reference is invalid.") from error
-            except OSError as error:
-                raise ValueError("Requested log snapshot file was not found on disk.") from error
+        candidate_limit = self._proxy_route_candidate_limit(max_groups)
+        route_group_overflowed = False
+        for event in self._iter_proxy_events(sources):
+            total_line_count += 1
+            if event is None:
+                continue
+            parsed_proxy_line_count += 1
+            status_code = event.status_code
+            status_class = event.status_class
+            if status_code is None or status_class is None:
+                continue
+            http_status_line_count += 1
+            status_counts[status_class] += 1
+            if status_code in {502, 503, 504}:
+                upstream_error_count += 1
+            route_group_overflowed = (
+                self._record_proxy_route_candidate(
+                    route_candidates,
+                    route_key=self._proxy_route_key(event),
+                    is_upstream_error=status_code in {502, 503, 504},
+                    candidate_limit=candidate_limit,
+                )
+                or route_group_overflowed
+            )
+
+        route_groups = self._build_proxy_route_groups_for_candidates(
+            sources=sources,
+            route_keys=set(route_candidates),
+        )
 
         sorted_routes = sorted(
             (group.to_payload() for group in route_groups.values()),
@@ -753,7 +740,6 @@ class LogAnalysisService:
                 route.path or "",
             ),
         )
-        total_route_group_count = len(sorted_routes) + int(route_group_overflowed)
         return ProxyActivityAnalysis(
             searched_source_keys=[item.source_key for item in sources],
             total_line_count=total_line_count,
@@ -769,8 +755,119 @@ class LogAnalysisService:
                 if status_counts[status_class] > 0
             ],
             top_routes=sorted_routes[:max_groups],
-            total_route_group_count=total_route_group_count,
+            total_route_group_count=len(route_candidates) + int(route_group_overflowed),
         )
+
+    @staticmethod
+    def _proxy_route_candidate_limit(max_groups: int) -> int:
+        """Return the bounded number of route candidates retained during scan."""
+
+        return max(MIN_PROXY_ROUTE_CANDIDATES, max_groups * PROXY_ROUTE_CANDIDATE_MULTIPLIER)
+
+    def _iter_proxy_events(
+        self,
+        sources: list[CollectLogsSourceOut],
+    ) -> Iterator[ProxyLineEvent | None]:
+        """Yield parsed proxy events, using None for non-JSON snapshot lines."""
+
+        for item in sources:
+            file_ref = cast(FileReference, item.file)
+            try:
+                with open(file_ref.path, encoding="utf-8", errors="replace") as file:
+                    for line_number, raw_line in enumerate(file, start=1):
+                        line = raw_line.rstrip("\n")
+                        payload = self._parse_json_line(line)
+                        if payload is None:
+                            yield None
+                            continue
+                        yield self._parse_proxy_line(
+                            source_key=item.source_key,
+                            output_file=file_ref.name,
+                            line_number=line_number,
+                            raw_line=line,
+                            payload=payload,
+                        )
+            except ValueError as error:
+                raise ValueError("Requested persisted source file reference is invalid.") from error
+            except OSError as error:
+                raise ValueError("Requested log snapshot file was not found on disk.") from error
+
+    @staticmethod
+    def _proxy_route_key(event: ProxyLineEvent) -> ProxyRouteKey:
+        """Return the grouping key for one proxy route/status signal."""
+
+        assert event.status_code is not None
+        return (
+            event.host,
+            event.method,
+            event.path,
+            event.status_code,
+        )
+
+    @staticmethod
+    def _record_proxy_route_candidate(
+        route_candidates: dict[ProxyRouteKey, ProxyRouteCandidate],
+        *,
+        route_key: ProxyRouteKey,
+        is_upstream_error: bool,
+        candidate_limit: int,
+    ) -> bool:
+        """Track likely top route groups while keeping candidate memory bounded."""
+
+        candidate = route_candidates.get(route_key)
+        if candidate is not None:
+            candidate.estimated_count += 1
+            return False
+        if len(route_candidates) < candidate_limit:
+            route_candidates[route_key] = ProxyRouteCandidate(
+                estimated_count=1,
+                is_upstream_error=is_upstream_error,
+            )
+            return False
+
+        eviction_key, evicted = min(
+            route_candidates.items(),
+            key=lambda item: (
+                item[1].estimated_count,
+                item[1].is_upstream_error,
+            ),
+        )
+        del route_candidates[eviction_key]
+        route_candidates[route_key] = ProxyRouteCandidate(
+            estimated_count=evicted.estimated_count + 1,
+            is_upstream_error=is_upstream_error,
+        )
+        return True
+
+    def _build_proxy_route_groups_for_candidates(
+        self,
+        *,
+        sources: list[CollectLogsSourceOut],
+        route_keys: set[ProxyRouteKey],
+    ) -> dict[ProxyRouteKey, ProxyRouteAccumulator]:
+        """Re-scan snapshot sources to compute exact payloads for retained candidates."""
+
+        route_groups: dict[ProxyRouteKey, ProxyRouteAccumulator] = {}
+        for event in self._iter_proxy_events(sources):
+            if event is None or event.status_code is None or event.status_class is None:
+                continue
+            status_code = event.status_code
+            status_class = event.status_class
+            route_key = self._proxy_route_key(event)
+            if route_key not in route_keys:
+                continue
+            route_group = route_groups.get(route_key)
+            if route_group is None:
+                route_group = ProxyRouteAccumulator(
+                    path=event.path,
+                    host=event.host,
+                    method=event.method,
+                    status_code=status_code,
+                    status_class=status_class,
+                )
+                route_groups[route_key] = route_group
+            route_group.add(event)
+        return route_groups
 
     @staticmethod
     def _add_sensitive_probe_event(

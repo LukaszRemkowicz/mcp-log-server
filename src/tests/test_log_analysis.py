@@ -2,13 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from database.fields import FileReference
 from database.schemas import CollectLogsSourceOut
-from services import log_analysis
-from services.log_analysis import LogAnalysisService, ProxyRouteAccumulator, StatusClass
-from tools.models import SnapshotLineReferencePayload
+from services.log_analysis import LogAnalysisService
 
 
 def _proxy_source(path: Path, *, source_key: str = "nginx") -> CollectLogsSourceOut:
@@ -90,56 +86,25 @@ def test_group_errors_keeps_structured_json_error_level_failures(tmp_path: Path)
     assert analysis.groups[0].message_summary == "Database connection failed"
 
 
-def test_proxy_activity_caps_route_accumulators_to_max_groups(
+def test_proxy_activity_keeps_late_repeated_upstream_route_when_groups_are_bounded(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Protect proxy analysis from unbounded unique route groups."""
+    """Late repeated upstream errors should not be hidden by early unique routes."""
 
     log_file = tmp_path / "nginx.log"
     log_file.write_text(
         "\n".join(
             [
-                '{"status": 404, "request": "GET /first HTTP/1.1"}',
-                '{"status": 404, "request": "GET /second HTTP/1.1"}',
-                '{"status": 502, "request": "POST /third HTTP/1.1"}',
+                *(
+                    f'{{"status": 404, "request": "GET /noise-{index} HTTP/1.1"}}'
+                    for index in range(20)
+                ),
+                '{"status": 502, "request": "POST /late-api HTTP/1.1"}',
+                '{"status": 502, "request": "POST /late-api HTTP/1.1"}',
+                '{"status": 502, "request": "POST /late-api HTTP/1.1"}',
             ]
         ),
         encoding="utf-8",
-    )
-    created_accumulators = 0
-
-    class CountingProxyRouteAccumulator(ProxyRouteAccumulator):
-        def __init__(
-            self,
-            path: str | None,
-            host: str | None,
-            method: str | None,
-            status_code: int,
-            status_class: StatusClass,
-            count: int = 0,
-            source_keys: set[str] | None = None,
-            first_seen: SnapshotLineReferencePayload | None = None,
-            last_seen: SnapshotLineReferencePayload | None = None,
-        ) -> None:
-            nonlocal created_accumulators
-            created_accumulators += 1
-            super().__init__(
-                path=path,
-                host=host,
-                method=method,
-                status_code=status_code,
-                status_class=status_class,
-                count=count,
-                source_keys=set() if source_keys is None else source_keys,
-                first_seen=first_seen,
-                last_seen=last_seen,
-            )
-
-    monkeypatch.setattr(
-        log_analysis,
-        "ProxyRouteAccumulator",
-        CountingProxyRouteAccumulator,
     )
 
     analysis = LogAnalysisService()._analyze_proxy_activity(
@@ -147,9 +112,12 @@ def test_proxy_activity_caps_route_accumulators_to_max_groups(
         max_groups=1,
     )
 
-    assert created_accumulators == 1
     assert len(analysis.top_routes) == 1
     assert analysis.total_route_group_count > 1
+    assert analysis.top_routes[0].path == "/late-api"
+    assert analysis.top_routes[0].status_code == 502
+    assert analysis.top_routes[0].count == 3
+    assert analysis.top_routes[0].is_upstream_error is True
 
 
 def test_proxy_activity_maps_traefik_downstream_status_fields(tmp_path: Path) -> None:
