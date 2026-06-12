@@ -156,7 +156,9 @@ def test_shell_repl_flag_uses_cli_env(
 
 def test_should_bridge_to_compose_requires_host(
     mocker: MockerFixture,
+    monkeypatch,
 ) -> None:
+    monkeypatch.delenv("COMMANDS_DISABLE_COMPOSE_BRIDGE", raising=False)
     mocker.patch("cli.utils.is_running_in_container", return_value=False)
 
     assert utils.should_bridge_to_compose() is True
@@ -164,7 +166,19 @@ def test_should_bridge_to_compose_requires_host(
 
 def test_should_bridge_to_compose_skips_container(
     mocker: MockerFixture,
+    monkeypatch,
 ) -> None:
+    monkeypatch.delenv("COMMANDS_DISABLE_COMPOSE_BRIDGE", raising=False)
     mocker.patch("cli.utils.is_running_in_container", return_value=True)
+
+    assert utils.should_bridge_to_compose() is False
+
+
+def test_should_bridge_to_compose_respects_disable_env(
+    monkeypatch,
+    mocker: MockerFixture,
+) -> None:
+    monkeypatch.setenv("COMMANDS_DISABLE_COMPOSE_BRIDGE", "1")
+    mocker.patch("cli.utils.is_running_in_container", return_value=False)
 
     assert utils.should_bridge_to_compose() is False

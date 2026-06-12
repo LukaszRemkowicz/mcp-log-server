@@ -123,6 +123,28 @@ development, use:
 docker compose up --build
 ```
 
+## Release
+
+Build and deploy one tagged prod release:
+
+```bash
+TAG=v1.2.3 infra/scripts/release/release.sh
+```
+
+For non-interactive automation, pass approval explicitly:
+
+```bash
+AUTO_APPROVE=true TAG=v1.2.3 infra/scripts/release/release.sh
+```
+
+Release behavior:
+
+- validates the same prod environment and tag as the lower-level scripts
+- runs `release/build.sh`
+- runs `release/deploy.sh`
+- keeps backup, migration, confirmation, and health-check behavior inside
+  `deploy.sh`
+
 ## Deploy
 
 Deploy an already-built prod image:
@@ -160,7 +182,7 @@ Deploy behavior:
 - records the deployed tag under the script state directory after health passes
 
 After deploy records `current_tag`, host-side `uv run shell` and
-`uv run commands ...` helpers use that tag as the default `TAG` when the caller
+`uv run command ...` helpers use that tag as the default `TAG` when the caller
 does not provide one.
 
 Production Postgres data is stored in the Compose-managed `postgres-data`

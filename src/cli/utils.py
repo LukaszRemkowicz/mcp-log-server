@@ -115,6 +115,8 @@ def is_running_in_container() -> bool:
 def should_bridge_to_compose() -> bool:
     """Return whether host-side commands should run through Docker Compose."""
 
+    if _cli_env_str("COMMANDS_DISABLE_COMPOSE_BRIDGE", default="") == "1":
+        return False
     return not is_running_in_container()
 
 
