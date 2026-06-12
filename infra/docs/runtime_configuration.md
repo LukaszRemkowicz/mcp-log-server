@@ -65,7 +65,7 @@ as `86400` seconds.
 Generate example JWTs locally:
 
 ```bash
-uv run commands generate-dev-jwt
+uv run command generate-dev-jwt
 ```
 
 That prints a JSON payload with:
@@ -75,10 +75,14 @@ That prints a JSON payload with:
 - `created_at`
 - `updated_at`
 
+The command reads caller claims from `mcp_callers` when rows exist. If caller
+rows are missing, it uses built-in default claims without creating database
+rows.
+
 The usual local flow is to save it into `.agent/DEV_JWT_TOKENS.json`:
 
 ```bash
-uv run commands generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
+uv run command generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
 ```
 
 When `--output-file` is provided, the command writes the token JSON to that
@@ -89,7 +93,7 @@ The command also accepts explicit identity claim overrides when you need
 tokens for a different local caller:
 
 ```bash
-uv run commands generate-dev-jwt \
+uv run command generate-dev-jwt \
   --codex-client-id local-codex \
   --codex-client-type codex
 ```
@@ -184,11 +188,19 @@ These settings control how the local FastMCP HTTP server starts.
 
 Manifests and logs are intentionally separate:
 
-- manifest JSON paths are passed to `uv run commands upload-project-manifest`
-  and `uv run commands update-project-manifest` with `--path`
+- manifest JSON paths are passed to `uv run command upload-project-manifest`
+  and `uv run command update-project-manifest` with `--path`
+- this repository may use `src/manifests/projects` for local manifest examples,
+  but production manifests should be provided by the operational repository
+  that owns them, such as `devops/`
 - runtime MCP tools read persisted manifest rows from the database
 - file-backed manifest source targets must be absolute paths, so each source
   declares exactly where its log file lives
+- in production Compose, host `/var/log` is visible inside MCP as
+  `/host/var/log`, and host `/etc/nginx/logs` is visible as
+  `/host/etc/nginx/logs`
+- manifest file targets are literal paths; dated filename templates are not
+  expanded by MCP
 
 - `MCP_HOST`
   Host address the FastMCP service binds inside the running process.
@@ -274,23 +286,10 @@ the dedicated production compose file:
 doppler run -- docker compose -f docker-compose.prod.yml up --build -d
 ```
 
-Production Postgres data is stored in a host bind mount, not a Docker
-Compose-managed volume:
-
-```text
-${POSTGRES_DATA_DIR:-/var/lib/mcp-log-server/postgresql}:/var/lib/postgresql
-```
-
-The deploy script creates this directory before starting the database. Override
-`POSTGRES_DATA_DIR` only when you have chosen another durable host path. Docker
-volume prune commands do not delete this host directory, but normal filesystem
-deletion still can.
-
-Deploy and prod backup commands refuse to continue when
-`$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION` is missing, unless
-`ALLOW_EMPTY_POSTGRES_DATA_DIR=true` is set. That override is only for a
-deliberate first-time initialization or restore flow; it should not be used to
-paper over a missing production data directory.
+Production Postgres data is stored in the Compose-managed `postgres-data`
+Docker volume. The release scripts do not require a host data directory or
+`POSTGRES_DATA_DIR` override. Keep database backups current before Docker volume
+cleanup or host maintenance.
 
 The production deploy script includes the fail2ban socket override by default,
 so the normal VPS path is:
@@ -320,8 +319,7 @@ Production compose differences:
 - runs the `app` and `db` services
 - does not mount the local source tree
 - does not use `watchfiles`
-- stores Postgres data in the durable host directory configured by
-  `POSTGRES_DATA_DIR`
+- stores Postgres data in the Compose-managed `postgres-data` Docker volume
 - builds the Dockerfile `production` stage with
   `uv sync --frozen --no-dev --compile-bytecode`
 - sets `UV_NO_DEV=1`, `UV_FROZEN=1`, and `UV_NO_SYNC=1` inside the production

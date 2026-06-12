@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -12,9 +11,8 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-from scripts.commands import upload_project_manifest as upload_command
-from scripts.docker_commands import DockerCommandResult
-from scripts.main import app
+from cli.commands import upload_project_manifest as upload_command
+from cli.main import app
 
 runner = CliRunner()
 
@@ -84,7 +82,7 @@ def _write_manifest(manifests_dir, project_key: str) -> None:
     )
 
 
-def test_upload_project_manifest_internal_uploads_one_project(monkeypatch, tmp_path) -> None:
+def test_upload_project_manifest_uploads_one_project(monkeypatch, tmp_path) -> None:
     manifests_dir = tmp_path / "manifests"
     manifests_dir.mkdir()
     _write_manifest(manifests_dir, "landingpage")
@@ -95,7 +93,7 @@ def test_upload_project_manifest_internal_uploads_one_project(monkeypatch, tmp_p
 
     result = runner.invoke(
         app,
-        ["upload-project-manifest-internal", "--path", str(manifests_dir), "landingpage"],
+        ["upload-project-manifest", "--path", str(manifests_dir), "landingpage"],
     )
 
     assert result.exit_code == 0
@@ -104,7 +102,7 @@ def test_upload_project_manifest_internal_uploads_one_project(monkeypatch, tmp_p
     assert "Upload summary: created 1, already existing 0, total 1." in result.output
 
 
-def test_upload_project_manifest_internal_uploads_all_projects(monkeypatch, tmp_path) -> None:
+def test_upload_project_manifest_uploads_all_projects(monkeypatch, tmp_path) -> None:
     manifests_dir = tmp_path / "manifests"
     manifests_dir.mkdir()
     _write_manifest(manifests_dir, "zeta")
@@ -116,7 +114,7 @@ def test_upload_project_manifest_internal_uploads_all_projects(monkeypatch, tmp_
 
     result = runner.invoke(
         app,
-        ["upload-project-manifest-internal", "--path", str(manifests_dir), "--all"],
+        ["upload-project-manifest", "--path", str(manifests_dir), "--all"],
     )
 
     assert result.exit_code == 0
@@ -124,7 +122,7 @@ def test_upload_project_manifest_internal_uploads_all_projects(monkeypatch, tmp_
     assert "Upload summary: created 2, already existing 0, total 2." in result.output
 
 
-def test_upload_project_manifest_internal_reports_existing_without_update(
+def test_upload_project_manifest_reports_existing_without_update(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -139,18 +137,18 @@ def test_upload_project_manifest_internal_reports_existing_without_update(
 
     result = runner.invoke(
         app,
-        ["upload-project-manifest-internal", "--path", str(manifests_dir), "landingpage"],
+        ["upload-project-manifest", "--path", str(manifests_dir), "landingpage"],
     )
 
     assert result.exit_code == 0
     assert fake_service.uploaded_project_keys == []
     assert fake_service.updated_project_keys == []
     assert "Project manifest landingpage already exists and was not changed." in result.output
-    assert "uv run commands update-project-manifest --project landingpage" in result.output
+    assert "uv run command update-project-manifest --project landingpage" in result.output
     assert "Upload summary: created 0, already existing 1, total 1." in result.output
 
 
-def test_update_project_manifest_internal_updates_existing_project(
+def test_update_project_manifest_updates_existing_project(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -166,7 +164,7 @@ def test_update_project_manifest_internal_updates_existing_project(
     result = runner.invoke(
         app,
         [
-            "update-project-manifest-internal",
+            "update-project-manifest",
             "--path",
             str(manifests_dir),
             "--project",
@@ -179,7 +177,7 @@ def test_update_project_manifest_internal_updates_existing_project(
     assert "Updated project manifest landingpage (sources: 1, row_id:" in result.output
 
 
-def test_update_project_manifest_internal_updates_all_existing_projects(
+def test_update_project_manifest_updates_all_existing_projects(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -195,7 +193,7 @@ def test_update_project_manifest_internal_updates_all_existing_projects(
 
     result = runner.invoke(
         app,
-        ["update-project-manifest-internal", "--path", str(manifests_dir), "--all"],
+        ["update-project-manifest", "--path", str(manifests_dir), "--all"],
     )
 
     assert result.exit_code == 0
@@ -205,7 +203,7 @@ def test_update_project_manifest_internal_updates_all_existing_projects(
     assert "Update summary: updated 2, missing 0, total 2." in result.output
 
 
-def test_update_project_manifest_internal_updates_all_and_reports_missing_projects(
+def test_update_project_manifest_updates_all_and_reports_missing_projects(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -221,7 +219,7 @@ def test_update_project_manifest_internal_updates_all_and_reports_missing_projec
 
     result = runner.invoke(
         app,
-        ["update-project-manifest-internal", "--path", str(manifests_dir), "--all"],
+        ["update-project-manifest", "--path", str(manifests_dir), "--all"],
     )
 
     assert result.exit_code == 0
@@ -231,7 +229,7 @@ def test_update_project_manifest_internal_updates_all_and_reports_missing_projec
     assert "Update summary: updated 1, missing 1, total 2." in result.output
 
 
-def test_update_project_manifest_internal_reports_missing_project(
+def test_update_project_manifest_reports_missing_project(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -246,7 +244,7 @@ def test_update_project_manifest_internal_reports_missing_project(
     result = runner.invoke(
         app,
         [
-            "update-project-manifest-internal",
+            "update-project-manifest",
             "--path",
             str(manifests_dir),
             "--project",
@@ -257,21 +255,21 @@ def test_update_project_manifest_internal_reports_missing_project(
     assert result.exit_code == 0
     assert fake_service.updated_project_keys == []
     assert "Project manifest landingpage does not exist." in result.output
-    assert "uv run commands upload-project-manifest landingpage" in result.output
+    assert "uv run command upload-project-manifest landingpage" in result.output
 
 
-def test_update_project_manifest_internal_requires_selection() -> None:
-    result = runner.invoke(app, ["update-project-manifest-internal"])
+def test_update_project_manifest_requires_selection() -> None:
+    result = runner.invoke(app, ["update-project-manifest"])
 
     assert result.exit_code == 2
     with pytest.raises(typer.BadParameter, match="Provide --project PROJECT_NAME or use --all."):
-        upload_command.update_project_manifest_internal()
+        upload_command.update_project_manifest()
 
 
-def test_update_project_manifest_internal_rejects_project_and_all() -> None:
+def test_update_project_manifest_rejects_project_and_all() -> None:
     result = runner.invoke(
         app,
-        ["update-project-manifest-internal", "--project", "landingpage", "--all"],
+        ["update-project-manifest", "--project", "landingpage", "--all"],
     )
 
     assert result.exit_code == 2
@@ -279,7 +277,7 @@ def test_update_project_manifest_internal_rejects_project_and_all() -> None:
         typer.BadParameter,
         match="Use either --project or --all, not both.",
     ):
-        upload_command.update_project_manifest_internal(
+        upload_command.update_project_manifest(
             project_name="landingpage",
             all_projects=True,
         )
@@ -326,176 +324,24 @@ def test_upload_project_manifest_command_rejects_project_and_all() -> None:
         upload_command.upload_project_manifest(project_name="landingpage", all_projects=True)
 
 
-def test_upload_project_manifest_command_runs_inside_app_container(monkeypatch) -> None:
-    calls: list[dict[str, object]] = []
-    copied: list[dict[str, object]] = []
+def test_upload_project_manifest_defaults_to_configured_manifest_path(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    manifests_dir = tmp_path / "configured-manifests"
+    manifests_dir.mkdir()
+    _write_manifest(manifests_dir, "landingpage")
+    fake_service = FakeProjectManifestService()
 
-    class FakeDockerCommandService:
-        @staticmethod
-        def copy_files_to_compose_service(**kwargs):
-            copied.append(kwargs)
-
-        @staticmethod
-        def run_compose_service_command(**kwargs):
-            calls.append(kwargs)
-            return DockerCommandResult(
-                exit_code=0,
-                output="Uploaded project manifest landingpage\n",
-            )
-
-    monkeypatch.setattr(upload_command, "DockerCommandService", FakeDockerCommandService)
+    monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
+    monkeypatch.setattr(upload_command, "database_context", fake_database_context)
     monkeypatch.setattr(
-        upload_command,
-        "_manifest_files_for_container_copy",
-        lambda **_: [Path("landingpage.json")],
+        upload_command.settings,
+        "PROJECT_MANIFESTS_PATH",
+        manifests_dir,
     )
 
     result = runner.invoke(app, ["upload-project-manifest", "landingpage"])
 
     assert result.exit_code == 0
-    assert result.output == "Uploaded project manifest landingpage\n"
-    assert calls == [
-        {
-            "project_name": "mcp-log-server",
-            "service_name": "app",
-            "command": [
-                "uv",
-                "run",
-                "python",
-                "-m",
-                "scripts.main",
-                "upload-project-manifest-internal",
-                "--path",
-                "/tmp/mcp-log-server-manifests",
-                "landingpage",
-            ],
-        }
-    ]
-    assert copied == [
-        {
-            "project_name": "mcp-log-server",
-            "service_name": "app",
-            "files": [Path("landingpage.json")],
-            "target_dir": "/tmp/mcp-log-server-manifests",
-        }
-    ]
-
-
-def test_upload_project_manifest_command_passes_all_to_app_container(monkeypatch) -> None:
-    calls: list[dict[str, object]] = []
-    copied: list[dict[str, object]] = []
-
-    class FakeDockerCommandService:
-        @staticmethod
-        def copy_files_to_compose_service(**kwargs):
-            copied.append(kwargs)
-
-        @staticmethod
-        def run_compose_service_command(**kwargs):
-            calls.append(kwargs)
-            return DockerCommandResult(exit_code=0, output="")
-
-    monkeypatch.setattr(upload_command, "DockerCommandService", FakeDockerCommandService)
-    monkeypatch.setattr(
-        upload_command,
-        "_manifest_files_for_container_copy",
-        lambda **_: [Path("landingpage.json"), Path("vps-security.json")],
-    )
-
-    result = runner.invoke(app, ["upload-project-manifest", "--all"])
-
-    assert result.exit_code == 0
-    assert calls[0]["command"] == [
-        "uv",
-        "run",
-        "python",
-        "-m",
-        "scripts.main",
-        "upload-project-manifest-internal",
-        "--path",
-        "/tmp/mcp-log-server-manifests",
-        "--all",
-    ]
-    assert copied[0]["files"] == [Path("landingpage.json"), Path("vps-security.json")]
-
-
-def test_update_project_manifest_command_runs_inside_app_container(monkeypatch) -> None:
-    calls: list[dict[str, object]] = []
-    copied: list[dict[str, object]] = []
-
-    class FakeDockerCommandService:
-        @staticmethod
-        def copy_files_to_compose_service(**kwargs):
-            copied.append(kwargs)
-
-        @staticmethod
-        def run_compose_service_command(**kwargs):
-            calls.append(kwargs)
-            return DockerCommandResult(
-                exit_code=0,
-                output="Updated project manifest landingpage\n",
-            )
-
-    monkeypatch.setattr(upload_command, "DockerCommandService", FakeDockerCommandService)
-    monkeypatch.setattr(
-        upload_command,
-        "_manifest_files_for_container_copy",
-        lambda **_: [Path("landingpage.json")],
-    )
-
-    result = runner.invoke(app, ["update-project-manifest", "--project", "landingpage"])
-
-    assert result.exit_code == 0
-    assert result.output == "Updated project manifest landingpage\n"
-    assert calls[0]["command"] == [
-        "uv",
-        "run",
-        "python",
-        "-m",
-        "scripts.main",
-        "update-project-manifest-internal",
-        "--path",
-        "/tmp/mcp-log-server-manifests",
-        "--project",
-        "landingpage",
-    ]
-    assert copied[0]["files"] == [Path("landingpage.json")]
-
-
-def test_update_project_manifest_command_passes_all_to_app_container(monkeypatch) -> None:
-    calls: list[dict[str, object]] = []
-    copied: list[dict[str, object]] = []
-
-    class FakeDockerCommandService:
-        @staticmethod
-        def copy_files_to_compose_service(**kwargs):
-            copied.append(kwargs)
-
-        @staticmethod
-        def run_compose_service_command(**kwargs):
-            calls.append(kwargs)
-            return DockerCommandResult(exit_code=0, output="Updated all manifests\n")
-
-    monkeypatch.setattr(upload_command, "DockerCommandService", FakeDockerCommandService)
-    monkeypatch.setattr(
-        upload_command,
-        "_manifest_files_for_container_copy",
-        lambda **_: [Path("landingpage.json"), Path("vps-security.json")],
-    )
-
-    result = runner.invoke(app, ["update-project-manifest", "--all"])
-
-    assert result.exit_code == 0
-    assert result.output == "Updated all manifests\n"
-    assert calls[0]["command"] == [
-        "uv",
-        "run",
-        "python",
-        "-m",
-        "scripts.main",
-        "update-project-manifest-internal",
-        "--path",
-        "/tmp/mcp-log-server-manifests",
-        "--all",
-    ]
-    assert copied[0]["files"] == [Path("landingpage.json"), Path("vps-security.json")]
+    assert fake_service.uploaded_project_keys == ["landingpage"]

@@ -48,8 +48,6 @@ SKIP_BACKUP="${SKIP_BACKUP:-false}"
 SKIP_MIGRATE="${SKIP_MIGRATE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 ENABLE_FAIL2BAN_SOCKET="${ENABLE_FAIL2BAN_SOCKET:-true}"
-ALLOW_EMPTY_POSTGRES_DATA_DIR="${ALLOW_EMPTY_POSTGRES_DATA_DIR:-false}"
-
 DATABASE_NAME="${DATABASE_NAME:-mcp_log_server}"
 DATABASE_USER="${DATABASE_USER:-mcp_log_server}"
 DATABASE_PASSWORD="${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}"
@@ -59,8 +57,8 @@ JWT_AUDIENCE="${JWT_AUDIENCE:?JWT_AUDIENCE is required}"
 SITE_DOMAIN="${SITE_DOMAIN:?SITE_DOMAIN is required for Traefik MCP routing}"
 DOCKER_SOCKET_GID="${DOCKER_SOCKET_GID:?DOCKER_SOCKET_GID is required}"
 FAIL2BAN_LOG_GID="${FAIL2BAN_LOG_GID:?FAIL2BAN_LOG_GID is required}"
-POSTGRES_DATA_DIR="${POSTGRES_DATA_DIR:-/var/lib/mcp-log-server/postgresql}"
-POSTGRES_PG_VERSION_FILE="$POSTGRES_DATA_DIR/data/pgdata/PG_VERSION"
+PROJECT_MANIFESTS_HOST_PATH="${PROJECT_MANIFESTS_HOST_PATH:?PROJECT_MANIFESTS_HOST_PATH is required}"
+PROJECT_MANIFESTS_PATH="${PROJECT_MANIFESTS_PATH:-/app/project-manifests}"
 
 export \
     ENVIRONMENT \
@@ -75,7 +73,8 @@ export \
     SITE_DOMAIN \
     DOCKER_SOCKET_GID \
     FAIL2BAN_LOG_GID \
-    POSTGRES_DATA_DIR
+    PROJECT_MANIFESTS_HOST_PATH \
+    PROJECT_MANIFESTS_PATH
 
 cleanup() {
     rmdir "$LOCK_DIR" 2>/dev/null || true
@@ -100,7 +99,7 @@ printf "📦 Compose project: %s\n" "$COMPOSE_PROJECT_NAME"
 printf "🧾 Compose file: %s\n" "$COMPOSE_FILE"
 printf "🐳 Docker socket GID: %s\n" "$DOCKER_SOCKET_GID"
 printf "🧾 Fail2ban log GID: %s\n" "$FAIL2BAN_LOG_GID"
-printf "🐘 Postgres data directory: %s\n" "$POSTGRES_DATA_DIR"
+printf "📁 Project manifests host path: %s\n" "$PROJECT_MANIFESTS_HOST_PATH"
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 if [[ "$ENABLE_FAIL2BAN_SOCKET" == "true" ]]; then
     if [[ ! -f "$FAIL2BAN_COMPOSE_FILE" ]]; then
@@ -195,15 +194,6 @@ if [[ "$DRY_RUN" == "true" ]]; then
     exit 0
 fi
 printf "✅ Compose config validation will run during deploy with required variables set\n"
-mkdir -p "$POSTGRES_DATA_DIR"
-printf "✅ Postgres data directory exists: %s\n" "$POSTGRES_DATA_DIR"
-if [[ ! -f "$POSTGRES_PG_VERSION_FILE" && "$ALLOW_EMPTY_POSTGRES_DATA_DIR" != "true" ]]; then
-    log_error "Postgres data directory is empty or not initialized: $POSTGRES_DATA_DIR"
-    log_info "Expected marker file: $POSTGRES_PG_VERSION_FILE"
-    log_info "Restore/migrate existing production data before deploying this compose file."
-    log_info "For a brand-new environment only, set ALLOW_EMPTY_POSTGRES_DATA_DIR=true."
-    exit 1
-fi
 
 # Step 3: verify the image was built or pulled before starting deployment.
 deploy_step "🔍" 3 9 "Verify release image exists"
@@ -228,7 +218,6 @@ if [[ "$SKIP_BACKUP" != "true" ]]; then
     DATABASE_NAME="$DATABASE_NAME" \
     DATABASE_USER="$DATABASE_USER" \
     DATABASE_PASSWORD="$DATABASE_PASSWORD" \
-    POSTGRES_DATA_DIR="$POSTGRES_DATA_DIR" \
         "$PROJECT_DIR/infra/scripts/db_backup/backup_db.sh"
 else
     log_warn "Skipping database backup because SKIP_BACKUP=true"

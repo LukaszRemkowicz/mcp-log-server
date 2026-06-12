@@ -87,6 +87,43 @@ async def test_agent_call_service_creates_tool_call_payload(mocker: MockerFixtur
 
 
 @pytest.mark.anyio
+async def test_agent_call_service_creates_analysis_tool_call_payload(
+    mocker: MockerFixture,
+) -> None:
+    """Verify audit rows capture single-project analysis tool arguments."""
+
+    session = AgentSessionFactory.build()
+    row = mocker.Mock()
+    row.id = uuid4()
+    db_service = mocker.Mock()
+    db_service.create = mocker.AsyncMock(return_value=row)
+    service = AgentCallAuditService(db_service=db_service)
+
+    created_id = await service.create_tool_call(
+        session=session,
+        event="mcp_call_tool",
+        tool_name="group_errors",
+        arguments={
+            "session_id": session.name,
+            "project_name": "landingpage",
+            "source_keys": ["backend"],
+        },
+    )
+
+    payload = db_service.create.call_args.args[0]
+    assert created_id == row.id
+    assert isinstance(payload, AgentCallCreate)
+    assert payload.tool_name == "group_errors"
+    assert payload.project_name == "landingpage"
+    assert payload.source_keys == ["backend"]
+    assert payload.arguments == {
+        "session_id": session.name,
+        "project_name": "landingpage",
+        "source_keys": ["backend"],
+    }
+
+
+@pytest.mark.anyio
 async def test_agent_call_service_completes_tool_call(mocker: MockerFixture) -> None:
     agent_call_pk = uuid4()
     db_service = mocker.Mock()

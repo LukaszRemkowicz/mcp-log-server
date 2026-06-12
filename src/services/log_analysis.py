@@ -29,8 +29,11 @@ from tools.models import (
     GroupedErrorPayload,
     IncidentBundlePayload,
     IncidentSourceSummaryPayload,
+    InspectProbeBlockingActivityPayload,
     InspectProxyActivityPayload,
     LogSnapshotMetadata,
+    ProbeBlockingIpPayload,
+    ProbeBlockingPolicyPayload,
     ProxyRouteSignalPayload,
     ProxyStatusClassCountPayload,
     SnapshotLineReferencePayload,
@@ -49,6 +52,38 @@ _WHITESPACE_PATTERN = re.compile(r"\s+")
 _REQUEST_LINE_PATTERN = re.compile(r"^[A-Z]+\s+(\S+)\s+HTTP/\d(?:\.\d)?$")
 _REQUEST_METHOD_PATH_PATTERN = re.compile(r"^(?P<method>[A-Z]+)\s+(?P<path>\S+)")
 _DOCKER_JSON_LINE_PATTERN = re.compile(r"^\S+\s+({.*})\s*$")
+_PROBE_ACCESS_SOURCE_TO_JAIL = {
+    "nginx_access": "portfolio-nginx-probes",
+    "traefik_access": "portfolio-traefik-probes",
+}
+_PROBE_BLOCKING_DEFAULT_POLICY = {
+    "portfolio-nginx-probes": ProbeBlockingPolicyPayload(
+        findtime="1m",
+        maxretry=3,
+        bantime="-1",
+    ),
+    "portfolio-traefik-probes": ProbeBlockingPolicyPayload(
+        findtime="1m",
+        maxretry=3,
+        bantime="-1",
+    ),
+}
+_PROBE_SUSPICIOUS_PATH_PATTERNS = (
+    re.compile(r"^/(?:[^/]+/)*\.env[^ ]*$"),
+    re.compile(r"^/(?:[^/]+/)*\.git/config[^ ]*$"),
+    re.compile(
+        r"^/(?:wp-admin|wp-login|wp-content|xmlrpc\.php|phpMyAdmin|phpmyadmin|"
+        r"setup\.php|config\.php|eval-stdin\.php)(?:[/?].*)?$"
+    ),
+)
+_FAIL2BAN_ACTION_PATTERN = re.compile(
+    r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s+\S+\s+\[\d+\]:"
+    r"\s+\w+\s+\[(?P<jail>[^\]]+)\]\s+(?P<action>Ban|Unban)\s+(?P<ip>\S+)$"
+)
+_FAIL2BAN_ALREADY_BANNED_PATTERN = re.compile(
+    r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s+\S+\s+\[\d+\]:"
+    r"\s+\w+\s+\[(?P<jail>[^\]]+)\]\s+(?P<ip>\S+)\s+already banned$"
+)
 
 
 class StructuredLogField(StrEnum):
@@ -332,6 +367,51 @@ class ProxyActivityAnalysis:
     total_route_group_count: int
 
 
+@dataclass(slots=True)
+class ProbeBlockingRecord:
+    """Mutable probe/fail2ban correlation state for one IP and jail."""
+
+    ip: str
+    jail: str
+    sources: set[str] = field(default_factory=set)
+    request_count: int = 0
+    paths: set[str] = field(default_factory=set)
+    last_seen: str = ""
+    ban_count: int = 0
+    unban_count: int = 0
+    already_banned_count: int = 0
+    last_ban_at: str = ""
+    last_unban_at: str = ""
+
+    def to_payload(self, policy: dict[str, ProbeBlockingPolicyPayload]) -> ProbeBlockingIpPayload:
+        """Convert accumulated state into the public probe-blocking payload."""
+
+        maxretry = policy.get(
+            self.jail,
+            ProbeBlockingPolicyPayload(
+                findtime="1m",
+                maxretry=3,
+                bantime="-1",
+            ),
+        ).maxretry
+        return ProbeBlockingIpPayload(
+            ip=self.ip,
+            jail=self.jail,
+            sources=sorted(self.sources),
+            request_count=self.request_count,
+            paths=sorted(self.paths),
+            last_seen=self.last_seen,
+            maxretry=maxretry,
+            expected_ban=self.request_count >= maxretry,
+            observed_ban=self.ban_count > 0 or self.already_banned_count > 0,
+            ban_count=self.ban_count,
+            unban_count=self.unban_count,
+            already_banned_count=self.already_banned_count,
+            last_ban_at=self.last_ban_at,
+            last_unban_at=self.last_unban_at,
+        )
+
+
 class LogAnalysisService:
     """Run deterministic grouped-error analysis over persisted snapshots.
 
@@ -483,6 +563,79 @@ class LogAnalysisService:
             suggested_next_steps=suggested_next_steps,
         )
 
+    def inspect_probe_blocking_activity(
+        self,
+        metadata: LogSnapshotMetadata,
+        *,
+        sources: list[CollectLogsSourceOut],
+        requested_source_keys: list[str] | None,
+        requested_project_name: str | None,
+        project_name: str,
+    ) -> InspectProbeBlockingActivityPayload:
+        """Correlate sensitive-path proxy probes with historical fail2ban events."""
+
+        selected_sources = self._select_snapshot_files(
+            requested_source_keys,
+            sources=sources,
+        )
+        records: dict[tuple[str, str], ProbeBlockingRecord] = {}
+        searched_source_keys: list[str] = []
+        policy = dict(_PROBE_BLOCKING_DEFAULT_POLICY)
+
+        for source in selected_sources:
+            source_key = source.source_key
+            searched_source_keys.append(source_key)
+            if source_key not in {"fail2ban", *_PROBE_ACCESS_SOURCE_TO_JAIL.keys()}:
+                continue
+            file_ref = cast(FileReference, source.file)
+            try:
+                with open(file_ref.path, encoding="utf-8", errors="replace") as file:
+                    for line_number, raw_line in enumerate(file, start=1):
+                        line = raw_line.rstrip("\n")
+                        if source_key == "fail2ban":
+                            self._add_fail2ban_probe_events(line, records)
+                            continue
+                        payload = self._parse_json_line(line)
+                        if payload is None:
+                            continue
+                        event = self._parse_proxy_line(
+                            source_key=source_key,
+                            output_file=file_ref.name,
+                            line_number=line_number,
+                            raw_line=line,
+                            payload=payload,
+                        )
+                        self._add_sensitive_probe_event(event, records)
+            except ValueError as error:
+                raise ValueError("Requested persisted source file reference is invalid.") from error
+            except OSError as error:
+                raise ValueError("Requested log snapshot file was not found on disk.") from error
+
+        suspicious_ips = sorted(
+            (record.to_payload(policy) for record in records.values() if record.request_count > 0),
+            key=lambda item: (-item.request_count, item.ip, item.jail),
+        )
+        expected_bans = [item for item in suspicious_ips if item.expected_ban]
+        observed_bans = [item for item in suspicious_ips if item.observed_ban]
+        return InspectProbeBlockingActivityPayload(
+            action="inspect_probe_blocking_activity",
+            requested_project_name=requested_project_name,
+            project_name=project_name,
+            workspace=metadata.workspace,
+            session_id=metadata.session_id,
+            snapshot_dir=_snapshot_dir_from_metadata(metadata),
+            searched_source_keys=searched_source_keys,
+            policy=policy,
+            suspicious_ip_count=len(suspicious_ips),
+            suspicious_request_count=sum(item.request_count for item in suspicious_ips),
+            expected_ban_ip_count=len(expected_bans),
+            observed_ban_ip_count=len(observed_bans),
+            expected_but_not_observed=[
+                item.ip for item in suspicious_ips if item.expected_ban and not item.observed_ban
+            ],
+            suspicious_ips=suspicious_ips,
+        )
+
     def inspect_proxy_activity(
         self,
         metadata: LogSnapshotMetadata,
@@ -618,6 +771,60 @@ class LogAnalysisService:
             top_routes=sorted_routes[:max_groups],
             total_route_group_count=total_route_group_count,
         )
+
+    @staticmethod
+    def _add_sensitive_probe_event(
+        event: ProxyLineEvent,
+        records: dict[tuple[str, str], ProbeBlockingRecord],
+    ) -> None:
+        """Add one proxy event if it is a sensitive 403/404 probe."""
+
+        if event.status_code not in {403, 404}:
+            return
+        if event.client_ip is None or event.path is None:
+            return
+        if not any(pattern.match(event.path) for pattern in _PROBE_SUSPICIOUS_PATH_PATTERNS):
+            return
+        jail = _PROBE_ACCESS_SOURCE_TO_JAIL.get(event.source_key)
+        if jail is None:
+            return
+        record = records.setdefault(
+            (event.client_ip, jail),
+            ProbeBlockingRecord(event.client_ip, jail),
+        )
+        record.sources.add(event.source_key)
+        record.request_count += 1
+        record.paths.add(event.path)
+        if event.timestamp:
+            record.last_seen = event.timestamp
+
+    @staticmethod
+    def _add_fail2ban_probe_events(
+        line: str,
+        records: dict[tuple[str, str], ProbeBlockingRecord],
+    ) -> None:
+        """Add fail2ban ban/unban/already-banned facts to correlated records."""
+
+        action_match = _FAIL2BAN_ACTION_PATTERN.match(line)
+        if action_match is not None:
+            jail = action_match.group("jail")
+            ip = action_match.group("ip")
+            record = records.setdefault((ip, jail), ProbeBlockingRecord(ip, jail))
+            timestamp = action_match.group("timestamp")
+            if action_match.group("action") == "Ban":
+                record.ban_count += 1
+                record.last_ban_at = timestamp
+            else:
+                record.unban_count += 1
+                record.last_unban_at = timestamp
+            return
+
+        already_match = _FAIL2BAN_ALREADY_BANNED_PATTERN.match(line)
+        if already_match is not None:
+            jail = already_match.group("jail")
+            ip = already_match.group("ip")
+            record = records.setdefault((ip, jail), ProbeBlockingRecord(ip, jail))
+            record.already_banned_count += 1
 
     @staticmethod
     def _select_proxy_snapshot_files(
@@ -849,15 +1056,13 @@ class LogAnalysisService:
 
         parsed = self._parse_json_line(raw_line)
         if parsed is not None:
-            event = self._classify_structured_line(
+            return self._classify_structured_line(
                 source_key=source_key,
                 output_file=output_file,
                 line_number=line_number,
                 raw_line=raw_line,
                 payload=parsed,
             )
-            if event is not None:
-                return event
 
         return self._classify_text_line(
             source_key=source_key,

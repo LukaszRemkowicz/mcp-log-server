@@ -359,25 +359,44 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert response.status_code == 200
     assert content == []
     assert payload["workflow_name"] == "analyze_daily_log_bundle"
-    assert "Monitoring Tool Loop System Prompt" in payload["prompt"]
-    assert "Monitoring Tool Loop User Prompt" in payload["prompt"]
-    assert "valid top-level actions are only" in payload["prompt"]
-    assert "Log Summary Instructions" in payload["prompt"]
+    assert isinstance(payload["prompt"], str)
+    assert payload["prompt"]
+    assert "return `action=read_skills` for" in payload["prompt"]
+    assert "`bot_detection` before `final_report`" in payload["prompt"]
+    assert "instead of relying on model memory" in payload["prompt"]
+    assert "possible security impact" in payload["prompt"]
+    assert "successful sensitive-path access" in payload["prompt"]
+    assert "`owasp_security` before `final_report`" in payload["prompt"]
     assert any(
         item["resource_uri"] == "skill://workflow/severity_guide"
+        for item in payload["mandatory_skills"]
+    )
+    assert any(
+        item["resource_uri"] == "skill://workflow/normal_patterns"
+        for item in payload["mandatory_skills"]
+    )
+    assert any(
+        item["resource_uri"] == "skill://workflow/application_monitoring"
         for item in payload["mandatory_skills"]
     )
     assert any(
         item["resource_uri"] == "skill://workflow/bot_detection"
         for item in payload["optional_skills"]
     )
+    bot_detection = next(
+        item
+        for item in payload["optional_skills"]
+        if item["resource_uri"] == "skill://workflow/bot_detection"
+    )
+    assert "scanner/probe-heavy traffic" in bot_detection["when_useful"]
     assert any(item["tool_name"] == "collect_logs" for item in payload["tools"])
     assert any(item["tool_name"] == "list_log_snapshot_files" for item in payload["tools"])
     assert any(item["tool_name"] == "read_log_snapshot_file" for item in payload["tools"])
     assert any(item["tool_name"] == "grep_log_snapshot" for item in payload["tools"])
-    assert all(item["tool_name"] != "group_errors" for item in payload["tools"])
-    assert all(item["tool_name"] != "build_incident_bundle" for item in payload["tools"])
-    assert all(item["tool_name"] != "create_filtered_view" for item in payload["tools"])
+    assert any(item["tool_name"] == "group_errors" for item in payload["tools"])
+    assert any(item["tool_name"] == "build_incident_bundle" for item in payload["tools"])
+    assert any(item["tool_name"] == "create_filtered_view" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_proxy_activity" for item in payload["tools"])
     assert any(item["tool_name"] == "suggest_followup_window" for item in payload["tools"])
     assert any(item["tool_name"] == "list_projects" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_service_status" for item in payload["tools"])
@@ -1201,9 +1220,10 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
     assert collect_payload["resolved_source_keys"] == [
         "fail2ban",
         "nginx_access",
+        "nginx_runtime",
         "traefik_access",
     ]
-    assert [source["line_count"] for source in collect_payload["sources"]] == [20, 12, 12]
+    assert [source["line_count"] for source in collect_payload["sources"]] == [20, 12, 1, 12]
     assert grep_response.status_code == 200
     assert grep_response.json()["result"]["isError"] is False
     assert grep_payload["match_count"] == 8
@@ -1235,9 +1255,96 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
     assert group_payload["matching_line_count"] == 19
 
 
+async def test_inspect_probe_blocking_activity_api_correlates_probe_and_fail2ban_events(
+    file_backed_project_context: FileBackedProjectContext,
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify probe-blocking diagnostics correlate proxy probes with fail2ban events."""
+
+    token = custom_jwt_token(
+        "all-project-workflow-client",
+        [LOGS_COLLECT_SCOPE],
+        "all-project-workflow-client",
+        {"client_type": "workflow_agent"},
+    )
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = await jsonrpc.post(
+            token=token,
+            data=build_collect_logs_request(
+                request_id="collect-vps-security-probe-blocking",
+                project_names=["vps-security"],
+                source_keys=["all"],
+                since="30d",
+            ),
+        )
+        response = await jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "inspect-probe-blocking-activity",
+                "method": "tools/call",
+                "params": {
+                    "name": "inspect_probe_blocking_activity",
+                    "arguments": {
+                        "project_name": "vps-security",
+                        "source_keys": ["fail2ban", "nginx_access", "traefik_access"],
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert collect_response.status_code == 200
+    assert collect_response.json()["result"]["isError"] is False
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_probe_blocking_activity"
+    assert payload["project_name"] == "vps-security"
+    assert payload["searched_source_keys"] == ["fail2ban", "nginx_access", "traefik_access"]
+    assert payload["policy"] == {
+        "portfolio-nginx-probes": {"findtime": "1m", "maxretry": 3, "bantime": "-1"},
+        "portfolio-traefik-probes": {"findtime": "1m", "maxretry": 3, "bantime": "-1"},
+    }
+    assert payload["suspicious_ip_count"] == 4
+    assert payload["suspicious_request_count"] == 8
+    assert payload["expected_ban_ip_count"] == 1
+    assert payload["observed_ban_ip_count"] == 3
+    assert payload["expected_but_not_observed"] == []
+
+    nginx_record = next(
+        item
+        for item in payload["suspicious_ips"]
+        if item["ip"] == "203.0.113.10" and item["jail"] == "portfolio-nginx-probes"
+    )
+    assert nginx_record["request_count"] == 4
+    assert nginx_record["paths"] == ["/.env", "/.git/config", "/phpmyadmin/index.php", "/wp-admin"]
+    assert nginx_record["expected_ban"] is True
+    assert nginx_record["observed_ban"] is True
+    assert nginx_record["ban_count"] == 1
+    assert nginx_record["already_banned_count"] == 1
+    assert nginx_record["last_ban_at"] == "2026-05-18 09:40:01"
+
+    unobserved_record = next(
+        item
+        for item in payload["suspicious_ips"]
+        if item["ip"] == "198.51.100.99" and item["jail"] == "portfolio-traefik-probes"
+    )
+    assert unobserved_record["expected_ban"] is False
+    assert unobserved_record["observed_ban"] is False
+
+
 @pytest.mark.parametrize(
     "tool_name",
-    ["group_errors", "build_incident_bundle", "create_filtered_view", "inspect_proxy_activity"],
+    [
+        "group_errors",
+        "build_incident_bundle",
+        "create_filtered_view",
+        "inspect_proxy_activity",
+        "inspect_probe_blocking_activity",
+    ],
 )
 async def test_analysis_tools_api_support_single_source_alias(
     file_backed_project_context: FileBackedProjectContext,
@@ -1279,7 +1386,13 @@ async def test_analysis_tools_api_support_single_source_alias(
 
 @pytest.mark.parametrize(
     "tool_name",
-    ["group_errors", "build_incident_bundle", "create_filtered_view", "inspect_proxy_activity"],
+    [
+        "group_errors",
+        "build_incident_bundle",
+        "create_filtered_view",
+        "inspect_proxy_activity",
+        "inspect_probe_blocking_activity",
+    ],
 )
 async def test_analysis_tools_api_reject_conflicting_source_key_arguments(
     file_backed_project_context: FileBackedProjectContext,
@@ -2357,7 +2470,97 @@ async def test_workflow_skill_resource_read_api_returns_skill_contents(
 
     assert response.status_code == 200
     assert contents[0]["uri"] == "skill://workflow/severity_guide"
-    assert "SEVERITY CLASSIFICATION" in contents[0]["text"]
+    assert contents[0]["text"]
+
+
+async def test_bot_detection_skill_describes_misleading_infra_warning_probes(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify bot detection guidance teaches infra-warning probe reasoning."""
+
+    workflow_token: str = custom_jwt_token(
+        "workflow-agent",
+        [WORKFLOW_SKILLS_READ_SCOPE],
+        "workflow-agent",
+    )
+
+    response = await jsonrpc.post(
+        token=workflow_token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "4",
+            "method": "resources/read",
+            "params": {"uri": "skill://workflow/bot_detection"},
+        },
+    )
+
+    contents = response.json()["result"]["contents"]
+
+    assert response.status_code == 200
+    assert "Misleading infrastructure-warning probes" in contents[0]["text"]
+    assert "Noise-vs-incident reasoning checklist" in contents[0]["text"]
+    assert "multiple deterministic facts" in contents[0]["text"]
+    assert "service impact" in contents[0]["text"]
+    assert "ACME" in contents[0]["text"]
+    assert "not a standalone rule" in contents[0]["text"]
+    assert "very likely scanner noise" in contents[0]["text"]
+
+
+async def test_workflow_skills_do_not_infer_mitigation_from_zero_current_bans(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify security-daemon guidance does not infer mitigation from zero bans."""
+
+    workflow_token: str = custom_jwt_token(
+        "workflow-agent",
+        [WORKFLOW_SKILLS_READ_SCOPE],
+        "workflow-agent",
+    )
+
+    bot_response = await jsonrpc.post(
+        token=workflow_token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "bot",
+            "method": "resources/read",
+            "params": {"uri": "skill://workflow/bot_detection"},
+        },
+    )
+    recommendations_response = await jsonrpc.post(
+        token=workflow_token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "recommendations",
+            "method": "resources/read",
+            "params": {"uri": "skill://workflow/recommendations_guide"},
+        },
+    )
+    severity_response = await jsonrpc.post(
+        token=workflow_token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "severity",
+            "method": "resources/read",
+            "params": {"uri": "skill://workflow/severity_guide"},
+        },
+    )
+
+    assert bot_response.status_code == 200
+    assert recommendations_response.status_code == 200
+    assert severity_response.status_code == 200
+    bot_text = bot_response.json()["result"]["contents"][0]["text"]
+    recommendations_text = recommendations_response.json()["result"]["contents"][0]["text"]
+    severity_text = severity_response.json()["result"]["contents"][0]["text"]
+
+    assert "Zero currently banned IPs only means no IPs are banned" in bot_text
+    assert "do not treat it as evidence of past mitigation" in bot_text
+    assert "Do not describe traffic as" in recommendations_text
+    assert "blocked, mitigated, or effectively handled" in recommendations_text
+    assert "active mitigation such as fail2ban" not in bot_text
+    assert "fail2ban is active and blocking" not in recommendations_text
+    assert "detected and blocked by fail2ban" not in severity_text
 
 
 async def test_resources_list_shows_concrete_workflow_skill_resources(
@@ -2386,7 +2589,7 @@ async def test_resources_list_shows_concrete_workflow_skill_resources(
     resource_uris = [resource["uri"] for resource in resources]
 
     assert response.status_code == 200
-    assert "skill://workflow/project_context" in resource_uris
+    assert "skill://workflow/project_context" not in resource_uris
     assert "skill://workflow/severity_guide" in resource_uris
     assert "skill://workflow/bot_detection" in resource_uris
 
@@ -2696,12 +2899,13 @@ async def test_tool_call_api_rejects_jwt_without_client_id(
             },
         },
     )
-    payload = response.json()["result"]["structuredContent"]
+    result = response.json()["result"]
+    error_text = result["content"][0]["text"]
 
     assert response.status_code == 200
-    assert response.json()["result"]["isError"] is True
-    assert payload["status"] == "error"
-    assert payload["error_code"] == "invalid_client_id"
+    assert result["isError"] is True
+    assert "Authenticated JWT must include a non-empty client_id." in error_text
+    assert "client_id" in error_text
 
 
 async def test_tool_call_api_rejects_jwt_for_unregistered_client(
@@ -2729,14 +2933,48 @@ async def test_tool_call_api_rejects_jwt_for_unregistered_client(
             },
         },
     )
-    payload = response.json()["result"]["structuredContent"]
+    result = response.json()["result"]
+    error_text = result["content"][0]["text"]
 
     assert response.status_code == 200
-    assert response.json()["result"]["isError"] is True
-    assert payload["status"] == "error"
-    assert payload["error_code"] == "mcp_client_not_authorized"
-    assert payload["details"] == {
-        "client_id": "unregistered-agent",
-        "client_type": "codex",
-        "workspace": "session",
-    }
+    assert result["isError"] is True
+    assert "Authenticated MCP client is not allowed to call tools." in error_text
+
+
+@pytest.mark.parametrize(
+    ("method", "params"),
+    [
+        ("tools/list", {}),
+        ("resources/list", {}),
+        ("resources/templates/list", {}),
+        ("resources/read", {"uri": "skill://workflow/severity_guide"}),
+    ],
+)
+async def test_discovery_api_rejects_jwt_for_unregistered_client(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    method: str,
+    params: dict[str, object],
+) -> None:
+    """Verify discovery and resource reads require a matching McpCaller row."""
+
+    token = custom_jwt_token(
+        "unregistered-agent",
+        [PROJECTS_READ_SCOPE, WORKFLOW_SKILLS_READ_SCOPE],
+        "unregistered-agent",
+        {"client_type": "codex"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": f"unregistered-{method}",
+            "method": method,
+            "params": params,
+        },
+    )
+    payload = response.json()["error"]
+
+    assert response.status_code == 200
+    assert "Authenticated MCP client is not allowed to call tools." in payload["message"]

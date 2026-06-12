@@ -48,6 +48,9 @@ class AgentCallAuditService:
         project_name: str | None = None
         source_keys: list[str] | None = None
         if arguments is not None:
+            requested_project_name = arguments.get("project_name")
+            if isinstance(requested_project_name, str):
+                project_name = requested_project_name
             project_names = arguments.get("project_names")
             if (
                 isinstance(project_names, list)

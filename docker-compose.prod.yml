@@ -1,3 +1,5 @@
+name: mcp
+
 services:
   db:
     image: postgres:18
@@ -8,7 +10,7 @@ services:
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - ${POSTGRES_DATA_DIR:-/var/lib/mcp-log-server/postgresql}:/var/lib/postgresql
+      - postgres-data:/var/lib/postgresql/data
     healthcheck:
       test:
         [
@@ -43,15 +45,15 @@ services:
       JWT_ISSUER: ${JWT_ISSUER}
       JWT_AUDIENCE: ${JWT_AUDIENCE}
       FAIL2BAN_SOCKET_PATH: ${FAIL2BAN_SOCKET_PATH:-/var/run/fail2ban/fail2ban.sock}
-      # Used by `uv run commands ...` to find this Compose app service.
-      # Must match the Compose project name and the `services.app` key.
-      COMMANDS_COMPOSE_PROJECT_NAME: mcp-log-server
-      COMMANDS_APP_SERVICE: app
+      PROJECT_MANIFESTS_PATH: ${PROJECT_MANIFESTS_PATH:-/app/project-manifests}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/log/fail2ban.log:/var/log/fail2ban.log:ro
-      - /etc/nginx/logs/access.log:/var/log/nginx/access.log:ro
-      - /var/log/portfolio/traefik/access.log:/var/log/portfolio/traefik/access.log:ro
+      - /var/log:/host/var/log:ro
+      - /etc/nginx/logs:/host/etc/nginx/logs:ro
+      - type: bind
+        source: ${PROJECT_MANIFESTS_HOST_PATH}
+        target: ${PROJECT_MANIFESTS_PATH:-/app/project-manifests}
+        read_only: true
     group_add:
       - "${DOCKER_SOCKET_GID:-0}"
       - "${FAIL2BAN_LOG_GID:-1}"
@@ -70,6 +72,9 @@ services:
       - "traefik.http.routers.mcp-log-server.service=mcp-log-server"
       - "traefik.http.services.mcp-log-server.loadbalancer.server.port=${MCP_PORT:-8001}"
     command: ["uv", "run", "python", "-m", "main"]
+
+volumes:
+  postgres-data:
 
 networks:
   traefik_proxy:

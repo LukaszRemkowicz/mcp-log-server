@@ -4,7 +4,7 @@
   "properties": {
     "action": {
       "type": "string",
-      "enum": ["call_tools", "final_report"]
+      "enum": ["call_tools", "read_skills", "final_report"]
     },
     "tool_calls": {
       "type": "array",
@@ -27,6 +27,12 @@
     },
     "summary": {
       "type": "string"
+    },
+    "skill_names": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
     },
     "findings": {
       "type": "array",

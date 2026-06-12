@@ -10,7 +10,7 @@ from typing import Any
 from click.utils import strip_ansi
 from typer.testing import CliRunner
 
-from scripts.main import app
+from cli.main import app
 
 runner = CliRunner()
 
@@ -36,7 +36,7 @@ async def _fake_token_response(
 
 def test_generate_dev_jwt_command_prints_example_tokens(mocker) -> None:
     mocker.patch(
-        "scripts.commands.generate_dev_jwt._build_example_token_response_with_database",
+        "cli.commands.generate_dev_jwt._build_example_token_response_with_database",
         _fake_token_response,
     )
 
@@ -58,7 +58,7 @@ def test_generate_dev_jwt_command_passes_custom_exp_time_hours(mocker) -> None:
     }
     build_response = mocker.AsyncMock(return_value=expected_payload)
     mocker.patch(
-        "scripts.commands.generate_dev_jwt._build_example_token_response_with_database",
+        "cli.commands.generate_dev_jwt._build_example_token_response_with_database",
         build_response,
     )
 
@@ -72,7 +72,7 @@ def test_generate_dev_jwt_command_passes_custom_exp_time_hours(mocker) -> None:
 
 def test_generate_dev_jwt_command_writes_tokens_to_output_file(mocker) -> None:
     mocker.patch(
-        "scripts.commands.generate_dev_jwt._build_example_token_response_with_database",
+        "cli.commands.generate_dev_jwt._build_example_token_response_with_database",
         _fake_token_response,
     )
 

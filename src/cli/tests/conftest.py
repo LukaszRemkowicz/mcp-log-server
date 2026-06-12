@@ -1,4 +1,4 @@
-"""Pytest fixtures for command tests colocated under src/scripts."""
+"""Pytest fixtures for command tests colocated under src/cli."""
 
 from __future__ import annotations
 

@@ -11,6 +11,7 @@ from auth.scopes import (
     MCP_STATUS_READ_SCOPE,
     PROJECTS_READ_SCOPE,
     WORKFLOW_BOOTSTRAP_SCOPE,
+    WORKFLOW_SKILLS_READ_SCOPE,
 )
 from middleware.audit import AccessAuditMiddleware
 from middleware.authorized_manifests import AuthorizedManifestsMiddleware
@@ -31,7 +32,11 @@ from tools.agent_hints import (
     STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
     SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION,
 )
-from tools.workflow import build_workflow_bootstrap_payload, get_allowed_workflow_tool_metadata
+from tools.workflow import (
+    build_sitemap_workflow_bootstrap_payload,
+    build_workflow_bootstrap_payload,
+    get_allowed_workflow_tool_metadata,
+)
 from utils.assets import WorkflowAssetLoader
 
 
@@ -49,6 +54,7 @@ def test_application_registers_expected_mcp_components(
         )
 
         assert "analyze_daily_log_bundle" in tool_names
+        assert "analyze_sitemap_bundle" in tool_names
         assert "collect_logs" in tool_names
         assert "list_log_snapshot_files" in tool_names
         assert "read_log_snapshot_file" in tool_names
@@ -74,7 +80,7 @@ def test_application_registers_expected_mcp_components(
         resources = await app._local_provider.list_resources()
         resource_uris = [str(resource.uri) for resource in resources]
 
-        assert "skill://workflow/project_context" in resource_uris
+        assert "skill://workflow/project_context" not in resource_uris
         assert "skill://workflow/severity_guide" in resource_uris
         assert "skill://workflow/bot_detection" in resource_uris
 
@@ -89,6 +95,7 @@ def test_application_registers_expected_mcp_components(
                 WORKFLOW_BOOTSTRAP_SCOPE,
                 LOGS_COLLECT_SCOPE,
                 PROJECTS_READ_SCOPE,
+                WORKFLOW_SKILLS_READ_SCOPE,
                 MCP_STATUS_READ_SCOPE,
                 MCP_HEALTH_READ_SCOPE,
             ],
@@ -100,22 +107,40 @@ def test_application_registers_expected_mcp_components(
         )
         bootstrap_text = build_workflow_bootstrap_payload(WorkflowAssetLoader(), workflow_token)
         assert bootstrap_text["workflow_name"] == "analyze_daily_log_bundle"
-        assert "Monitoring Tool Loop System Prompt" in bootstrap_text["prompt"]
-        assert "Monitoring Tool Loop User Prompt" in bootstrap_text["prompt"]
-        assert "valid top-level actions are only" in bootstrap_text["prompt"]
-        assert "Log Summary Instructions" in bootstrap_text["prompt"]
+        assert isinstance(bootstrap_text["prompt"], str)
+        assert bootstrap_text["prompt"]
         assert any(
             item["skill_name"] == "severity_guide" for item in bootstrap_text["mandatory_skills"]
+        )
+        assert any(
+            item["skill_name"] == "normal_patterns" for item in bootstrap_text["mandatory_skills"]
+        )
+        assert any(
+            item["skill_name"] == "application_monitoring"
+            for item in bootstrap_text["mandatory_skills"]
         )
         assert any(
             item["skill_name"] == "recommendations_guide"
             for item in bootstrap_text["mandatory_skills"]
         )
-        assert any(
-            item["skill_name"] == "project_context" for item in bootstrap_text["mandatory_skills"]
+        assert all(
+            item["skill_name"] != "project_context" for item in bootstrap_text["mandatory_skills"]
         )
         assert any(
             item["skill_name"] == "bot_detection" for item in bootstrap_text["optional_skills"]
+        )
+        bot_detection = next(
+            item
+            for item in bootstrap_text["optional_skills"]
+            if item["skill_name"] == "bot_detection"
+        )
+        assert "scanner/probe-heavy traffic" in bot_detection["when_useful"]
+        assert all(
+            item["skill_name"] != "normal_patterns" for item in bootstrap_text["optional_skills"]
+        )
+        assert all(
+            item["skill_name"] != "application_monitoring"
+            for item in bootstrap_text["optional_skills"]
         )
         assert any(item["tool_name"] == "collect_logs" for item in bootstrap_text["tools"])
         assert any(
@@ -125,11 +150,18 @@ def test_application_registers_expected_mcp_components(
             item["tool_name"] == "read_log_snapshot_file" for item in bootstrap_text["tools"]
         )
         assert any(item["tool_name"] == "grep_log_snapshot" for item in bootstrap_text["tools"])
-        assert all(item["tool_name"] != "group_errors" for item in bootstrap_text["tools"])
-        assert all(item["tool_name"] != "build_incident_bundle" for item in bootstrap_text["tools"])
-        assert all(item["tool_name"] != "create_filtered_view" for item in bootstrap_text["tools"])
+        assert any(item["tool_name"] == "group_errors" for item in bootstrap_text["tools"])
+        assert any(item["tool_name"] == "build_incident_bundle" for item in bootstrap_text["tools"])
+        assert any(item["tool_name"] == "create_filtered_view" for item in bootstrap_text["tools"])
+        assert any(
+            item["tool_name"] == "inspect_proxy_activity" for item in bootstrap_text["tools"]
+        )
         assert any(
             item["tool_name"] == "suggest_followup_window" for item in bootstrap_text["tools"]
+        )
+        assert any(
+            item["tool_name"] == "inspect_live_fail2ban_activity"
+            for item in bootstrap_text["tools"]
         )
         collect_logs_tool = next(
             item for item in bootstrap_text["tools"] if item["tool_name"] == "collect_logs"
@@ -232,7 +264,25 @@ def test_application_registers_expected_mcp_components(
             item["tool_name"] != "analyze_daily_log_bundle" for item in bootstrap_text["tools"]
         )
 
+        prompt = bootstrap_text["prompt"]
+        assert "call `read_skills` when optional skill metadata matches observed facts" in prompt
+        assert "/.env" not in prompt
+        assert "wp-*" not in prompt
+        assert "/phpMyAdmin" not in prompt
+
     asyncio.run(run_test())
+
+
+def test_build_sitemap_workflow_bootstrap_payload_returns_generic_prompt() -> None:
+    payload = build_sitemap_workflow_bootstrap_payload(WorkflowAssetLoader())
+
+    assert payload["workflow_name"] == "analyze_sitemap_bundle"
+    assert "key_findings must be a list of complete strings" in payload["prompt"]
+    assert "self-referential canonical" in payload["prompt"]
+    assert "remove that URL from the sitemap" in payload["prompt"]
+    assert payload["mandatory_skills"] == []
+    assert payload["optional_skills"] == []
+    assert payload["tools"] == []
 
 
 def test_tool_metadata_filters_tools_by_token_scopes(
@@ -293,6 +343,7 @@ def test_workflow_bootstrap_uses_skill_resource_uris(
             WORKFLOW_BOOTSTRAP_SCOPE,
             LOGS_COLLECT_SCOPE,
             PROJECTS_READ_SCOPE,
+            WORKFLOW_SKILLS_READ_SCOPE,
             MCP_STATUS_READ_SCOPE,
             MCP_HEALTH_READ_SCOPE,
         ],
@@ -305,11 +356,19 @@ def test_workflow_bootstrap_uses_skill_resource_uris(
 
     payload = build_workflow_bootstrap_payload(WorkflowAssetLoader(), workflow_token)
 
-    assert any(
-        item["resource_uri"] == "skill://workflow/project_context"
+    assert all(
+        item["resource_uri"] != "skill://workflow/project_context"
         for item in payload["mandatory_skills"]
     )
     assert any(
         item["resource_uri"] == "skill://workflow/bot_detection"
         for item in payload["optional_skills"]
+    )
+    assert any(
+        item["resource_uri"] == "skill://workflow/normal_patterns"
+        for item in payload["mandatory_skills"]
+    )
+    assert any(
+        item["resource_uri"] == "skill://workflow/application_monitoring"
+        for item in payload["mandatory_skills"]
     )

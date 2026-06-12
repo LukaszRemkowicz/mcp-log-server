@@ -8,9 +8,9 @@ from typing import Any
 
 import pytest
 
+from cli.commands.generate_dev_jwt import build_example_token_response
 from core.types import LogWorkspace
 from database.models import McpCaller
-from scripts.commands.generate_dev_jwt import build_example_token_response
 from tests.factories import McpCallerFactory
 
 
@@ -75,10 +75,20 @@ async def test_generate_dev_jwt_uses_custom_exp_time_hours(db: None) -> None:  #
 
 
 @pytest.mark.anyio
-async def test_generate_dev_jwt_fails_when_expected_caller_row_is_missing(
+async def test_generate_dev_jwt_uses_default_claims_without_creating_callers_when_missing(
     db: None,  # noqa: ARG001
 ) -> None:
     await McpCaller.all().delete()
 
-    with pytest.raises(RuntimeError, match="Missing McpCaller row for workspace 'workflow'"):
-        await build_example_token_response()
+    payload = await build_example_token_response()
+    workflow_claims = _decode_jwt_payload(payload["workflow_agent"])
+    codex_claims = _decode_jwt_payload(payload["codex_agent"])
+
+    assert workflow_claims["client_id"] == "workflow-agent"
+    assert workflow_claims["client_type"] == "workflow_agent"
+    assert workflow_claims["allowed_projects"] == ["all"]
+    assert codex_claims["client_id"] == "codex-agent"
+    assert codex_claims["client_type"] == "codex"
+    assert codex_claims["allowed_projects"] == ["all"]
+    assert await McpCaller.objects.filter(workspace=LogWorkspace.WORKFLOW).count() == 0
+    assert await McpCaller.objects.filter(workspace=LogWorkspace.SESSION).count() == 0

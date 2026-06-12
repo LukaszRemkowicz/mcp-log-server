@@ -11,17 +11,19 @@ class WorkflowSkillMetadata(TypedDict):
 
     skill_name: str
     description: str
+    when_useful: str
     mandatory: bool
     resource_uri: str
 
 
 @dataclass(frozen=True, slots=True)
 class WorkflowSkillDefinition:
-    """Describe one workflow skill copied from the landingpage monitoring assets."""
+    """Describe one workflow skill exposed through the log-analysis workflow."""
 
     skill_name: str
     asset_path: str
     description: str
+    when_useful: str
     mandatory: bool = False
 
     @property
@@ -33,41 +35,49 @@ class WorkflowSkillDefinition:
 
 WORKFLOW_SKILLS: tuple[WorkflowSkillDefinition, ...] = (
     WorkflowSkillDefinition(
-        skill_name="project_context",
-        asset_path="skills/project_context.md",
-        description="Project architecture and operational context for the portfolio platform.",
-        mandatory=True,
-    ),
-    WorkflowSkillDefinition(
         skill_name="normal_patterns",
         asset_path="skills/normal_patterns.md",
         description="Known healthy log patterns that should not be treated as incidents.",
+        when_useful="Always read before interpreting expected recurring log patterns.",
+        mandatory=True,
     ),
     WorkflowSkillDefinition(
         skill_name="application_monitoring",
         asset_path="skills/application_monitoring.md",
         description="Checklist of application-level failures and log signals to watch.",
+        when_useful="Always read before interpreting application health and failure signals.",
+        mandatory=True,
     ),
     WorkflowSkillDefinition(
         skill_name="bot_detection",
         asset_path="skills/bot_detection.md",
         description="Guidance for recognizing bot traffic and suspicious probing patterns.",
+        when_useful=(
+            "Use for scanner/probe-heavy traffic, clustered 404/405s, suspicious "
+            "infrastructure warnings, credential scans, or commodity path probing."
+        ),
     ),
     WorkflowSkillDefinition(
         skill_name="owasp_security",
         asset_path="skills/owasp_security.md",
         description="Security interpretation guidance aligned with OWASP-style incident framing.",
+        when_useful=(
+            "Use for auth abuse, injection strings, exploit attempts, successful "
+            "sensitive-path access, or API/security impact framing."
+        ),
     ),
     WorkflowSkillDefinition(
         skill_name="severity_guide",
         asset_path="skills/severity_guide.md",
         description="Severity classification rules for final monitoring reports.",
+        when_useful="Always read before assigning final INFO, WARNING, or CRITICAL severity.",
         mandatory=True,
     ),
     WorkflowSkillDefinition(
         skill_name="recommendations_guide",
         asset_path="skills/recommendations_guide.md",
         description="Rules for producing concrete, project-relevant recommendations.",
+        when_useful="Always read before writing final recommendations.",
         mandatory=True,
     ),
 )
@@ -80,6 +90,7 @@ def list_workflow_skill_definitions() -> list[WorkflowSkillMetadata]:
         {
             "skill_name": definition.skill_name,
             "description": definition.description,
+            "when_useful": definition.when_useful,
             "mandatory": definition.mandatory,
             "resource_uri": definition.resource_uri,
         }
@@ -94,6 +105,7 @@ def list_mandatory_workflow_skill_definitions() -> list[WorkflowSkillMetadata]:
         {
             "skill_name": definition.skill_name,
             "description": definition.description,
+            "when_useful": definition.when_useful,
             "mandatory": definition.mandatory,
             "resource_uri": definition.resource_uri,
         }
@@ -109,6 +121,7 @@ def list_optional_workflow_skill_definitions() -> list[WorkflowSkillMetadata]:
         {
             "skill_name": definition.skill_name,
             "description": definition.description,
+            "when_useful": definition.when_useful,
             "mandatory": definition.mandatory,
             "resource_uri": definition.resource_uri,
         }

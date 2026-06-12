@@ -20,7 +20,7 @@ truth. For broader direction, also read:
 - `infra/docs/analysis/mcp_log_server_architecture.md`
 - `infra/scripts/README.md`
   Repository infra and deployment script runbook.
-- `src/scripts/README.md`
+- `src/cli/README.md`
   Typer command discovery and local developer command reference.
 
 
@@ -67,7 +67,7 @@ Important current Python files:
   Environment-backed runtime settings.
 - `src/auth/`
   JWT auth provider wiring and scope constants.
-- `src/scripts/commands/generate_dev_jwt.py`
+- `src/cli/commands/generate_dev_jwt.py`
   Local development JWT generator.
 - `src/manifests/`
   Manifest schema, loader, and bundled manifest data.

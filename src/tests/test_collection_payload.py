@@ -1,28 +1,28 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from docker.errors import DockerException
 from fastmcp.server.auth import AccessToken
-from pytest_mock import MockerFixture
-from requests import exceptions as requests_exceptions
 
 from conf import settings
 from core.types import LogWorkspace
+from database.services.collect_logs import CollectLogsService as CollectLogsDBService
 from exception import InvalidTimeFilterError
 from manifests.loader import list_project_manifests, load_project_manifest
 from manifests.models import SourceDefinition
-from services.log_collection import CollectSourceError, DockerTimeFilters, LogCollectionService
+from services.docker_log_gateway import DockerLogGatewayError, ResolvedDockerContainer
+from services.log_collection import DockerTimeFilters, LogCollectionService, SourceCollectionResult
 from services.project_authorization import ProjectAuthorizationError, ProjectAuthorizationService
 from services.project_manifest import ProjectManifestService
 from tests.conftest import (
     TEST_FILE_SOURCE_ROOT,
     TEST_MANIFESTS_DIR,
-    FakeDockerClient,
     copy_manifest_and_log_fixtures,
     override_settings,
     runtime_test_manifest,
@@ -33,6 +33,46 @@ from tools.models import SnapshotWorkspace
 SESSION_ID_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+){2,}-[a-f0-9]{4}$")
 SESSION_ID = "gentle-river-finds-a8f2"
 SECOND_SESSION_ID = "quiet-field-opens-b1c2"
+
+
+class FakeDockerLogGateway:
+    def __init__(self) -> None:
+        self.resolved_by_name: dict[str, ResolvedDockerContainer | None] = {}
+        self.resolved_by_project_service: dict[tuple[str, str], ResolvedDockerContainer | None] = {}
+        self.name_calls: list[str] = []
+        self.project_service_calls: list[tuple[str, str]] = []
+        self.stream_calls: list[tuple[str, dict[str, int | str | datetime]]] = []
+        self.stream_exception: DockerLogGatewayError | None = None
+        self.resolve_exception: DockerLogGatewayError | None = None
+
+    def resolve_container_by_name(self, container_name: str) -> ResolvedDockerContainer | None:
+        if self.resolve_exception is not None:
+            raise self.resolve_exception
+        self.name_calls.append(container_name)
+        return self.resolved_by_name.get(container_name)
+
+    def resolve_container_by_project_service(
+        self,
+        *,
+        project_name: str,
+        service_name: str,
+    ) -> ResolvedDockerContainer | None:
+        if self.resolve_exception is not None:
+            raise self.resolve_exception
+        self.project_service_calls.append((project_name, service_name))
+        return self.resolved_by_project_service.get((project_name, service_name))
+
+    def stream_logs(
+        self,
+        *,
+        container_name: str,
+        logs_kwargs: dict[str, int | str | datetime],
+    ):
+        if self.stream_exception is not None:
+            raise self.stream_exception
+        self.stream_calls.append((container_name, dict(logs_kwargs)))
+        yield b"log line 1\n"
+        yield b"log line 2\n"
 
 
 async def build_collect_logs(
@@ -165,6 +205,49 @@ async def test_build_collect_logs_collects_requested_file_source(
 
 @pytest.mark.anyio
 @pytest.mark.usefixtures("db")
+async def test_build_collect_logs_persists_collection_diagnostics_for_failed_sources(
+    tmp_path: Path,
+    valid_access_token: AccessToken,
+) -> None:
+    fixture_root = copy_manifest_and_log_fixtures(tmp_path)
+    manifest_path = fixture_root / "manifests" / "landingpage.json"
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    app_file_source = next(
+        source for source in manifest_payload["sources"] if source["source_key"] == "app_file"
+    )
+    app_file_source["target"] = str(fixture_root / "logs" / "landingpage" / "missing.log")
+    manifest_path.write_text(json.dumps(manifest_payload), encoding="utf-8")
+    logs_dir = tmp_path / "collected-logs"
+
+    with override_settings(LOGS_DIR=logs_dir):
+        payload = await build_collect_logs(
+            valid_access_token,
+            requested_project_name="landingpage",
+            requested_source_keys=["app_file"],
+            workspace=LogWorkspace.WORKFLOW,
+            manifests_dir=fixture_root / "manifests",
+            since=None,
+            until=None,
+        )
+
+    sources_by_key = {source.source_key: source for source in payload.sources}
+    assert payload["requested_source_keys"] == ["app_file"]
+    assert payload["resolved_source_keys"] == []
+    assert sources_by_key["app_file"].status == "unavailable"
+    diagnostics = sources_by_key["__collection_diagnostics"]
+    assert diagnostics.status == "collected"
+    assert diagnostics.output_file == "workflow/landingpage/latest/collection_diagnostics.json"
+    diagnostics_path = logs_dir / diagnostics.output_file
+    diagnostics_payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+    assert diagnostics_payload["artifact_type"] == "collection_diagnostics"
+    assert diagnostics_payload["failed_source_count"] == 1
+    assert diagnostics_payload["failed_sources"][0]["source_key"] == "app_file"
+    assert diagnostics_payload["failed_sources"][0]["status"] == "unavailable"
+    assert "File source not found" in diagnostics_payload["failed_sources"][0]["error"]
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_build_collect_logs_uses_runtime_default_log_window(
     tmp_path: Path,
     valid_access_token: AccessToken,
@@ -271,6 +354,65 @@ async def test_workflow_archive_files_are_tracked_without_inventory_json(
     assert (archived_snapshot / "app_file.log").read_text(encoding="utf-8") == (
         "first\nsecond\nthird\n"
     )
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("db")
+async def test_workflow_archive_retention_prunes_file_and_db_metadata(
+    tmp_path: Path,
+    valid_access_token: AccessToken,
+) -> None:
+    fixture_root = copy_manifest_and_log_fixtures(tmp_path)
+    log_file = fixture_root / "logs" / "landingpage" / "app_file.log"
+    logs_dir = tmp_path / "collected-logs"
+
+    with override_settings(LOGS_DIR=logs_dir, WORKFLOW_ARCHIVE_RETENTION="1d"):
+        log_file.write_text("first\n", encoding="utf-8")
+        await build_collect_logs(
+            valid_access_token,
+            requested_project_name="landingpage",
+            requested_source_keys=["app_file"],
+            workspace=LogWorkspace.WORKFLOW,
+            manifests_dir=fixture_root / "manifests",
+            since=None,
+            until=None,
+        )
+        await asyncio.sleep(1.1)
+        log_file.write_text("second\n", encoding="utf-8")
+        await build_collect_logs(
+            valid_access_token,
+            requested_project_name="landingpage",
+            requested_source_keys=["app_file"],
+            workspace=LogWorkspace.WORKFLOW,
+            manifests_dir=fixture_root / "manifests",
+            since=None,
+            until=None,
+        )
+
+        archive_root = logs_dir / "workflow" / "landingpage" / "archive"
+        archived_snapshot = next(path for path in archive_root.iterdir() if path.is_dir())
+        archive_name = archived_snapshot.name
+        old_timestamp = (datetime.now(UTC) - timedelta(seconds=5)).timestamp()
+        os.utime(archived_snapshot, (old_timestamp, old_timestamp))
+
+    with override_settings(LOGS_DIR=logs_dir, WORKFLOW_ARCHIVE_RETENTION="1s"):
+        log_file.write_text("third\n", encoding="utf-8")
+        await build_collect_logs(
+            valid_access_token,
+            requested_project_name="landingpage",
+            requested_source_keys=["app_file"],
+            workspace=LogWorkspace.WORKFLOW,
+            manifests_dir=fixture_root / "manifests",
+            since=None,
+            until=None,
+        )
+
+    assert not archived_snapshot.exists()
+    archived_metadata = await CollectLogsDBService().get_archive_with_sources(
+        project_name="landingpage",
+        archive_name=archive_name,
+    )
+    assert archived_metadata is None
 
 
 @pytest.mark.anyio
@@ -422,8 +564,6 @@ async def test_build_collect_logs_persists_large_file_without_inline_logs(
 
 
 def test_collect_source_reports_docker_timeout_with_time_window_tip(
-    fake_docker_client: FakeDockerClient,
-    mocker: MockerFixture,
     tmp_path: Path,
 ) -> None:
     definition = SourceDefinition(
@@ -438,30 +578,91 @@ def test_collect_source_reports_docker_timeout_with_time_window_tip(
         default_noise_profile="noise",
         stream="stdout",
     )
-    fake_docker_client.logs_exception = requests_exceptions.Timeout()
-
-    mocker.patch(
-        "services.log_collection.docker.from_env",
-        return_value=fake_docker_client,
+    gateway = FakeDockerLogGateway()
+    gateway.resolved_by_name["backend-container"] = ResolvedDockerContainer(
+        name="backend-container",
+        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
+    )
+    gateway.stream_exception = DockerLogGatewayError(
+        message="Timed out collecting docker logs for backend-container.",
+        error_code="docker_log_timeout",
     )
 
-    result = collect_source(
+    result = LogCollectionService(docker_log_gateway=gateway).collect_source(
         definition,
         output_file=tmp_path / "backend-timeout.log",
-        since=None,
-        until=None,
+        time_filters=DockerTimeFilters(since=None, until=None),
     )
 
-    assert isinstance(result, CollectSourceError)
+    assert isinstance(result, SourceCollectionResult)
+    assert result.status == "unavailable"
     assert "Retry with a narrower since/until window" in str(result["error"])
     assert result["retry_tips"] == [
         "Retry with a narrower since/until window to keep docker log output bounded."
     ]
 
 
+def test_collect_sources_keeps_file_source_when_docker_source_fails(
+    tmp_path: Path,
+) -> None:
+    source_file = tmp_path / "source.log"
+    source_file.write_text("file line 1\nfile line 2\n", encoding="utf-8")
+    file_definition = SourceDefinition(
+        source_key="app_file",
+        source_type="file",
+        target=str(source_file),
+        description="Application file logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream=None,
+    )
+    docker_definition = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="backend-container",
+        description="Backend logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="backend",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream="stdout",
+    )
+    gateway = FakeDockerLogGateway()
+    gateway.resolve_exception = DockerLogGatewayError(
+        message="Docker Engine API is not available in the current runtime.",
+        error_code="docker_engine_unavailable",
+    )
+    snapshot_dir = tmp_path / "snapshot"
+    snapshot_dir.mkdir()
+
+    results = LogCollectionService(docker_log_gateway=gateway).collect_sources(
+        sources=[file_definition, docker_definition],
+        snapshot_dir=snapshot_dir,
+        time_filters=DockerTimeFilters(since=None, until=None),
+    )
+
+    results_by_key = {result.source_key: result for result in results}
+    assert results_by_key["app_file"].status == "collected"
+    assert (snapshot_dir / "app_file.log").read_text(encoding="utf-8") == (
+        "file line 1\nfile line 2\n"
+    )
+    assert results_by_key["backend"].status == "unavailable"
+    assert results_by_key["backend"].error == (
+        "Docker Engine API is not available in the current runtime."
+    )
+    diagnostics = results_by_key["__collection_diagnostics"]
+    assert diagnostics.status == "collected"
+    assert diagnostics.output_file == str(snapshot_dir / "collection_diagnostics.json")
+    diagnostics_payload = json.loads((snapshot_dir / "collection_diagnostics.json").read_text())
+    assert diagnostics_payload["failed_source_count"] == 1
+    assert diagnostics_payload["failed_sources"][0]["source_key"] == "backend"
+
+
 def test_collect_source_uses_docker_sdk_filters(
-    fake_docker_client: FakeDockerClient,
-    mocker: MockerFixture,
     tmp_path: Path,
 ) -> None:
     definition = SourceDefinition(
@@ -476,17 +677,20 @@ def test_collect_source_uses_docker_sdk_filters(
         default_noise_profile="noise",
         stream="stdout",
     )
-
-    mocker.patch(
-        "services.log_collection.docker.from_env",
-        return_value=fake_docker_client,
+    gateway = FakeDockerLogGateway()
+    gateway.resolved_by_name["backend-container"] = ResolvedDockerContainer(
+        name="backend-container",
+        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
     )
 
-    result = collect_source(
+    result = LogCollectionService(docker_log_gateway=gateway).collect_source(
         definition,
         output_file=tmp_path / "backend-filters.log",
-        since="30m",
-        until="10m",
+        time_filters=LogCollectionService.validate_and_normalize_time_filters(
+            sources=[definition],
+            since="30m",
+            until="10m",
+        ),
     )
 
     assert result["output_file"] == str(tmp_path / "backend-filters.log")
@@ -495,10 +699,8 @@ def test_collect_source_uses_docker_sdk_filters(
     assert (tmp_path / "backend-filters.log").read_text(encoding="utf-8") == (
         "log line 1\nlog line 2\n"
     )
-    captured = fake_docker_client.captured_logs_kwargs
-    assert captured["timestamps"] is True
-    assert captured["stdout"] is True
-    assert captured["stderr"] is True
+    assert len(gateway.stream_calls) == 1
+    captured = gateway.stream_calls[0][1]
     captured_since = captured["since"]
     captured_until = captured["until"]
     assert isinstance(captured_since, datetime)
@@ -513,8 +715,6 @@ def test_normalize_docker_time_filter_raises_specific_error() -> None:
 
 
 def test_collect_source_streams_persisted_docker_logs_without_following(
-    fake_docker_client: FakeDockerClient,
-    mocker: MockerFixture,
     tmp_path: Path,
 ) -> None:
     definition = SourceDefinition(
@@ -529,14 +729,14 @@ def test_collect_source_streams_persisted_docker_logs_without_following(
         default_noise_profile="noise",
         stream="stdout",
     )
-
-    mocker.patch(
-        "services.log_collection.docker.from_env",
-        return_value=fake_docker_client,
+    gateway = FakeDockerLogGateway()
+    gateway.resolved_by_name["backend-container"] = ResolvedDockerContainer(
+        name="backend-container",
+        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
     )
 
     output_file = tmp_path / "backend.log"
-    result = LogCollectionService().collect_source(
+    result = LogCollectionService(docker_log_gateway=gateway).collect_source(
         definition,
         output_file=output_file,
         time_filters=DockerTimeFilters(
@@ -549,9 +749,108 @@ def test_collect_source_streams_persisted_docker_logs_without_following(
     assert result["line_count"] == 2
     assert result["byte_count"] == 22
     assert output_file.read_text(encoding="utf-8") == "log line 1\nlog line 2\n"
-    captured = fake_docker_client.captured_logs_kwargs
-    assert captured["stream"] is True
-    assert captured["follow"] is False
+    assert len(gateway.stream_calls) == 1
+    assert gateway.stream_calls[0][0] == "backend-container"
+
+
+def test_collect_source_uses_injected_docker_log_gateway_for_explicit_target(
+    tmp_path: Path,
+) -> None:
+    gateway = FakeDockerLogGateway()
+    gateway.resolved_by_name["backend-container"] = ResolvedDockerContainer(
+        name="backend-container",
+        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
+    )
+    definition = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="backend-container",
+        description="Backend logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="backend",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream="stdout",
+    )
+
+    output_file = tmp_path / "backend.log"
+    result = LogCollectionService(docker_log_gateway=gateway).collect_source(
+        definition,
+        output_file=output_file,
+        time_filters=DockerTimeFilters(since=None, until=None),
+    )
+
+    assert result["output_file"] == str(output_file)
+    assert result["line_count"] == 2
+    assert output_file.read_text(encoding="utf-8") == "log line 1\nlog line 2\n"
+    assert gateway.name_calls == ["backend-container"]
+    assert gateway.project_service_calls == []
+    assert gateway.stream_calls == [("backend-container", {})]
+
+
+def test_collect_source_resolves_compose_project_service_target(
+    tmp_path: Path,
+) -> None:
+    gateway = FakeDockerLogGateway()
+    gateway.resolved_by_project_service[("portfolio-stage", "be")] = ResolvedDockerContainer(
+        name="portfolio-stage-be-1",
+        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
+    )
+    definition = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="configured-container",
+        compose_project="portfolio-stage",
+        compose_service="be",
+        description="Backend logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="backend",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream="stdout",
+    )
+
+    result = LogCollectionService(docker_log_gateway=gateway).collect_source(
+        definition,
+        output_file=tmp_path / "backend.log",
+        time_filters=DockerTimeFilters(since=None, until=None),
+    )
+
+    assert result["target"] == "configured-container"
+    assert result["line_count"] == 2
+    assert gateway.name_calls == []
+    assert gateway.project_service_calls == [("portfolio-stage", "be")]
+    assert gateway.stream_calls == [("portfolio-stage-be-1", {})]
+
+
+def test_resolve_docker_log_container_returns_stream_target_name() -> None:
+    gateway = FakeDockerLogGateway()
+    gateway.resolved_by_project_service[("portfolio-stage", "be")] = ResolvedDockerContainer(
+        name="portfolio-stage-be-1",
+        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
+    )
+    definition = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="configured-container",
+        compose_project="portfolio-stage",
+        compose_service="be",
+        description="Backend logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="backend",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream="stdout",
+    )
+
+    service = LogCollectionService(docker_log_gateway=gateway)
+
+    resolved_target = service._resolve_docker_log_container(definition)
+
+    assert resolved_target == "portfolio-stage-be-1"
 
 
 def test_collect_source_streams_persisted_file_logs_to_output_file(tmp_path) -> None:
@@ -581,6 +880,70 @@ def test_collect_source_streams_persisted_file_logs_to_output_file(tmp_path) -> 
     assert result["line_count"] == 2
     assert result["byte_count"] == output_file.stat().st_size
     assert output_file.read_text(encoding="utf-8") == "log line 1\nlog line 2\n"
+
+
+def test_build_source_create_payload_uses_internal_collected_result(tmp_path: Path) -> None:
+    logs_dir = tmp_path / "logs"
+    output_file = logs_dir / "workflow" / "landingpage" / "latest" / "app_file.log"
+    output_file.parent.mkdir(parents=True)
+    output_file.write_text("log line 1\nlog line 2\n", encoding="utf-8")
+    definition = SourceDefinition(
+        source_key="app_file",
+        source_type="file",
+        target=str(tmp_path / "source.log"),
+        description="Application file logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream=None,
+    )
+    result = SourceCollectionResult.collected(
+        definition,
+        output_file=output_file,
+        line_count=2,
+        byte_count=22,
+    )
+
+    with override_settings(LOGS_DIR=logs_dir):
+        payload = LogCollectionService()._build_source_create_payload(result=result)
+
+    assert payload.status == "collected"
+    assert payload.file == "workflow/landingpage/latest/app_file.log"
+    assert payload.line_count == 2
+    assert payload.error is None
+    assert payload.retry_tips == []
+
+
+def test_build_source_create_payload_uses_internal_unavailable_result() -> None:
+    definition = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="backend-container",
+        description="Backend logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="backend",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream="stdout",
+    )
+    result = SourceCollectionResult.unavailable(
+        definition,
+        error="Docker Engine API is not available in the current runtime.",
+        retry_tips=["Retry in a runtime where the Docker socket is mounted and reachable."],
+    )
+
+    payload = LogCollectionService()._build_source_create_payload(result=result)
+
+    assert payload.status == "unavailable"
+    assert payload.file is None
+    assert payload.line_count == 0
+    assert payload.error == "Docker Engine API is not available in the current runtime."
+    assert payload.retry_tips == [
+        "Retry in a runtime where the Docker socket is mounted and reachable."
+    ]
 
 
 def test_collect_source_filters_file_logs_by_time_window(tmp_path: Path) -> None:
@@ -650,10 +1013,14 @@ def test_parse_log_line_timestamp_supports_file_log_formats() -> None:
     fail2ban_timestamp = service.parse_log_line_timestamp(
         "2026-05-18 09:38:55,771 fail2ban.filter [123]: INFO Found 203.0.113.10"
     )
+    nginx_error_timestamp = service.parse_log_line_timestamp(
+        "2026/05/18 09:54:03 [error] 42#42: *99 upstream timed out"
+    )
 
     assert raw_nginx_timestamp == datetime(2026, 1, 26, 13, 35, 2, tzinfo=UTC)
     assert json_nginx_timestamp == datetime(2026, 5, 18, 9, 38, 45, tzinfo=UTC)
     assert fail2ban_timestamp == datetime(2026, 5, 18, 9, 38, 55, tzinfo=UTC)
+    assert nginx_error_timestamp == datetime(2026, 5, 18, 9, 54, 3, tzinfo=UTC)
 
 
 def test_collect_source_rejects_relative_file_target(tmp_path: Path) -> None:
@@ -676,12 +1043,12 @@ def test_collect_source_rejects_relative_file_target(tmp_path: Path) -> None:
         time_filters=DockerTimeFilters(since=None, until=None),
     )
 
-    assert isinstance(result, CollectSourceError)
+    assert isinstance(result, SourceCollectionResult)
+    assert result.status == "unavailable"
     assert result.error == "File source target must be an absolute path."
 
 
 def test_collect_source_reports_docker_api_unavailable(
-    mocker: MockerFixture,
     tmp_path: Path,
 ) -> None:
     definition = SourceDefinition(
@@ -696,20 +1063,20 @@ def test_collect_source_reports_docker_api_unavailable(
         default_noise_profile="noise",
         stream="stdout",
     )
-
-    def fake_from_env(timeout: int) -> object:
-        raise DockerException("socket unavailable")
-
-    mocker.patch("services.log_collection.docker.from_env", side_effect=fake_from_env)
-
-    result = collect_source(
-        definition,
-        output_file=tmp_path / "backend-unavailable.log",
-        since=None,
-        until=None,
+    gateway = FakeDockerLogGateway()
+    gateway.resolve_exception = DockerLogGatewayError(
+        message="Docker Engine API is not available in the current runtime.",
+        error_code="docker_engine_unavailable",
     )
 
-    assert isinstance(result, CollectSourceError)
+    result = LogCollectionService(docker_log_gateway=gateway).collect_source(
+        definition,
+        output_file=tmp_path / "backend-unavailable.log",
+        time_filters=DockerTimeFilters(since=None, until=None),
+    )
+
+    assert isinstance(result, SourceCollectionResult)
+    assert result.status == "unavailable"
     assert result["error"] == "Docker Engine API is not available in the current runtime."
     assert result["retry_tips"] == [
         "Retry in a runtime where the Docker socket is mounted and reachable."

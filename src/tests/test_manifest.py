@@ -37,12 +37,14 @@ def test_vps_security_manifest_declares_host_security_file_sources() -> None:
     assert [source.source_key for source in manifest.sources] == [
         "fail2ban",
         "nginx_access",
+        "nginx_runtime",
         "traefik_access",
     ]
     assert {source.source_type for source in manifest.sources} == {"file"}
     assert [source.target for source in manifest.sources] == [
         "/app/src/tests/fixtures/logs/vps-security/fail2ban.log",
         "/app/src/tests/fixtures/logs/vps-security/nginx_access.log",
+        "/app/src/tests/fixtures/logs/vps-security/nginx_runtime.log",
         "/app/src/tests/fixtures/logs/vps-security/traefik_access.log",
     ]
 
