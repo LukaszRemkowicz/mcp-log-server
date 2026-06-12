@@ -177,8 +177,8 @@ Deploy behavior:
   using the production image's `UV_NO_DEV`, `UV_FROZEN`, and `UV_NO_SYNC`
   settings so the already-built no-dev environment is reused
 - starts the app service with `--force-recreate` so the selected image is rerun
-- checks that the app accepts an authenticated MCP `tools/list` request and
-  exposes `get_mcp_health_check`
+- waits for Docker to mark the app service healthy through the unauthenticated
+  `/healthz` liveness endpoint
 - records the deployed tag under the script state directory after health passes
 
 After deploy records `current_tag`, host-side `uv run shell` and
