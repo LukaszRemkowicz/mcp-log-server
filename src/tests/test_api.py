@@ -28,6 +28,7 @@ from services.docker_service import (
     ContainerHealth,
     ContainerPathStat,
     ContainerRestartPolicy,
+    VpsContainerInventory,
 )
 from services.fail2ban_service import Fail2banActivity, Fail2banJailStatus, Fail2banServiceStatus
 from tests.conftest import (
@@ -252,6 +253,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
             },
             {
                 "inspect_containers_health",
+                "inspect_vps_containers",
                 "inspect_container_detail",
                 "stat_container_path",
                 "read_container_file",
@@ -282,6 +284,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "suggest_followup_window",
                 "list_projects",
                 "inspect_containers_health",
+                "inspect_vps_containers",
                 "inspect_container_detail",
                 "stat_container_path",
                 "read_container_file",
@@ -1873,6 +1876,105 @@ async def test_inspect_containers_health_api_returns_container_status(
     assert backend_payload["running"] is True
     assert backend_payload["restart_count"] == 2
     assert backend_payload["image"] == "portfolio/backend:2026-05-16"
+
+
+async def test_inspect_vps_containers_api_returns_docker_ps_inventory(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify inspect_vps_containers returns bounded VPS-wide container facts."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["all"]},
+    )
+
+    mocker.patch(
+        "tools.container_inspection.docker_service.inspect_vps_containers",
+        return_value=[
+            VpsContainerInventory(
+                container_id="abc123def4567890",
+                short_container_id="abc123def456",
+                container_name="backend-container",
+                image="portfolio/backend:2026-05-16",
+                command=["gunicorn", "app.wsgi:application"],
+                command_preview="gunicorn app.wsgi:application",
+                created_at="2026-05-16T09:55:00.000000000Z",
+                docker_status="running",
+                state="running",
+                health_status="unhealthy",
+                running=True,
+                restarting=False,
+                paused=False,
+                dead=False,
+                exit_code=0,
+                error="",
+                restart_count=8,
+                started_at="2026-05-16T10:00:00.000000000Z",
+                finished_at=None,
+                compose_labels={
+                    "com.docker.compose.project": "portfolio",
+                    "com.docker.compose.service": "backend",
+                },
+                restart_policy=ContainerRestartPolicy(
+                    name="unless-stopped",
+                    maximum_retry_count=0,
+                ),
+                ports=[
+                    ContainerDetailPort(
+                        private_port="8000/tcp",
+                        host_ip="127.0.0.1",
+                        host_port="18080",
+                    )
+                ],
+                network_names=["web"],
+                triage_notes=["health_status=unhealthy", "restart_count=8"],
+            )
+        ],
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-vps-containers",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_vps_containers",
+                "arguments": {},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_vps_containers"
+    assert payload["container_count"] == 1
+    assert payload["truncated"] is False
+    assert payload["containers"][0]["container_name"] == "backend-container"
+    assert payload["containers"][0]["command_preview"] == "gunicorn app.wsgi:application"
+    assert payload["containers"][0]["compose_labels"] == {
+        "com.docker.compose.project": "portfolio",
+        "com.docker.compose.service": "backend",
+    }
+    assert payload["containers"][0]["restart_policy"] == {
+        "name": "unless-stopped",
+        "maximum_retry_count": 0,
+    }
+    assert payload["containers"][0]["ports"] == [
+        {"private_port": "8000/tcp", "host_ip": "127.0.0.1", "host_port": "18080"}
+    ]
+    assert payload["containers"][0]["network_names"] == ["web"]
+    assert payload["containers"][0]["triage_notes"] == [
+        "health_status=unhealthy",
+        "restart_count=8",
+    ]
+    assert "secret" not in json.dumps(payload).lower()
 
 
 async def test_inspect_container_detail_api_returns_curated_container_metadata(

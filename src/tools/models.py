@@ -660,6 +660,48 @@ class InspectContainersHealthPayload(BaseModel):
     containers: list[ContainerHealthPayload]
 
 
+class VpsContainerInventoryPayload(BaseModel):
+    """One bounded Docker ps-style inventory item returned by VPS diagnostics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    container_id: str
+    short_container_id: str
+    container_name: str
+    image: str | None
+    command: list[str]
+    command_preview: str
+    created_at: str | None
+    docker_status: str | None
+    state: str | None
+    health_status: str | None
+    running: bool
+    restarting: bool
+    paused: bool
+    dead: bool
+    exit_code: int | None
+    error: str | None
+    restart_count: int | None
+    started_at: str | None
+    finished_at: str | None
+    compose_labels: dict[str, str]
+    restart_policy: ContainerRestartPolicyPayload
+    ports: list[ContainerDetailPortPayload]
+    network_names: list[str]
+    triage_notes: list[str]
+
+
+class InspectVpsContainersPayload(BaseModel):
+    """Structured success payload returned by `inspect_vps_containers`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_vps_containers"]
+    container_count: int
+    truncated: bool
+    containers: list[VpsContainerInventoryPayload]
+
+
 class ContainerDetailMountPayload(BaseModel):
     """Curated mount metadata returned by `inspect_container_detail`."""
 

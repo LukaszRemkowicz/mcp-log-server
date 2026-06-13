@@ -41,16 +41,19 @@ from logging_config import get_logger
 from manifests.models import Manifest, SourceDefinition
 from services.docker_service import (
     MAX_CONTAINER_FILE_BYTES,
+    MAX_VPS_CONTAINERS,
     ContainerDetail,
     ContainerHealth,
     ContainerPathStat,
     DockerService,
     DockerServiceError,
+    VpsContainerInventory,
 )
 from services.project_manifest import ProjectManifestError, ProjectManifestService
 from tools.agent_hints import (
     INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
     INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
+    INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
     READ_CONTAINER_FILE_TOOL_DESCRIPTION,
     STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
@@ -65,9 +68,11 @@ from tools.models import (
     ContainerRestartPolicyPayload,
     InspectContainerDetailPayload,
     InspectContainersHealthPayload,
+    InspectVpsContainersPayload,
     ListContainerDirectoryPayload,
     ReadContainerFilePayload,
     StatContainerPathPayload,
+    VpsContainerInventoryPayload,
 )
 
 logger: logging.Logger = get_logger("tools.container_inspection")
@@ -425,6 +430,85 @@ def create_container_detail_payload(
         ],
         health_log=detail.health_log,
     )
+
+
+def create_vps_container_inventory_payload(
+    container: VpsContainerInventory,
+) -> VpsContainerInventoryPayload:
+    """Convert Docker ps-style service inventory into one MCP response row."""
+
+    return VpsContainerInventoryPayload(
+        container_id=container.container_id,
+        short_container_id=container.short_container_id,
+        container_name=container.container_name,
+        image=container.image,
+        command=container.command,
+        command_preview=container.command_preview,
+        created_at=container.created_at,
+        docker_status=container.docker_status,
+        state=container.state,
+        health_status=container.health_status,
+        running=container.running,
+        restarting=container.restarting,
+        paused=container.paused,
+        dead=container.dead,
+        exit_code=container.exit_code,
+        error=container.error,
+        restart_count=container.restart_count,
+        started_at=container.started_at,
+        finished_at=container.finished_at,
+        compose_labels=container.compose_labels,
+        restart_policy=ContainerRestartPolicyPayload(
+            name=container.restart_policy.name,
+            maximum_retry_count=container.restart_policy.maximum_retry_count,
+        ),
+        ports=[
+            ContainerDetailPortPayload(
+                private_port=item.private_port,
+                host_ip=item.host_ip,
+                host_port=item.host_port,
+            )
+            for item in container.ports
+        ],
+        network_names=container.network_names,
+        triage_notes=container.triage_notes,
+    )
+
+
+@mcp.tool(
+    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
+    description=INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
+)
+async def inspect_vps_containers() -> ToolResult:
+    """Return a bounded Docker ps-style inventory for visible VPS containers."""
+
+    containers = docker_service.inspect_vps_containers()
+    if isinstance(containers, DockerServiceError):
+        return build_container_inspection_error_result(
+            action="inspect_vps_containers",
+            message=containers.message,
+            requested_project_name=None,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    payload = InspectVpsContainersPayload(
+        action="inspect_vps_containers",
+        container_count=len(containers),
+        truncated=len(containers) >= MAX_VPS_CONTAINERS,
+        containers=[create_vps_container_inventory_payload(item) for item in containers],
+    )
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_vps_containers",
+            "container_count": payload.container_count,
+            "truncated": payload.truncated,
+        },
+    )
+    return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
 @mcp.tool(

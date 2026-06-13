@@ -20,6 +20,9 @@ if TYPE_CHECKING:
 DOCKER_INSPECTION_TIMEOUT_SECONDS = 15
 MAX_CONTAINER_FILE_BYTES = 200_000
 MAX_DIRECTORY_ENTRIES = 200
+MAX_VPS_CONTAINERS = 200
+MAX_CONTAINER_COMMAND_PREVIEW_CHARS = 240
+HIGH_RESTART_COUNT_THRESHOLD = 5
 SAFE_COMPOSE_LABEL_KEYS = frozenset(
     {
         "com.docker.compose.project",
@@ -115,6 +118,36 @@ class ContainerDetail:
     mounts: list[ContainerDetailMount]
     networks: list[ContainerDetailNetwork]
     health_log: list[dict[str, object]]
+
+
+@dataclass(frozen=True, slots=True)
+class VpsContainerInventory:
+    """Bounded Docker ps-style inventory row for one VPS container."""
+
+    container_id: str
+    short_container_id: str
+    container_name: str
+    image: str | None
+    command: list[str]
+    command_preview: str
+    created_at: str | None
+    docker_status: str | None
+    state: str | None
+    health_status: str | None
+    running: bool
+    restarting: bool
+    paused: bool
+    dead: bool
+    exit_code: int | None
+    error: str | None
+    restart_count: int | None
+    started_at: str | None
+    finished_at: str | None
+    compose_labels: dict[str, str]
+    restart_policy: ContainerRestartPolicy
+    ports: list[ContainerDetailPort]
+    network_names: list[str]
+    triage_notes: list[str]
 
 
 class DockerServiceError(BaseModel):
@@ -518,6 +551,112 @@ class DockerService:
             ),
             health_log=self._extract_health_log(state.get("Health")),
         )
+
+    def inspect_vps_containers(
+        self,
+    ) -> list[VpsContainerInventory] | DockerServiceError:
+        """Return a bounded Docker ps-style inventory for visible VPS containers."""
+
+        try:
+            client: DockerClient = docker.from_env(  # type: ignore[attr-defined]
+                timeout=DOCKER_INSPECTION_TIMEOUT_SECONDS
+            )
+            containers = client.containers.list(all=True)
+        except requests_exceptions.Timeout:
+            return DockerServiceError(message="Timed out listing Docker containers.")
+        except DockerException:
+            return DockerServiceError(
+                message="Docker Engine API is not available in the current runtime."
+            )
+
+        results: list[VpsContainerInventory] = []
+        for container in containers[:MAX_VPS_CONTAINERS]:
+            attrs = container.attrs
+            results.append(self._parse_vps_container_inventory(attrs))
+        return sorted(results, key=lambda item: item.container_name)
+
+    def _parse_vps_container_inventory(self, attrs: object) -> VpsContainerInventory:
+        """Parse Docker SDK attrs into one bounded VPS inventory row."""
+
+        health = self._parse_container_health(attrs, "")
+        config = attrs.get("Config") if isinstance(attrs, dict) else {}
+        if not isinstance(config, dict):
+            config = {}
+        container_id = health.container_id
+        command = self._extract_string_list(config.get("Cmd"))
+
+        created_at = None
+        if isinstance(attrs, dict) and attrs.get("Created") is not None:
+            created_at = str(attrs.get("Created"))
+
+        ports = self._extract_ports(
+            attrs.get("NetworkSettings") if isinstance(attrs, dict) else None
+        )
+        networks = self._extract_networks(
+            attrs.get("NetworkSettings") if isinstance(attrs, dict) else None
+        )
+
+        return VpsContainerInventory(
+            container_id=container_id,
+            short_container_id=container_id[:12],
+            container_name=health.container_name,
+            image=health.image,
+            command=command,
+            command_preview=self._build_command_preview(command),
+            created_at=created_at,
+            docker_status=health.docker_status,
+            state=health.docker_status,
+            health_status=health.health_status,
+            running=health.running,
+            restarting=health.restarting,
+            paused=health.paused,
+            dead=health.dead,
+            exit_code=health.exit_code,
+            error=health.error,
+            restart_count=health.restart_count,
+            started_at=health.started_at,
+            finished_at=health.finished_at,
+            compose_labels=self._extract_compose_labels(config.get("Labels")),
+            restart_policy=self._extract_restart_policy(
+                attrs.get("HostConfig") if isinstance(attrs, dict) else None
+            ),
+            ports=ports,
+            network_names=sorted(network.name for network in networks),
+            triage_notes=self._build_container_triage_notes(health),
+        )
+
+    @staticmethod
+    def _build_command_preview(command: list[str]) -> str:
+        """Return a bounded human-readable command preview."""
+
+        preview = " ".join(command)
+        if len(preview) <= MAX_CONTAINER_COMMAND_PREVIEW_CHARS:
+            return preview
+        return f"{preview[:MAX_CONTAINER_COMMAND_PREVIEW_CHARS].rstrip()}..."
+
+    @staticmethod
+    def _build_container_triage_notes(health: ContainerHealth) -> list[str]:
+        """Return deterministic triage notes for suspicious container states."""
+
+        notes: list[str] = []
+        if not health.running:
+            notes.append("not_running")
+        if health.restarting:
+            notes.append("restarting")
+        if health.paused:
+            notes.append("paused")
+        if health.dead:
+            notes.append("dead")
+        if health.health_status not in {None, "healthy"}:
+            notes.append(f"health_status={health.health_status}")
+        if health.exit_code not in {None, 0}:
+            notes.append(f"exit_code={health.exit_code}")
+        if (
+            health.restart_count is not None
+            and health.restart_count >= HIGH_RESTART_COUNT_THRESHOLD
+        ):
+            notes.append(f"restart_count={health.restart_count}")
+        return notes
 
     @staticmethod
     def _extract_env_var_names(env: object) -> list[str]:

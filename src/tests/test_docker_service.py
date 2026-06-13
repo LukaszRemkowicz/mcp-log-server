@@ -14,6 +14,7 @@ from services.docker_service import (
     ContainerRestartPolicy,
     DockerService,
     DockerServiceError,
+    VpsContainerInventory,
 )
 from tests.conftest import FakeDockerClient
 
@@ -664,3 +665,166 @@ def test_inspect_container_detail_returns_curated_docker_metadata(
             }
         ],
     )
+
+
+def test_inspect_vps_containers_returns_bounded_docker_ps_inventory(
+    fake_docker_client: FakeDockerClient,
+    mocker: MockerFixture,
+) -> None:
+    class FakeContainer:
+        def __init__(self, attrs: dict[str, object]) -> None:
+            self.attrs = attrs
+
+    fake_docker_client.listed_containers = [
+        FakeContainer(
+            {
+                "Id": "abc123def4567890",
+                "Name": "/backend-container",
+                "Created": "2026-05-16T09:55:00.000000000Z",
+                "Config": {
+                    "Image": "portfolio/backend:2026-05-16",
+                    "Cmd": ["gunicorn", "app.wsgi:application", "--timeout", "120"],
+                    "Env": ["SECRET_KEY=hidden"],
+                    "Labels": {
+                        "com.docker.compose.project": "portfolio",
+                        "com.docker.compose.service": "backend",
+                        "secret.label": "hidden",
+                    },
+                },
+                "HostConfig": {
+                    "RestartPolicy": {
+                        "Name": "unless-stopped",
+                        "MaximumRetryCount": 0,
+                    }
+                },
+                "RestartCount": 8,
+                "State": {
+                    "Status": "running",
+                    "Running": True,
+                    "Restarting": False,
+                    "Paused": False,
+                    "Dead": False,
+                    "ExitCode": 0,
+                    "Error": "",
+                    "StartedAt": "2026-05-16T10:00:00.000000000Z",
+                    "Health": {"Status": "unhealthy"},
+                },
+                "Mounts": [{"Source": "/host/app", "Destination": "/app"}],
+                "NetworkSettings": {
+                    "Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18080"}]},
+                    "Networks": {"web": {"IPAddress": "172.20.0.10"}},
+                },
+            }
+        ),
+        FakeContainer(
+            {
+                "Id": "def456abc1237890",
+                "Name": "/worker-container",
+                "Created": "2026-05-16T08:00:00.000000000Z",
+                "Config": {
+                    "Image": "portfolio/worker:2026-05-16",
+                    "Cmd": "celery -A app worker",
+                    "Labels": {
+                        "com.docker.compose.project": "portfolio",
+                        "com.docker.compose.service": "worker",
+                    },
+                },
+                "HostConfig": {"RestartPolicy": {"Name": "always"}},
+                "RestartCount": 1,
+                "State": {
+                    "Status": "exited",
+                    "Running": False,
+                    "Restarting": False,
+                    "Paused": False,
+                    "Dead": False,
+                    "ExitCode": 137,
+                    "Error": "",
+                    "StartedAt": "2026-05-16T08:05:00.000000000Z",
+                    "FinishedAt": "2026-05-16T08:10:00.000000000Z",
+                },
+                "NetworkSettings": {"Ports": {}, "Networks": {}},
+            }
+        ),
+    ]
+    mocker.patch("services.docker_service.docker.from_env", return_value=fake_docker_client)
+
+    result = DockerService().inspect_vps_containers()
+
+    assert result == [
+        VpsContainerInventory(
+            container_id="abc123def4567890",
+            short_container_id="abc123def456",
+            container_name="backend-container",
+            image="portfolio/backend:2026-05-16",
+            command=["gunicorn", "app.wsgi:application", "--timeout", "120"],
+            command_preview="gunicorn app.wsgi:application --timeout 120",
+            created_at="2026-05-16T09:55:00.000000000Z",
+            docker_status="running",
+            state="running",
+            health_status="unhealthy",
+            running=True,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=8,
+            started_at="2026-05-16T10:00:00.000000000Z",
+            finished_at=None,
+            compose_labels={
+                "com.docker.compose.project": "portfolio",
+                "com.docker.compose.service": "backend",
+            },
+            restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
+            ports=[
+                ContainerDetailPort(
+                    private_port="8000/tcp",
+                    host_ip="127.0.0.1",
+                    host_port="18080",
+                )
+            ],
+            network_names=["web"],
+            triage_notes=["health_status=unhealthy", "restart_count=8"],
+        ),
+        VpsContainerInventory(
+            container_id="def456abc1237890",
+            short_container_id="def456abc123",
+            container_name="worker-container",
+            image="portfolio/worker:2026-05-16",
+            command=["celery -A app worker"],
+            command_preview="celery -A app worker",
+            created_at="2026-05-16T08:00:00.000000000Z",
+            docker_status="exited",
+            state="exited",
+            health_status=None,
+            running=False,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=137,
+            error="",
+            restart_count=1,
+            started_at="2026-05-16T08:05:00.000000000Z",
+            finished_at="2026-05-16T08:10:00.000000000Z",
+            compose_labels={
+                "com.docker.compose.project": "portfolio",
+                "com.docker.compose.service": "worker",
+            },
+            restart_policy=ContainerRestartPolicy(name="always", maximum_retry_count=None),
+            ports=[],
+            network_names=[],
+            triage_notes=["not_running", "exit_code=137"],
+        ),
+    ]
+
+
+def test_inspect_vps_containers_returns_empty_inventory(
+    fake_docker_client: FakeDockerClient,
+    mocker: MockerFixture,
+) -> None:
+    fake_docker_client.listed_containers = []
+    mocker.patch("services.docker_service.docker.from_env", return_value=fake_docker_client)
+
+    result = DockerService().inspect_vps_containers()
+
+    assert result == []

@@ -4,6 +4,7 @@ import json
 import shutil
 import subprocess
 import time
+from builtins import list as builtins_list
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
@@ -129,21 +130,26 @@ class FakeDockerClient:
         self.captured_logs_kwargs: dict[str, object] = {}
         self.logs_exception: Exception | None = None
         self.attrs: dict[str, object] = {}
+        self.listed_containers: builtins_list[object] = []
 
     def get(self, container_name: str) -> FakeDockerClient:
         assert container_name == "backend-container"
         return self
 
+    def list(self, **kwargs: object) -> builtins_list[object]:
+        assert kwargs == {"all": True}
+        return self.listed_containers
+
     def exec_run(
         self,
-        command: list[str],
+        command: builtins_list[str],
         stdout: bool = True,
         stderr: bool = True,
     ) -> FakeDockerExecResult:
         assert stdout is True
         assert stderr is True
         self.commands.append(command)
-        command_key = tuple(command)
+        command_key: tuple[str, ...] = tuple(command)
         return FakeDockerExecResult(output=self.outputs_by_command[command_key])
 
     def logs(self, **kwargs: object):

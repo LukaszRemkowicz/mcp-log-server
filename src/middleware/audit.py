@@ -64,6 +64,7 @@ SESSION_WORKSPACE_TOOLS = frozenset(
         "close_agent_session",
         "inspect_container_detail",
         "inspect_containers_health",
+        "inspect_vps_containers",
         "list_container_directory",
         "read_container_file",
         "stat_container_path",

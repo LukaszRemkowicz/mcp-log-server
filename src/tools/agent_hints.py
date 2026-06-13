@@ -91,6 +91,15 @@ INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION = (
     "without exposing raw docker ps output."
 )
 
+INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION = (
+    "Inspect all Docker containers visible to the MCP runtime, like a bounded "
+    "read-only docker ps view for VPS incident triage. Returns container id, "
+    "name, image, command preview, created/status/state fields, published ports, "
+    "safe Compose labels, restart policy, network names, health status, restart "
+    "count, and deterministic triage notes without exposing raw inspect JSON, "
+    "environment values, host mount source paths, or mutation operations."
+)
+
 INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION = (
     "Inspect curated Docker metadata for one manifest-approved source container. "
     "Use this after inspect_containers_health points to a suspicious container. "
