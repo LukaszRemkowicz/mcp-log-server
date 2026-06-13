@@ -78,7 +78,11 @@ WORKSPACE_AGNOSTIC_TOOLS = frozenset(
         "inspect_live_fail2ban_activity",
         "inspect_tls_certificate",
         "list_projects",
+        "list_project_directory",
+        "read_project_file",
+        "read_project_manifest",
         "suggest_followup_window",
+        "stat_project_path",
     }
 )
 

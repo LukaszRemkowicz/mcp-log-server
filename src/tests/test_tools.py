@@ -31,9 +31,12 @@ from tools.agent_hints import (
     INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
     INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
+    LIST_PROJECT_DIRECTORY_TOOL_DESCRIPTION,
     READ_CONTAINER_FILE_TOOL_DESCRIPTION,
+    READ_PROJECT_FILE_TOOL_DESCRIPTION,
     READ_PROJECT_MANIFEST_TOOL_DESCRIPTION,
     STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
+    STAT_PROJECT_PATH_TOOL_DESCRIPTION,
     SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION,
 )
 from tools.workflow import (
@@ -77,6 +80,9 @@ def test_application_registers_expected_mcp_components(
         assert "stat_container_path" in tool_names
         assert "read_container_file" in tool_names
         assert "list_container_directory" in tool_names
+        assert "stat_project_path" in tool_names
+        assert "read_project_file" in tool_names
+        assert "list_project_directory" in tool_names
         assert "close_agent_session" in tool_names
         assert "inspect_live_fail2ban_activity" in tool_names
         assert "inspect_tls_certificate" in tool_names
@@ -174,6 +180,11 @@ def test_application_registers_expected_mcp_components(
         assert all(
             item["tool_name"] != "inspect_tls_certificate" for item in bootstrap_text["tools"]
         )
+        assert all(item["tool_name"] != "stat_project_path" for item in bootstrap_text["tools"])
+        assert all(item["tool_name"] != "read_project_file" for item in bootstrap_text["tools"])
+        assert all(
+            item["tool_name"] != "list_project_directory" for item in bootstrap_text["tools"]
+        )
         collect_logs_tool = next(
             item for item in bootstrap_text["tools"] if item["tool_name"] == "collect_logs"
         )
@@ -236,6 +247,15 @@ def test_application_registers_expected_mcp_components(
         )
         assert app_list_container_tool.description == LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION
         assert "path" not in app_list_container_tool.parameters["required"]
+        app_stat_project_tool = next(tool for tool in tools if tool.name == "stat_project_path")
+        assert app_stat_project_tool.description == STAT_PROJECT_PATH_TOOL_DESCRIPTION
+        app_read_project_tool = next(tool for tool in tools if tool.name == "read_project_file")
+        assert app_read_project_tool.description == READ_PROJECT_FILE_TOOL_DESCRIPTION
+        app_list_project_tool = next(
+            tool for tool in tools if tool.name == "list_project_directory"
+        )
+        assert app_list_project_tool.description == LIST_PROJECT_DIRECTORY_TOOL_DESCRIPTION
+        assert "path" not in app_list_project_tool.parameters["required"]
         app_fail2ban_tool = next(
             tool for tool in tools if tool.name == "inspect_live_fail2ban_activity"
         )
@@ -277,6 +297,9 @@ def test_application_registers_expected_mcp_components(
             "stat_container_path",
             "read_container_file",
             "list_container_directory",
+            "stat_project_path",
+            "read_project_file",
+            "list_project_directory",
         }
         tools_by_name = {tool.name: tool for tool in tools}
         for tool_name in request_caller_tool_names:

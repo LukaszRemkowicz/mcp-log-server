@@ -177,6 +177,27 @@ LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION = (
     "children; file paths return one metadata entry for that file."
 )
 
+STAT_PROJECT_PATH_TOOL_DESCRIPTION = (
+    "Return metadata for one manifest-approved host file or directory path. "
+    "If path is omitted, the tool stats the selected file source target. "
+    "Requests must stay inside the source target, source parent directory, or "
+    "configured inspect_path_prefixes allowlist."
+)
+
+READ_PROJECT_FILE_TOOL_DESCRIPTION = (
+    "Read a bounded text preview from one manifest-approved host file path. "
+    "If path is omitted, the tool reads the selected file source target. "
+    "The tool rejects directories, prevents traversal and symlink escapes, "
+    "and reports whether max_bytes truncated the returned content."
+)
+
+LIST_PROJECT_DIRECTORY_TOOL_DESCRIPTION = (
+    "List files and directories inside one manifest-approved host directory, "
+    "like a bounded ls -la view. If path is omitted, the tool lists the selected "
+    "file source parent directory. Directory listings are non-recursive and "
+    "prevent traversal and symlink escapes."
+)
+
 LOG_ANALYSIS_CAUTIONS = [
     "Use grouped findings for triage, not as the final incident conclusion.",
     (

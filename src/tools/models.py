@@ -934,3 +934,66 @@ class ListContainerDirectoryPayload(BaseModel):
     path: str
     truncated: bool
     entries: list[ContainerPathMetadataPayload]
+
+
+class ProjectPathMetadataPayload(BaseModel):
+    """Describe one inspected file or directory on the manifest-bounded host path."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    name: str
+    exists: bool
+    is_file: bool
+    is_dir: bool
+    is_symlink: bool
+    size: int | None
+    mode: int | None
+    modified_at: str | None
+    uid: int | None
+    gid: int | None
+    readable: bool
+    symlink_target: str | None
+
+
+class StatProjectPathPayload(BaseModel):
+    """Structured success payload returned by `stat_project_path`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["stat_project_path"]
+    requested_project_name: str | None
+    project_name: str
+    source_key: str
+    path: str
+    file: ProjectPathMetadataPayload
+
+
+class ReadProjectFilePayload(BaseModel):
+    """Structured success payload returned by `read_project_file`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["read_project_file"]
+    requested_project_name: str | None
+    project_name: str
+    source_key: str
+    path: str
+    max_bytes: int
+    truncated: bool
+    content: str
+    file: ProjectPathMetadataPayload
+
+
+class ListProjectDirectoryPayload(BaseModel):
+    """Structured success payload returned by `list_project_directory`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["list_project_directory"]
+    requested_project_name: str | None
+    project_name: str
+    source_key: str
+    path: str
+    truncated: bool
+    entries: list[ProjectPathMetadataPayload]

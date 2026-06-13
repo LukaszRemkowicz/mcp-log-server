@@ -20,6 +20,8 @@ from auth.scopes import (
     WORKFLOW_BOOTSTRAP_SCOPE,
     WORKFLOW_SKILLS_READ_SCOPE,
 )
+from core.types import LogWorkspace
+from database.models import McpCaller
 from services.docker_service import (
     ContainerDetail,
     ContainerDetailEnvVar,
@@ -87,6 +89,11 @@ CONTAINER_TOOL_CALLS: tuple[ToolCall, ...] = (
         {"project_name": "dockerpage", "source_key": "backend", "path": "/app"},
     ),
 )
+HOST_PATH_TOOL_CALLS: tuple[ToolCall, ...] = (
+    ("stat_project_path", {"project_name": "landingpage", "source_key": "app_file"}),
+    ("read_project_file", {"project_name": "landingpage", "source_key": "app_file"}),
+    ("list_project_directory", {"project_name": "landingpage", "source_key": "app_file"}),
+)
 FAIL2BAN_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("inspect_live_fail2ban_activity", {"project_name": "landingpage"}),
 )
@@ -115,6 +122,7 @@ PROJECT_PROTECTED_TOOL_CALL_ARGUMENTS: tuple[ToolCall, ...] = (
     + SNAPSHOT_TOOL_CALLS
     + ANALYSIS_TOOL_CALLS
     + CONTAINER_TOOL_CALLS
+    + HOST_PATH_TOOL_CALLS
     + FAIL2BAN_TOOL_CALLS
 )
 CALLER_CONTEXT_LOG_TOOL_NAMES = {
@@ -208,6 +216,27 @@ CALLER_CONTEXT_TOOL_CALLS: tuple[CallerContextToolCall, ...] = (
         ["dockerpage"],
         False,
     ),
+    (
+        "stat_project_path",
+        {"project_name": "landingpage", "source_key": "app_file"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["landingpage"],
+        False,
+    ),
+    (
+        "read_project_file",
+        {"project_name": "landingpage", "source_key": "app_file"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["landingpage"],
+        False,
+    ),
+    (
+        "list_project_directory",
+        {"project_name": "landingpage", "source_key": "app_file"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["landingpage"],
+        False,
+    ),
 )
 PROJECT_PROTECTED_LOG_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [LOGS_COLLECT_SCOPE]) for tool_name, arguments in COLLECT_LOGS_TOOL_CALLS
@@ -223,7 +252,7 @@ PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
 )
 PROJECT_PROTECTED_CONTAINER_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [CONTAINER_FILES_READ_SCOPE])
-    for tool_name, arguments in CONTAINER_TOOL_CALLS
+    for tool_name, arguments in CONTAINER_TOOL_CALLS + HOST_PATH_TOOL_CALLS
 )
 PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [MCP_STATUS_READ_SCOPE]) for tool_name, arguments in FAIL2BAN_TOOL_CALLS
@@ -282,6 +311,9 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "stat_container_path",
                 "read_container_file",
                 "list_container_directory",
+                "stat_project_path",
+                "read_project_file",
+                "list_project_directory",
                 "close_agent_session",
             },
         ),
@@ -316,6 +348,9 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "stat_container_path",
                 "read_container_file",
                 "list_container_directory",
+                "stat_project_path",
+                "read_project_file",
+                "list_project_directory",
                 "close_agent_session",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
@@ -1847,6 +1882,45 @@ async def test_read_project_manifest_api_returns_authorized_manifest_contract(
     assert "updated_at" not in payload
 
 
+async def test_read_project_manifest_api_allows_session_caller_without_session_id(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify manifest inspection is project-scoped and does not require session_id."""
+
+    await McpCaller.objects.filter(
+        client_id="codex-agent",
+        client_type="codex",
+        workspace=LogWorkspace.WORKFLOW,
+    ).delete()
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [PROJECTS_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "read-project-manifest-session-caller",
+            "method": "tools/call",
+            "params": {
+                "name": "read_project_manifest",
+                "arguments": {"project_name": "landingpage"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "read_project_manifest"
+    assert payload["project_name"] == "landingpage"
+
+
 async def test_read_project_manifest_api_filters_to_one_source(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
@@ -2638,6 +2712,203 @@ async def test_list_container_directory_api_returns_entries(
     assert payload["path"] == expected_path
     assert payload["entries"][0]["name"] == "VERSION"
     list_directory.assert_called_once_with("app-container", expected_path)
+
+
+async def test_stat_project_path_api_returns_file_metadata(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify stat_project_path returns metadata for a manifest file source."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "stat-project-path",
+            "method": "tools/call",
+            "params": {
+                "name": "stat_project_path",
+                "arguments": {"project_name": "landingpage", "source_key": "app_file"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "stat_project_path"
+    assert payload["project_name"] == "landingpage"
+    assert payload["source_key"] == "app_file"
+    assert payload["path"].endswith("/src/tests/fixtures/logs/landingpage/app_file.log")
+    assert payload["file"]["exists"] is True
+    assert payload["file"]["is_file"] is True
+    assert payload["file"]["readable"] is True
+
+
+async def test_stat_project_path_api_allows_session_caller_without_session_id(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify host path tools are project-scoped and do not require session_id."""
+
+    await McpCaller.objects.filter(
+        client_id="codex-agent",
+        client_type="codex",
+        workspace=LogWorkspace.WORKFLOW,
+    ).delete()
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "stat-project-path-session-caller",
+            "method": "tools/call",
+            "params": {
+                "name": "stat_project_path",
+                "arguments": {"project_name": "landingpage", "source_key": "app_file"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "stat_project_path"
+    assert payload["project_name"] == "landingpage"
+    assert payload["source_key"] == "app_file"
+
+
+async def test_read_project_file_api_returns_bounded_file_contents(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify read_project_file returns a bounded text preview."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "read-project-file",
+            "method": "tools/call",
+            "params": {
+                "name": "read_project_file",
+                "arguments": {
+                    "project_name": "landingpage",
+                    "source_key": "app_file",
+                    "max_bytes": 12,
+                },
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "read_project_file"
+    assert payload["max_bytes"] == 12
+    assert payload["truncated"] is True
+    assert len(payload["content"].encode("utf-8")) <= 12
+    assert payload["file"]["is_file"] is True
+
+
+async def test_list_project_directory_api_returns_parent_entries(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify list_project_directory lists the approved source parent directory."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "list-project-directory",
+            "method": "tools/call",
+            "params": {
+                "name": "list_project_directory",
+                "arguments": {"project_name": "landingpage", "source_key": "app_file"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+    entry_names = [entry["name"] for entry in payload["entries"]]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "list_project_directory"
+    assert payload["path"].endswith("/src/tests/fixtures/logs/landingpage")
+    assert "app_file.log" in entry_names
+    assert payload["truncated"] is False
+
+
+async def test_stat_project_path_api_rejects_parent_traversal(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify host path inspection rejects traversal syntax before filesystem access."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "stat-project-path-traversal",
+            "method": "tools/call",
+            "params": {
+                "name": "stat_project_path",
+                "arguments": {
+                    "project_name": "landingpage",
+                    "source_key": "app_file",
+                    "path": "../secret.txt",
+                },
+            },
+        },
+    )
+
+    result = response.json()["result"]
+    payload = result["structuredContent"]
+
+    assert response.status_code == 200
+    assert result["isError"] is True
+    assert payload["action"] == "stat_project_path"
+    assert payload["error_code"] == "project_path_parent_traversal"
+    assert payload["details"] == {"path": "../secret.txt"}
 
 
 async def test_list_projects_api_returns_multiple_manifest_backed_projects(
