@@ -100,6 +100,15 @@ INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION = (
     "environment values, host mount source paths, or mutation operations."
 )
 
+INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION = (
+    "Inspect all Docker volumes visible to the MCP runtime, like a bounded "
+    "read-only docker volume ls view for VPS storage triage. Returns volume "
+    "name, driver, scope, created timestamp, safe Compose labels, option keys, "
+    "redacted mountpoint presence, and Docker-provided usage hints when "
+    "available. Supports cleanup-oriented filters: dangling_only, anonymous_only, "
+    "and name_prefix. Host mount paths and volume contents are not returned."
+)
+
 INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION = (
     "Inspect curated Docker metadata for one manifest-approved source container. "
     "Use this after inspect_containers_health points to a suspicious container. "

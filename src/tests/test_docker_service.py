@@ -15,6 +15,7 @@ from services.docker_service import (
     DockerService,
     DockerServiceError,
     VpsContainerInventory,
+    VpsVolumeInventory,
 )
 from tests.conftest import FakeDockerClient
 
@@ -826,5 +827,167 @@ def test_inspect_vps_containers_returns_empty_inventory(
     mocker.patch("services.docker_service.docker.from_env", return_value=fake_docker_client)
 
     result = DockerService().inspect_vps_containers()
+
+    assert result == []
+
+
+def test_inspect_vps_volumes_returns_redacted_inventory(
+    fake_docker_client: FakeDockerClient,
+    mocker: MockerFixture,
+) -> None:
+    class FakeVolume:
+        def __init__(self, attrs: dict[str, object]) -> None:
+            self.attrs = attrs
+
+    fake_docker_client.listed_volumes = [
+        FakeVolume(
+            {
+                "Name": "dockerpage_db_data",
+                "Driver": "local",
+                "Mountpoint": "/var/lib/docker/volumes/dockerpage_db_data/_data",
+                "CreatedAt": "2026-05-16T09:55:00Z",
+                "Scope": "local",
+                "Labels": {
+                    "com.docker.compose.project": "dockerpage",
+                    "com.docker.compose.volume": "db_data",
+                    "secret.label": "hidden",
+                },
+                "Options": {"type": "none"},
+                "UsageData": {"RefCount": 2, "Size": 4096},
+            }
+        ),
+        FakeVolume(
+            {
+                "Name": "other_db_data",
+                "Driver": "local",
+                "Mountpoint": "/var/lib/docker/volumes/other_db_data/_data",
+                "Labels": {"com.docker.compose.project": "other"},
+            }
+        ),
+        FakeVolume(
+            {
+                "Name": "unlabeled_cache",
+                "Driver": "local",
+                "Mountpoint": "/var/lib/docker/volumes/unlabeled_cache/_data",
+                "Labels": {},
+            }
+        ),
+    ]
+    mocker.patch("services.docker_service.docker.from_env", return_value=fake_docker_client)
+
+    result = DockerService().inspect_vps_volumes()
+
+    assert result == [
+        VpsVolumeInventory(
+            volume_name="dockerpage_db_data",
+            driver="local",
+            scope="local",
+            created_at="2026-05-16T09:55:00Z",
+            compose_labels={
+                "com.docker.compose.project": "dockerpage",
+                "com.docker.compose.volume": "db_data",
+            },
+            option_keys=["type"],
+            mountpoint_available=True,
+            mountpoint_redacted=True,
+            usage_ref_count=2,
+            usage_size_bytes=4096,
+        ),
+        VpsVolumeInventory(
+            volume_name="other_db_data",
+            driver="local",
+            scope=None,
+            created_at=None,
+            compose_labels={"com.docker.compose.project": "other"},
+            option_keys=[],
+            mountpoint_available=True,
+            mountpoint_redacted=True,
+            usage_ref_count=None,
+            usage_size_bytes=None,
+        ),
+        VpsVolumeInventory(
+            volume_name="unlabeled_cache",
+            driver="local",
+            scope=None,
+            created_at=None,
+            compose_labels={},
+            option_keys=[],
+            mountpoint_available=True,
+            mountpoint_redacted=True,
+            usage_ref_count=None,
+            usage_size_bytes=None,
+        ),
+    ]
+
+
+def test_inspect_vps_volumes_passes_dangling_filter_to_docker(
+    fake_docker_client: FakeDockerClient,
+    mocker: MockerFixture,
+) -> None:
+    fake_docker_client.listed_volumes = []
+    mocker.patch("services.docker_service.docker.from_env", return_value=fake_docker_client)
+
+    result = DockerService().inspect_vps_volumes(dangling_only=True)
+
+    assert result == []
+    assert fake_docker_client.captured_volume_filters == {"dangling": True}
+
+
+def test_inspect_vps_volumes_filters_by_anonymous_name_and_prefix(
+    fake_docker_client: FakeDockerClient,
+    mocker: MockerFixture,
+) -> None:
+    class FakeVolume:
+        def __init__(self, attrs: dict[str, object]) -> None:
+            self.attrs = attrs
+
+    matching_hash = "a" * 64
+    other_hash = "b" * 64
+    fake_docker_client.listed_volumes = [
+        FakeVolume(
+            {
+                "Name": matching_hash,
+                "Driver": "local",
+                "Labels": {"com.docker.compose.project": "dockerpage"},
+            }
+        ),
+        FakeVolume(
+            {
+                "Name": other_hash,
+                "Driver": "local",
+                "Labels": {"com.docker.compose.project": "dockerpage"},
+            }
+        ),
+        FakeVolume(
+            {
+                "Name": "dockerpage_db_data",
+                "Driver": "local",
+                "Labels": {"com.docker.compose.project": "dockerpage"},
+            }
+        ),
+        FakeVolume(
+            {
+                "Name": matching_hash.replace("a", "c"),
+                "Driver": "local",
+                "Labels": {"com.docker.compose.project": "other"},
+            }
+        ),
+    ]
+    mocker.patch("services.docker_service.docker.from_env", return_value=fake_docker_client)
+
+    result = DockerService().inspect_vps_volumes(anonymous_only=True, name_prefix="aa")
+
+    assert isinstance(result, list)
+    assert [volume.volume_name for volume in result] == [matching_hash]
+
+
+def test_inspect_vps_volumes_returns_empty_inventory(
+    fake_docker_client: FakeDockerClient,
+    mocker: MockerFixture,
+) -> None:
+    fake_docker_client.listed_volumes = []
+    mocker.patch("services.docker_service.docker.from_env", return_value=fake_docker_client)
+
+    result = DockerService().inspect_vps_volumes()
 
     assert result == []

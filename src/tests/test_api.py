@@ -29,6 +29,7 @@ from services.docker_service import (
     ContainerPathStat,
     ContainerRestartPolicy,
     VpsContainerInventory,
+    VpsVolumeInventory,
 )
 from services.fail2ban_service import Fail2banActivity, Fail2banJailStatus, Fail2banServiceStatus
 from tests.conftest import (
@@ -254,6 +255,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
             {
                 "inspect_containers_health",
                 "inspect_vps_containers",
+                "inspect_vps_volumes",
                 "inspect_container_detail",
                 "stat_container_path",
                 "read_container_file",
@@ -285,6 +287,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "list_projects",
                 "inspect_containers_health",
                 "inspect_vps_containers",
+                "inspect_vps_volumes",
                 "inspect_container_detail",
                 "stat_container_path",
                 "read_container_file",
@@ -1975,6 +1978,135 @@ async def test_inspect_vps_containers_api_returns_docker_ps_inventory(
         "restart_count=8",
     ]
     assert "secret" not in json.dumps(payload).lower()
+
+
+async def test_inspect_vps_volumes_api_returns_volume_inventory(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify inspect_vps_volumes returns redacted VPS-wide volume facts."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+
+    mocker.patch(
+        "tools.container_inspection.docker_service.inspect_vps_volumes",
+        return_value=[
+            VpsVolumeInventory(
+                volume_name="dockerpage_db_data",
+                driver="local",
+                scope="local",
+                created_at="2026-05-16T09:55:00Z",
+                compose_labels={
+                    "com.docker.compose.project": "dockerpage",
+                    "com.docker.compose.volume": "db_data",
+                },
+                option_keys=["type"],
+                mountpoint_available=True,
+                mountpoint_redacted=True,
+                usage_ref_count=2,
+                usage_size_bytes=4096,
+            )
+        ],
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-vps-volumes",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_vps_volumes",
+                "arguments": {},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_vps_volumes"
+    assert payload["volume_count"] == 1
+    assert payload["truncated"] is False
+    assert payload["volumes"] == [
+        {
+            "volume_name": "dockerpage_db_data",
+            "driver": "local",
+            "scope": "local",
+            "created_at": "2026-05-16T09:55:00Z",
+            "compose_labels": {
+                "com.docker.compose.project": "dockerpage",
+                "com.docker.compose.volume": "db_data",
+            },
+            "option_keys": ["type"],
+            "mountpoint_available": True,
+            "mountpoint_redacted": True,
+            "usage_ref_count": 2,
+            "usage_size_bytes": 4096,
+        }
+    ]
+    assert payload["volumes"][0]["mountpoint_available"] is True
+    assert payload["volumes"][0]["mountpoint_redacted"] is True
+    assert "/var/lib/docker" not in json.dumps(payload)
+
+
+async def test_inspect_vps_volumes_api_forwards_volume_filters(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify inspect_vps_volumes accepts cleanup-oriented inventory filters."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+
+    inspect_mock = mocker.patch(
+        "tools.container_inspection.docker_service.inspect_vps_volumes",
+        return_value=[],
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-vps-volumes-filtered",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_vps_volumes",
+                "arguments": {
+                    "dangling_only": True,
+                    "anonymous_only": True,
+                    "name_prefix": "a",
+                },
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    inspect_mock.assert_called_once_with(
+        dangling_only=True,
+        anonymous_only=True,
+        name_prefix="a",
+    )
+    assert payload["filters"] == {
+        "dangling_only": True,
+        "anonymous_only": True,
+        "name_prefix": "a",
+    }
 
 
 async def test_inspect_container_detail_api_returns_curated_container_metadata(

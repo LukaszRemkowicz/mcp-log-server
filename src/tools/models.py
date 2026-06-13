@@ -702,6 +702,35 @@ class InspectVpsContainersPayload(BaseModel):
     containers: list[VpsContainerInventoryPayload]
 
 
+class VpsVolumeInventoryPayload(BaseModel):
+    """One bounded Docker volume ls-style inventory item for VPS diagnostics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    volume_name: str
+    driver: str | None
+    scope: str | None
+    created_at: str | None
+    compose_labels: dict[str, str]
+    option_keys: list[str]
+    mountpoint_available: bool
+    mountpoint_redacted: bool
+    usage_ref_count: int | None
+    usage_size_bytes: int | None
+
+
+class InspectVpsVolumesPayload(BaseModel):
+    """Structured success payload returned by `inspect_vps_volumes`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_vps_volumes"]
+    filters: dict[str, bool | str | None]
+    volume_count: int
+    truncated: bool
+    volumes: list[VpsVolumeInventoryPayload]
+
+
 class ContainerDetailMountPayload(BaseModel):
     """Curated mount metadata returned by `inspect_container_detail`."""
 

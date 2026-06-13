@@ -42,18 +42,21 @@ from manifests.models import Manifest, SourceDefinition
 from services.docker_service import (
     MAX_CONTAINER_FILE_BYTES,
     MAX_VPS_CONTAINERS,
+    MAX_VPS_VOLUMES,
     ContainerDetail,
     ContainerHealth,
     ContainerPathStat,
     DockerService,
     DockerServiceError,
     VpsContainerInventory,
+    VpsVolumeInventory,
 )
 from services.project_manifest import ProjectManifestError, ProjectManifestService
 from tools.agent_hints import (
     INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
     INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
     INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
+    INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
     READ_CONTAINER_FILE_TOOL_DESCRIPTION,
     STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
@@ -69,10 +72,12 @@ from tools.models import (
     InspectContainerDetailPayload,
     InspectContainersHealthPayload,
     InspectVpsContainersPayload,
+    InspectVpsVolumesPayload,
     ListContainerDirectoryPayload,
     ReadContainerFilePayload,
     StatContainerPathPayload,
     VpsContainerInventoryPayload,
+    VpsVolumeInventoryPayload,
 )
 
 logger: logging.Logger = get_logger("tools.container_inspection")
@@ -475,6 +480,25 @@ def create_vps_container_inventory_payload(
     )
 
 
+def create_vps_volume_inventory_payload(
+    volume: VpsVolumeInventory,
+) -> VpsVolumeInventoryPayload:
+    """Convert Docker volume service inventory into one MCP response row."""
+
+    return VpsVolumeInventoryPayload(
+        volume_name=volume.volume_name,
+        driver=volume.driver,
+        scope=volume.scope,
+        created_at=volume.created_at,
+        compose_labels=volume.compose_labels,
+        option_keys=volume.option_keys,
+        mountpoint_available=volume.mountpoint_available,
+        mountpoint_redacted=volume.mountpoint_redacted,
+        usage_ref_count=volume.usage_ref_count,
+        usage_size_bytes=volume.usage_size_bytes,
+    )
+
+
 @mcp.tool(
     auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
     description=INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
@@ -505,6 +529,55 @@ async def inspect_vps_containers() -> ToolResult:
             "event": "tool_result",
             "tool_name": "inspect_vps_containers",
             "container_count": payload.container_count,
+            "truncated": payload.truncated,
+        },
+    )
+    return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
+
+
+@mcp.tool(
+    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
+    description=INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
+)
+async def inspect_vps_volumes(
+    dangling_only: bool = False,
+    anonymous_only: bool = False,
+    name_prefix: str | None = None,
+) -> ToolResult:
+    """Return a bounded Docker volume ls-style inventory for visible VPS volumes."""
+
+    volumes = docker_service.inspect_vps_volumes(
+        dangling_only=dangling_only,
+        anonymous_only=anonymous_only,
+        name_prefix=name_prefix,
+    )
+    if isinstance(volumes, DockerServiceError):
+        return build_container_inspection_error_result(
+            action="inspect_vps_volumes",
+            message=volumes.message,
+            requested_project_name=None,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    payload = InspectVpsVolumesPayload(
+        action="inspect_vps_volumes",
+        filters={
+            "dangling_only": dangling_only,
+            "anonymous_only": anonymous_only,
+            "name_prefix": name_prefix,
+        },
+        volume_count=len(volumes),
+        truncated=len(volumes) >= MAX_VPS_VOLUMES,
+        volumes=[create_vps_volume_inventory_payload(item) for item in volumes],
+    )
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_vps_volumes",
+            "volume_count": payload.volume_count,
             "truncated": payload.truncated,
         },
     )

@@ -28,6 +28,7 @@ from tools.agent_hints import (
     INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION,
     INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
     INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
+    INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
     READ_CONTAINER_FILE_TOOL_DESCRIPTION,
     STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
@@ -67,6 +68,7 @@ def test_application_registers_expected_mcp_components(
         assert "suggest_followup_window" in tool_names
         assert "list_projects" in tool_names
         assert "inspect_vps_containers" in tool_names
+        assert "inspect_vps_volumes" in tool_names
         assert "inspect_containers_health" in tool_names
         assert "inspect_container_detail" in tool_names
         assert "stat_container_path" in tool_names
@@ -201,6 +203,8 @@ def test_application_registers_expected_mcp_components(
             tool for tool in tools if tool.name == "inspect_containers_health"
         )
         assert app_container_health_tool.description == INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION
+        app_vps_volumes_tool = next(tool for tool in tools if tool.name == "inspect_vps_volumes")
+        assert app_vps_volumes_tool.description == INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION
         app_vps_containers_tool = next(
             tool for tool in tools if tool.name == "inspect_vps_containers"
         )
@@ -255,6 +259,7 @@ def test_application_registers_expected_mcp_components(
             "create_filtered_view",
             "inspect_proxy_activity",
             "inspect_vps_containers",
+            "inspect_vps_volumes",
             "inspect_containers_health",
             "stat_container_path",
             "read_container_file",

@@ -122,21 +122,32 @@ class FakeDockerClient:
     """Small Docker SDK fake for container log and inspection tests."""
 
     containers: FakeDockerClient
+    volumes: FakeDockerClient
 
     def __init__(self) -> None:
         self.containers = self
+        self.volumes = self
         self.outputs_by_command: dict[tuple[str, ...], str] = {}
         self.commands: list[list[str]] = []
         self.captured_logs_kwargs: dict[str, object] = {}
         self.logs_exception: Exception | None = None
         self.attrs: dict[str, object] = {}
         self.listed_containers: builtins_list[object] = []
+        self.listed_volumes: builtins_list[object] = []
+        self.captured_volume_filters: dict[str, object] | None = None
 
     def get(self, container_name: str) -> FakeDockerClient:
         assert container_name == "backend-container"
         return self
 
     def list(self, **kwargs: object) -> builtins_list[object]:
+        if kwargs == {}:
+            return self.listed_volumes
+        if set(kwargs) == {"filters"}:
+            filters = kwargs["filters"]
+            assert isinstance(filters, dict)
+            self.captured_volume_filters = filters
+            return self.listed_volumes
         assert kwargs == {"all": True}
         return self.listed_containers
 

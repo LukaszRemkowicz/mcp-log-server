@@ -640,6 +640,49 @@ async def test_audit_middleware_authorizes_vps_containers_as_session_tool(
 
 @pytest.mark.anyio
 @pytest.mark.usefixtures("db")
+async def test_audit_middleware_authorizes_vps_volumes_as_session_tool(
+    mocker: MockerFixture,
+) -> None:
+    """Verify VPS volume diagnostics use the session caller allowlist."""
+
+    caller = await McpCallerFactory.save_to_db(
+        client_id="session-vps-volumes-client",
+        client_type="codex",
+        workspace=LogWorkspace.SESSION,
+        allowed_projects=["dockerpage"],
+    )
+    token = AccessToken(
+        token="test-token",
+        client_id=caller.client_id,
+        scopes=["container.files.read"],
+        claims={
+            "sub": "codex-subject",
+            "client_type": caller.client_type,
+        },
+    )
+    mocker.patch("middleware.audit.get_access_token", return_value=token)
+    context = MiddlewareContext(
+        message=mt.CallToolRequestParams(
+            name="inspect_vps_volumes",
+            arguments={},
+        )
+    )
+    middleware = AccessAuditMiddleware()
+    call_next = mocker.AsyncMock(
+        return_value=ToolResult(content=[], structured_content={"ok": True})
+    )
+
+    result = await middleware.on_call_tool(
+        context,
+        cast(CallNext[mt.CallToolRequestParams, ToolResult], call_next),
+    )
+
+    call_next.assert_awaited_once()
+    assert result.structured_content == {"ok": True}
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_audit_middleware_authorizes_container_file_tools_as_session_tools(
     mocker: MockerFixture,
 ) -> None:
