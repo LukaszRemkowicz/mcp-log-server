@@ -32,6 +32,7 @@ from tools.agent_hints import (
     INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
     READ_CONTAINER_FILE_TOOL_DESCRIPTION,
+    READ_PROJECT_MANIFEST_TOOL_DESCRIPTION,
     STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
     SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION,
 )
@@ -68,6 +69,7 @@ def test_application_registers_expected_mcp_components(
         assert "inspect_proxy_activity" in tool_names
         assert "suggest_followup_window" in tool_names
         assert "list_projects" in tool_names
+        assert "read_project_manifest" in tool_names
         assert "inspect_vps_containers" in tool_names
         assert "inspect_vps_volumes" in tool_names
         assert "inspect_containers_health" in tool_names
@@ -177,6 +179,7 @@ def test_application_registers_expected_mcp_components(
         )
         assert all(argument["name"] != "workspace" for argument in collect_logs_tool["arguments"])
         assert any(item["tool_name"] == "list_projects" for item in bootstrap_text["tools"])
+        assert all(item["tool_name"] != "read_project_manifest" for item in bootstrap_text["tools"])
         assert any(
             item["tool_name"] == "get_mcp_service_status" for item in bootstrap_text["tools"]
         )
@@ -239,6 +242,8 @@ def test_application_registers_expected_mcp_components(
         assert app_fail2ban_tool.description == INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION
         app_tls_tool = next(tool for tool in tools if tool.name == "inspect_tls_certificate")
         assert app_tls_tool.description == INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION
+        app_manifest_tool = next(tool for tool in tools if tool.name == "read_project_manifest")
+        assert app_manifest_tool.description == READ_PROJECT_MANIFEST_TOOL_DESCRIPTION
         workflow_followup_tool = next(
             item
             for item in bootstrap_text["tools"]
@@ -257,6 +262,7 @@ def test_application_registers_expected_mcp_components(
         request_caller_tool_names = {
             "get_mcp_service_status",
             "list_projects",
+            "read_project_manifest",
             "collect_logs",
             "list_log_snapshot_files",
             "read_log_snapshot_file",

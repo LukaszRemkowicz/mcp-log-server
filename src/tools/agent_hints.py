@@ -93,6 +93,14 @@ INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION = (
     "modify DNS, Traefik, ACME, or certificate state."
 )
 
+READ_PROJECT_MANIFEST_TOOL_DESCRIPTION = (
+    "Read the persisted manifest contract for one authorized project, optionally "
+    "filtered to one source_key. Returns project summary, static asset hints, "
+    "source keys, configured source targets, parser and normalization profiles, "
+    "retention class, noise profile, inspect path prefixes, Compose metadata, "
+    "and required-source flags without inspecting live runtime state."
+)
+
 INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION = (
     "Inspect Docker runtime status for all docker-backed sources in one project. "
     "Returns a compact per-source overview with container status, healthcheck "

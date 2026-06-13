@@ -91,6 +91,9 @@ FAIL2BAN_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("inspect_live_fail2ban_activity", {"project_name": "landingpage"}),
 )
 TLS_TOOL_CALLS: tuple[ToolCall, ...] = (("inspect_tls_certificate", {}),)
+PROJECT_MANIFEST_TOOL_CALLS: tuple[ToolCall, ...] = (
+    ("read_project_manifest", {"project_name": "landingpage"}),
+)
 ANALYSIS_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("group_errors", {"project_name": "landingpage"}),
     ("build_incident_bundle", {"project_name": "landingpage"}),
@@ -108,6 +111,7 @@ COLLECT_LOGS_TOOL_CALLS: tuple[ToolCall, ...] = (
 )
 PROJECT_PROTECTED_TOOL_CALL_ARGUMENTS: tuple[ToolCall, ...] = (
     COLLECT_LOGS_TOOL_CALLS
+    + PROJECT_MANIFEST_TOOL_CALLS
     + SNAPSHOT_TOOL_CALLS
     + ANALYSIS_TOOL_CALLS
     + CONTAINER_TOOL_CALLS
@@ -119,6 +123,13 @@ CALLER_CONTEXT_LOG_TOOL_NAMES = {
 }
 CALLER_CONTEXT_TOOL_CALLS: tuple[CallerContextToolCall, ...] = (
     ("list_projects", {}, [PROJECTS_READ_SCOPE], ["landingpage"], False),
+    (
+        "read_project_manifest",
+        {"project_name": "landingpage"},
+        [PROJECTS_READ_SCOPE],
+        ["landingpage"],
+        False,
+    ),
     (
         "collect_logs",
         {"project_names": ["landingpage"], "source_keys": ["app_file"]},
@@ -201,6 +212,10 @@ CALLER_CONTEXT_TOOL_CALLS: tuple[CallerContextToolCall, ...] = (
 PROJECT_PROTECTED_LOG_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [LOGS_COLLECT_SCOPE]) for tool_name, arguments in COLLECT_LOGS_TOOL_CALLS
 )
+PROJECT_PROTECTED_MANIFEST_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
+    (tool_name, arguments, [PROJECTS_READ_SCOPE])
+    for tool_name, arguments in PROJECT_MANIFEST_TOOL_CALLS
+)
 PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [LOGS_COLLECT_SCOPE]) for tool_name, arguments in SNAPSHOT_TOOL_CALLS
 ) + tuple(
@@ -215,12 +230,14 @@ PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
 )
 PROJECT_PROTECTED_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
     PROJECT_PROTECTED_LOG_TOOL_CALLS
+    + PROJECT_PROTECTED_MANIFEST_TOOL_CALLS
     + PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS
     + PROJECT_PROTECTED_CONTAINER_TOOL_CALLS
     + PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS
 )
 PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
-    PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS
+    PROJECT_PROTECTED_MANIFEST_TOOL_CALLS
+    + PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS
     + PROJECT_PROTECTED_CONTAINER_TOOL_CALLS
     + PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS
 )
@@ -253,6 +270,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "suggest_followup_window",
                 "inspect_tls_certificate",
                 "list_projects",
+                "read_project_manifest",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
             },
@@ -290,6 +308,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "suggest_followup_window",
                 "inspect_tls_certificate",
                 "list_projects",
+                "read_project_manifest",
                 "inspect_containers_health",
                 "inspect_vps_containers",
                 "inspect_vps_volumes",
@@ -1763,6 +1782,152 @@ async def test_list_projects_api_returns_manifest_backed_projects(
     landingpage = next(item for item in payload if item["project_name"] == "landingpage")
     assert landingpage["project_summary"] == "Landingpage project for analysis tests."
     assert "backend" in landingpage["source_keys"]
+
+
+async def test_read_project_manifest_api_returns_authorized_manifest_contract(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify read_project_manifest returns detailed persisted manifest metadata."""
+
+    token: str = custom_jwt_token(
+        "workflow-agent",
+        [PROJECTS_READ_SCOPE],
+        "workflow-agent",
+        {"projects_access": "all"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "read-project-manifest",
+            "method": "tools/call",
+            "params": {
+                "name": "read_project_manifest",
+                "arguments": {"project_name": "landingpage"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "read_project_manifest"
+    assert payload["project_name"] == "landingpage"
+    assert payload["project_summary"] == "Landingpage project for analysis tests."
+    assert payload["source_keys"] == [
+        "backend",
+        "nginx",
+        "app_file",
+        "app_first",
+        "app_second",
+        "snapshot_text",
+        "traefik",
+    ]
+    assert payload["static_asset_paths"] == ["/favicon.ico", "/robots.txt", "/sitemap.xml"]
+    assert payload["static_asset_extensions"]
+    backend_source = payload["sources"][0]
+    assert backend_source["source_key"] == "backend"
+    assert backend_source["source_type"] == "file"
+    assert backend_source["target"].endswith("/src/tests/fixtures/logs/landingpage/backend.log")
+    assert backend_source["description"] == "Backend logs."
+    assert backend_source["required"] is True
+    assert backend_source["parser_type"] == "json_lines"
+    assert backend_source["normalization_profile"] == "app_logs"
+    assert backend_source["retention_class"] == "short"
+    assert backend_source["default_noise_profile"] == "backend_noise"
+    assert backend_source["stream"] is None
+    assert backend_source["inspect_path_prefixes"] == []
+    assert backend_source["compose_project"] is None
+    assert backend_source["compose_service"] is None
+    assert "id" not in payload
+    assert "created_at" not in payload
+    assert "updated_at" not in payload
+
+
+async def test_read_project_manifest_api_filters_to_one_source(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify read_project_manifest can return one source definition."""
+
+    token: str = custom_jwt_token(
+        "workflow-agent",
+        [PROJECTS_READ_SCOPE],
+        "workflow-agent",
+        {"projects_access": "all"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "read-project-manifest-source",
+            "method": "tools/call",
+            "params": {
+                "name": "read_project_manifest",
+                "arguments": {"project_name": "landingpage", "source_key": "traefik"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["requested_source_key"] == "traefik"
+    assert payload["source_keys"] == ["traefik"]
+    assert [source["source_key"] for source in payload["sources"]] == ["traefik"]
+    assert payload["sources"][0]["normalization_profile"] == "proxy_access"
+
+
+async def test_read_project_manifest_api_returns_unknown_source_error(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify read_project_manifest gives structured guidance for unknown sources."""
+
+    token: str = custom_jwt_token(
+        "workflow-agent",
+        [PROJECTS_READ_SCOPE],
+        "workflow-agent",
+        {"projects_access": "all"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "read-project-manifest-missing-source",
+            "method": "tools/call",
+            "params": {
+                "name": "read_project_manifest",
+                "arguments": {"project_name": "landingpage", "source_key": "missing"},
+            },
+        },
+    )
+
+    result = response.json()["result"]
+    payload = result["structuredContent"]
+
+    assert response.status_code == 200
+    assert result["isError"] is True
+    assert payload["error_code"] == "unknown_source_key"
+    assert payload["details"] == {
+        "project_name": "landingpage",
+        "source_key": "missing",
+        "available_source_keys": [
+            "backend",
+            "nginx",
+            "app_file",
+            "app_first",
+            "app_second",
+            "snapshot_text",
+            "traefik",
+        ],
+    }
 
 
 async def test_read_container_file_api_returns_file_contents(

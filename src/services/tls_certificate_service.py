@@ -186,6 +186,7 @@ class TlsCertificateService:
         """Open one bounded TLS connection and parse the peer certificate."""
 
         context = ssl.create_default_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         with socket.create_connection((hostname, port), timeout=timeout) as raw_socket:
             with context.wrap_socket(raw_socket, server_hostname=hostname) as tls_socket:
                 certificate = tls_socket.getpeercert()

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ssl
 from datetime import UTC, datetime, timedelta
 from inspect import signature
+from types import TracebackType
 
 from services.tls_certificate_service import TlsCertificateData, TlsCertificateService
 from tests.conftest import override_settings
@@ -126,6 +128,62 @@ def test_tls_certificate_service_reports_connection_failure() -> None:
     assert result.warning_level == "connection_failure"
     assert result.error_code == "tls_certificate_connection_failed"
     assert "timed out" in result.message
+
+
+def test_tls_certificate_network_fetch_requires_tls_1_2_or_newer(monkeypatch) -> None:
+    class FakeTlsSocket:
+        def __enter__(self) -> FakeTlsSocket:
+            return self
+
+        def __exit__(
+            self,
+            _exc_type: type[BaseException] | None,
+            _exc: BaseException | None,
+            _traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+        def getpeercert(self) -> dict[str, object]:
+            return {
+                "subject": ((("commonName", "example.com"),),),
+                "issuer": ((("commonName", "Example CA"),),),
+                "notBefore": "Jan  1 00:00:00 2026 GMT",
+                "notAfter": "Apr  1 00:00:00 2026 GMT",
+                "subjectAltName": (("DNS", "example.com"),),
+            }
+
+    class FakeContext:
+        minimum_version: ssl.TLSVersion | None = None
+
+        def wrap_socket(self, _raw_socket: object, *, server_hostname: str) -> FakeTlsSocket:
+            assert server_hostname == "example.com"
+            return FakeTlsSocket()
+
+    class FakeRawSocket:
+        def __enter__(self) -> FakeRawSocket:
+            return self
+
+        def __exit__(
+            self,
+            _exc_type: type[BaseException] | None,
+            _exc: BaseException | None,
+            _traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+    fake_context = FakeContext()
+    monkeypatch.setattr(
+        "services.tls_certificate_service.ssl.create_default_context",
+        lambda: fake_context,
+    )
+    monkeypatch.setattr(
+        "services.tls_certificate_service.socket.create_connection",
+        lambda _target, *, timeout: FakeRawSocket(),
+    )
+
+    TlsCertificateService()._fetch_certificate_from_network("example.com", 443, 5)
+
+    assert fake_context.minimum_version == ssl.TLSVersion.TLSv1_2
 
 
 def test_tls_certificate_service_rejects_unconfigured_site_domain() -> None:

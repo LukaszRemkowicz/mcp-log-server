@@ -182,6 +182,41 @@ class ProjectManifestSummary(BaseModel):
         return getattr(self, key)
 
 
+class ProjectManifestSourcePayload(BaseModel):
+    """Detailed source contract returned by `read_project_manifest`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_key: str
+    source_type: Literal["docker", "file"]
+    target: str
+    description: str
+    required: bool
+    parser_type: str
+    normalization_profile: str
+    retention_class: str
+    default_noise_profile: str | None
+    stream: Literal["stdout", "stderr"] | None
+    inspect_path_prefixes: list[str]
+    compose_project: str | None
+    compose_service: str | None
+
+
+class ReadProjectManifestPayload(BaseModel):
+    """Structured response returned by `read_project_manifest`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["read_project_manifest"]
+    project_name: str
+    project_summary: str
+    requested_source_key: str | None
+    source_keys: list[str]
+    static_asset_paths: list[str]
+    static_asset_extensions: list[str]
+    sources: list[ProjectManifestSourcePayload]
+
+
 class ProjectManifestList(RootModel[list[ProjectManifestSummary]]):
     """Collection wrapper for manifest-backed project summaries."""
 

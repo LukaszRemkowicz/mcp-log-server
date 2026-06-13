@@ -5,9 +5,11 @@ from __future__ import annotations
 import logging
 from typing import cast
 
+from fastmcp.server.auth import require_scopes
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
 
+from app import mcp
 from auth.mcp_authorized_manifests import AuthorizedProjectManifests
 from auth.scopes import LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE
 from conf import settings
@@ -17,9 +19,19 @@ from logging_config import get_logger
 from manifests.models import Manifest
 from services.log_collection import BuildLogsError, LogCollectionService
 from services.project_manifest import ProjectManifestError, ProjectManifestService
-from tools.agent_hints import COLLECT_LOGS_NEXT_STEP_TIPS, COLLECT_LOGS_TOOL_DESCRIPTION
+from tools.agent_hints import (
+    COLLECT_LOGS_NEXT_STEP_TIPS,
+    COLLECT_LOGS_TOOL_DESCRIPTION,
+    READ_PROJECT_MANIFEST_TOOL_DESCRIPTION,
+)
 from tools.errors import build_collect_logs_error_details, build_collect_logs_error_result
-from tools.models import CollectLogsPayload, ProjectManifestSummary, SnapshotWorkspace
+from tools.models import (
+    CollectLogsPayload,
+    ProjectManifestSourcePayload,
+    ProjectManifestSummary,
+    ReadProjectManifestPayload,
+    SnapshotWorkspace,
+)
 from utils.mcp_errors import build_agent_tool_error_result
 from utils.types import JSONObject
 
@@ -85,6 +97,91 @@ async def list_projects() -> list[ProjectManifestSummary]:
         },
     )
     return project_summaries
+
+
+def _build_project_manifest_source_payloads(
+    manifest: Manifest,
+    source_key: str | None,
+) -> list[ProjectManifestSourcePayload] | ToolResult:
+    """Return source payloads for one manifest, optionally filtered by source key."""
+
+    available_source_keys = [source.source_key for source in manifest.sources]
+    sources = manifest.sources
+    if source_key is not None:
+        sources = [source for source in manifest.sources if source.source_key == source_key]
+        if not sources:
+            return build_agent_tool_error_result(
+                error_code="unknown_source_key",
+                message="Requested source_key was not found in the configured manifest.",
+                retry_tips=[
+                    "Call list_projects to discover valid source_keys for this project.",
+                    "Retry with a source_key returned by read_project_manifest or omit source_key.",
+                ],
+                details=cast(
+                    JSONObject,
+                    {
+                        "project_name": manifest.project_key,
+                        "source_key": source_key,
+                        "available_source_keys": available_source_keys,
+                    },
+                ),
+            )
+
+    return [
+        ProjectManifestSourcePayload.model_validate(source.model_dump(mode="json"))
+        for source in sources
+    ]
+
+
+@mcp.tool(
+    auth=require_scopes(PROJECTS_READ_SCOPE),
+    description=READ_PROJECT_MANIFEST_TOOL_DESCRIPTION,
+)
+@project_authorized_tool
+async def read_project_manifest(
+    project_name: str,
+    source_key: str | None = None,
+) -> ToolResult:
+    """Read the persisted manifest contract for one authorized project."""
+
+    authorized_manifests = _get_authorized_manifests()
+    manifest = authorized_manifests.manifests.get(project_name)
+    if manifest is None:
+        return build_agent_tool_error_result(
+            error_code="unknown_project_manifest",
+            message="No persisted manifest was found for the requested project.",
+            retry_tips=[
+                "Call list_projects to discover projects visible to this MCP caller.",
+                "Retry with a project_name returned by list_projects.",
+            ],
+            details=cast(JSONObject, {"project_name": project_name}),
+        )
+
+    source_payloads = _build_project_manifest_source_payloads(manifest, source_key)
+    if isinstance(source_payloads, ToolResult):
+        return source_payloads
+
+    payload = ReadProjectManifestPayload(
+        action="read_project_manifest",
+        project_name=manifest.project_key,
+        project_summary=manifest.project_summary,
+        requested_source_key=source_key,
+        source_keys=[source.source_key for source in source_payloads],
+        static_asset_paths=manifest.static_asset_paths,
+        static_asset_extensions=manifest.static_asset_extensions,
+        sources=source_payloads,
+    )
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "read_project_manifest",
+            "project_name": payload.project_name,
+            "requested_source_key": payload.requested_source_key,
+            "source_count": len(payload.sources),
+        },
+    )
+    return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
 @workflow_discoverable_tool(

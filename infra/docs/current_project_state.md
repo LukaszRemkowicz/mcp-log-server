@@ -125,6 +125,7 @@ Currently implemented tools:
 - `inspect_proxy_activity`
 - `suggest_followup_window`
 - `list_projects`
+- `read_project_manifest`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
 - `inspect_containers_health`
