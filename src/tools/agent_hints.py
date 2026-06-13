@@ -84,6 +84,15 @@ INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION = (
     "analysis."
 )
 
+INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION = (
+    "Inspect the TLS certificate for the configured SITE_DOMAIN on port 443. "
+    "Returns certificate subject, issuer, validity timestamps, days until "
+    "expiry, SAN hostname-match status, and warning level for expiry, hostname "
+    "mismatch, connection failure, or unsupported TLS responses. This tool does "
+    "not accept arbitrary hostnames, IPs, wildcards, or ports and does not "
+    "modify DNS, Traefik, ACME, or certificate state."
+)
+
 INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION = (
     "Inspect Docker runtime status for all docker-backed sources in one project. "
     "Returns a compact per-source overview with container status, healthcheck "

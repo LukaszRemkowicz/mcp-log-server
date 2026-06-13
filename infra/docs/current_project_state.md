@@ -132,6 +132,7 @@ Currently implemented tools:
 - `stat_container_path`
 - `read_container_file`
 - `list_container_directory`
+- `inspect_tls_certificate`
 
 ### Resources
 

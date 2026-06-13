@@ -33,6 +33,7 @@ from services.docker_service import (
     VpsVolumeInventory,
 )
 from services.fail2ban_service import Fail2banActivity, Fail2banJailStatus, Fail2banServiceStatus
+from services.tls_certificate_service import TlsCertificateInspection
 from tests.conftest import (
     CustomJwtToken,
     FileBackedProjectContext,
@@ -89,6 +90,7 @@ CONTAINER_TOOL_CALLS: tuple[ToolCall, ...] = (
 FAIL2BAN_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("inspect_live_fail2ban_activity", {"project_name": "landingpage"}),
 )
+TLS_TOOL_CALLS: tuple[ToolCall, ...] = (("inspect_tls_certificate", {}),)
 ANALYSIS_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("group_errors", {"project_name": "landingpage"}),
     ("build_incident_bundle", {"project_name": "landingpage"}),
@@ -249,6 +251,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "create_filtered_view",
                 "inspect_proxy_activity",
                 "suggest_followup_window",
+                "inspect_tls_certificate",
                 "list_projects",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
@@ -285,6 +288,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "create_filtered_view",
                 "inspect_proxy_activity",
                 "suggest_followup_window",
+                "inspect_tls_certificate",
                 "list_projects",
                 "inspect_containers_health",
                 "inspect_vps_containers",
@@ -2108,6 +2112,62 @@ async def test_inspect_vps_volumes_api_forwards_volume_filters(
         "anonymous_only": True,
         "name_prefix": "a",
     }
+
+
+async def test_inspect_tls_certificate_api_returns_site_domain_summary(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify inspect_tls_certificate returns bounded SITE_DOMAIN certificate facts."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [MCP_STATUS_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+    mocker.patch(
+        "tools.tls.tls_certificate_service.inspect_site_certificate",
+        return_value=TlsCertificateInspection(
+            domain_key="site",
+            hostname="example.com",
+            port=443,
+            inspection_status="ok",
+            warning_level="ok",
+            subject_summary="CN=example.com",
+            issuer_summary="CN=Example CA",
+            not_before="2025-12-01T00:00:00+00:00",
+            not_after="2026-04-01T00:00:00+00:00",
+            days_until_expiry=90,
+            hostname_matches=True,
+            matched_names=["example.com"],
+            error_code=None,
+            message="TLS certificate is valid for SITE_DOMAIN.",
+        ),
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-tls-certificate",
+            "method": "tools/call",
+            "params": {"name": "inspect_tls_certificate", "arguments": {}},
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_tls_certificate"
+    assert payload["domain_key"] == "site"
+    assert payload["hostname"] == "example.com"
+    assert payload["port"] == 443
+    assert payload["inspection_status"] == "ok"
+    assert payload["warning_level"] == "ok"
+    assert payload["hostname_matches"] is True
 
 
 async def test_inspect_container_detail_api_returns_curated_container_metadata(

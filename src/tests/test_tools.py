@@ -27,6 +27,7 @@ from tools.agent_hints import (
     INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
     INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION,
     INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
+    INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION,
     INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
     INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
@@ -76,6 +77,7 @@ def test_application_registers_expected_mcp_components(
         assert "list_container_directory" in tool_names
         assert "close_agent_session" in tool_names
         assert "inspect_live_fail2ban_activity" in tool_names
+        assert "inspect_tls_certificate" in tool_names
         assert "get_mcp_service_status" in tool_names
         assert "get_mcp_health_check" in tool_names
         assert "list_workflow_skills" not in tool_names
@@ -167,6 +169,9 @@ def test_application_registers_expected_mcp_components(
             item["tool_name"] == "inspect_live_fail2ban_activity"
             for item in bootstrap_text["tools"]
         )
+        assert all(
+            item["tool_name"] != "inspect_tls_certificate" for item in bootstrap_text["tools"]
+        )
         collect_logs_tool = next(
             item for item in bootstrap_text["tools"] if item["tool_name"] == "collect_logs"
         )
@@ -232,6 +237,8 @@ def test_application_registers_expected_mcp_components(
             tool for tool in tools if tool.name == "inspect_live_fail2ban_activity"
         )
         assert app_fail2ban_tool.description == INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION
+        app_tls_tool = next(tool for tool in tools if tool.name == "inspect_tls_certificate")
+        assert app_tls_tool.description == INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION
         workflow_followup_tool = next(
             item
             for item in bootstrap_text["tools"]

@@ -28,6 +28,7 @@ def register_mcp_components() -> None:
     import tools.sessions  # noqa: F401
     import tools.snapshots  # noqa: F401
     import tools.system  # noqa: F401
+    import tools.tls  # noqa: F401
     import tools.workflow  # noqa: F401
 
 

@@ -445,6 +445,36 @@ class InspectLiveFail2banActivityPayload(BaseModel):
     jails: list[Fail2banJailStatusPayload]
 
 
+class InspectTlsCertificatePayload(BaseModel):
+    """Structured response returned by `inspect_tls_certificate`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_tls_certificate"]
+    domain_key: Literal["site"]
+    hostname: str | None
+    port: int
+    inspection_status: Literal["ok", "warning", "unavailable"]
+    warning_level: Literal[
+        "ok",
+        "expired",
+        "expiring_soon",
+        "hostname_mismatch",
+        "connection_failure",
+        "unsupported_tls_response",
+        "configuration_error",
+    ]
+    subject_summary: str | None
+    issuer_summary: str | None
+    not_before: str | None
+    not_after: str | None
+    days_until_expiry: int | None
+    hostname_matches: bool | None
+    matched_names: list[str]
+    error_code: str | None
+    message: str
+
+
 class InspectProxyActivityPayload(BaseModel):
     """Structured response returned by `inspect_proxy_activity`."""
 

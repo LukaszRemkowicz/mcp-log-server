@@ -76,6 +76,7 @@ WORKSPACE_AGNOSTIC_TOOLS = frozenset(
         "get_mcp_health_check",
         "get_mcp_service_status",
         "inspect_live_fail2ban_activity",
+        "inspect_tls_certificate",
         "list_projects",
         "suggest_followup_window",
     }
@@ -514,7 +515,12 @@ async def _authenticate_mcp_caller(
             client_type=client_type,
             workspace=workspace,
             allow_empty_projects=tool_name
-            in {"get_mcp_service_status", "list_projects", "mcp_discovery"},
+            in {
+                "get_mcp_service_status",
+                "inspect_tls_certificate",
+                "list_projects",
+                "mcp_discovery",
+            },
             allow_any_workspace=allow_any_workspace,
         )
     except BaseORMException:

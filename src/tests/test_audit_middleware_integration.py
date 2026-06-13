@@ -828,6 +828,52 @@ async def test_audit_middleware_list_projects_uses_session_caller_without_workfl
 
 @pytest.mark.anyio
 @pytest.mark.usefixtures("db")
+async def test_audit_middleware_allows_tls_tool_without_project_access(
+    mocker: MockerFixture,
+) -> None:
+    """Verify SITE_DOMAIN TLS diagnostics do not require project access."""
+
+    caller = await McpCallerFactory.save_to_db(
+        client_id="tls-no-project-client",
+        client_type="codex",
+        workspace=LogWorkspace.SESSION,
+        allowed_projects=[],
+    )
+    token = AccessToken(
+        token="test-token",
+        client_id=caller.client_id,
+        scopes=["mcp.status.read"],
+        claims={
+            "sub": "codex-subject",
+            "client_type": caller.client_type,
+        },
+    )
+    mocker.patch("middleware.audit.get_access_token", return_value=token)
+    request = SimpleNamespace(state=SimpleNamespace())
+    mocker.patch("middleware.audit.get_http_request", return_value=request)
+    context = MiddlewareContext(
+        message=mt.CallToolRequestParams(name="inspect_tls_certificate", arguments={})
+    )
+    middleware = AccessAuditMiddleware()
+    call_next = mocker.AsyncMock(
+        return_value=ToolResult(content=[], structured_content={"ok": True})
+    )
+
+    result = await middleware.on_call_tool(
+        context,
+        cast(CallNext[mt.CallToolRequestParams, ToolResult], call_next),
+    )
+
+    call_next.assert_awaited_once()
+    request_caller = request.state.caller
+    assert isinstance(request_caller, AuthenticatedMcpCaller)
+    assert request_caller.workspace == LogWorkspace.SESSION
+    assert request_caller.allowed_projects == frozenset()
+    assert result.structured_content == {"ok": True}
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_audit_middleware_sets_database_caller_on_request_state(
     mocker: MockerFixture,
 ) -> None:
