@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
@@ -26,6 +26,41 @@ MAX_VPS_VOLUMES = 200
 MAX_CONTAINER_COMMAND_PREVIEW_CHARS = 240
 HIGH_RESTART_COUNT_THRESHOLD = 5
 ANONYMOUS_VOLUME_NAME_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+SAFE_ENV_VALUE_NAMES = frozenset(
+    {
+        "APP_ENV",
+        "DEBUG",
+        "DJANGO_SETTINGS_MODULE",
+        "ENV",
+        "ENVIRONMENT",
+        "FLASK_ENV",
+        "HOST",
+        "LANG",
+        "LOG_LEVEL",
+        "NODE_ENV",
+        "PORT",
+        "PYTHON_ENV",
+        "TZ",
+    }
+)
+SECRET_ENV_NAME_PARTS = frozenset(
+    {
+        "ACCESS_KEY",
+        "API_KEY",
+        "AUTH",
+        "BROKER_URL",
+        "CREDENTIAL",
+        "DATABASE_URL",
+        "DB_URL",
+        "DSN",
+        "KEY_FILE",
+        "PASSWORD",
+        "PRIVATE_KEY",
+        "REDIS_URL",
+        "SECRET",
+        "TOKEN",
+    }
+)
 SAFE_COMPOSE_LABEL_KEYS = frozenset(
     {
         "com.docker.compose.project",
@@ -97,6 +132,16 @@ class ContainerDetailPort:
 
 
 @dataclass(frozen=True, slots=True)
+class ContainerDetailEnvVar:
+    """Curated environment variable entry with secret values redacted."""
+
+    name: str
+    value: str | None
+    value_redacted: bool
+    secret: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ContainerRestartPolicy:
     """Curated Docker restart policy metadata."""
 
@@ -122,6 +167,7 @@ class ContainerDetail:
     mounts: list[ContainerDetailMount]
     networks: list[ContainerDetailNetwork]
     health_log: list[dict[str, object]]
+    env_vars: list[ContainerDetailEnvVar] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -553,6 +599,7 @@ class DockerService:
             health=self._parse_container_health(attrs, container_name),
             created_at=created_at,
             env_var_names=self._extract_env_var_names(config.get("Env")),
+            env_vars=self._extract_env_vars(config.get("Env")),
             label_keys=self._extract_label_keys(config.get("Labels")),
             compose_labels=self._extract_compose_labels(config.get("Labels")),
             restart_policy=self._extract_restart_policy(
@@ -792,6 +839,38 @@ class DockerService:
             if name:
                 names.append(name)
         return names
+
+    @classmethod
+    def _extract_env_vars(cls, env: object) -> list[ContainerDetailEnvVar]:
+        """Return bounded environment metadata with unsafe values redacted."""
+
+        if not isinstance(env, list):
+            return []
+        results: list[ContainerDetailEnvVar] = []
+        for item in env:
+            if not isinstance(item, str) or "=" not in item:
+                continue
+            name, value = item.split("=", 1)
+            if not name:
+                continue
+            secret = cls._env_name_is_secret(name)
+            expose_value = not secret and name in SAFE_ENV_VALUE_NAMES
+            results.append(
+                ContainerDetailEnvVar(
+                    name=name,
+                    value=value if expose_value else None,
+                    value_redacted=not expose_value,
+                    secret=secret,
+                )
+            )
+        return results
+
+    @staticmethod
+    def _env_name_is_secret(name: str) -> bool:
+        """Return whether an env var name commonly carries a secret value."""
+
+        normalized = name.upper()
+        return any(part in normalized for part in SECRET_ENV_NAME_PARTS)
 
     @staticmethod
     def _extract_label_keys(labels: object) -> list[str]:

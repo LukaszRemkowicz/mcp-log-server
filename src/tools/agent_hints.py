@@ -114,9 +114,10 @@ INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION = (
     "Use this after inspect_containers_health points to a suspicious container. "
     "Returns bounded docker-inspect-style details such as status, image, restart "
     "policy, ports, command, entrypoint, working directory, runtime user, env var "
-    "names without values, label keys without values, selected safe Compose label "
-    "values, mounts without host source paths, networks and aliases, and recent "
-    "healthcheck log entries."
+    "names plus selected non-secret values, redacted secret/unknown env values, "
+    "label keys without values, selected safe Compose label values, mounts "
+    "without host source paths, networks and aliases, and recent healthcheck log "
+    "entries."
 )
 
 GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION = (

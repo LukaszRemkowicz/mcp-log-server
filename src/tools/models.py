@@ -762,6 +762,17 @@ class ContainerDetailPortPayload(BaseModel):
     host_port: str | None
 
 
+class ContainerDetailEnvVarPayload(BaseModel):
+    """Curated environment variable metadata returned by `inspect_container_detail`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    value: str | None
+    value_redacted: bool
+    secret: bool
+
+
 class ContainerRestartPolicyPayload(BaseModel):
     """Curated restart-policy metadata returned by `inspect_container_detail`."""
 
@@ -782,6 +793,7 @@ class InspectContainerDetailPayload(BaseModel):
     container: ContainerHealthPayload
     created_at: str | None
     env_var_names: list[str]
+    env_vars: list[ContainerDetailEnvVarPayload]
     label_keys: list[str]
     compose_labels: dict[str, str]
     restart_policy: ContainerRestartPolicyPayload

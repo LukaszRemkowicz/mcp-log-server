@@ -6,6 +6,7 @@ from pytest_mock import MockerFixture
 from manifests.models import SourceDefinition
 from services.docker_service import (
     ContainerDetail,
+    ContainerDetailEnvVar,
     ContainerDetailMount,
     ContainerDetailNetwork,
     ContainerDetailPort,
@@ -520,7 +521,13 @@ def test_inspect_container_detail_returns_curated_docker_metadata(
         "Created": "2026-05-16T09:55:00.000000000Z",
         "Config": {
             "Image": "portfolio/backend:2026-05-16",
-            "Env": ["SECRET_KEY=hidden", "DJANGO_SETTINGS_MODULE=app.settings"],
+            "Env": [
+                "SECRET_KEY=hidden",
+                "DJANGO_SETTINGS_MODULE=app.settings",
+                "DATABASE_URL=postgres://user:pass@db/app",
+                "NODE_ENV=production",
+                "CUSTOM_VALUE=should-not-leak",
+            ],
             "Entrypoint": ["/entrypoint.sh"],
             "Cmd": ["gunicorn", "app.wsgi:application"],
             "WorkingDir": "/app",
@@ -610,7 +617,45 @@ def test_inspect_container_detail_returns_curated_docker_metadata(
             finished_at=None,
         ),
         created_at="2026-05-16T09:55:00.000000000Z",
-        env_var_names=["SECRET_KEY", "DJANGO_SETTINGS_MODULE"],
+        env_var_names=[
+            "SECRET_KEY",
+            "DJANGO_SETTINGS_MODULE",
+            "DATABASE_URL",
+            "NODE_ENV",
+            "CUSTOM_VALUE",
+        ],
+        env_vars=[
+            ContainerDetailEnvVar(
+                name="SECRET_KEY",
+                value=None,
+                value_redacted=True,
+                secret=True,
+            ),
+            ContainerDetailEnvVar(
+                name="DJANGO_SETTINGS_MODULE",
+                value="app.settings",
+                value_redacted=False,
+                secret=False,
+            ),
+            ContainerDetailEnvVar(
+                name="DATABASE_URL",
+                value=None,
+                value_redacted=True,
+                secret=True,
+            ),
+            ContainerDetailEnvVar(
+                name="NODE_ENV",
+                value="production",
+                value_redacted=False,
+                secret=False,
+            ),
+            ContainerDetailEnvVar(
+                name="CUSTOM_VALUE",
+                value=None,
+                value_redacted=True,
+                secret=False,
+            ),
+        ],
         label_keys=[
             "com.docker.compose.project",
             "com.docker.compose.service",

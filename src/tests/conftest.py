@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
@@ -48,6 +49,19 @@ INIT_DB_REQUIRED_MESSAGES = (
     "You need to run `aerich init-db` first",
     "You may need to run `aerich init-db` first",
 )
+TEST_DATABASE_NAME = "mcp_log_server_test"
+
+
+def _apply_global_test_database_settings() -> None:
+    """Force pytest to use a test database name before migrations run."""
+
+    env_database_name = os.environ.get("DATABASE_NAME", TEST_DATABASE_NAME)
+    database_name = env_database_name if env_database_name.endswith("_test") else TEST_DATABASE_NAME
+    current_settings = settings.copy()
+    set_settings(current_settings.copy(DATABASE_NAME=database_name))
+
+
+_apply_global_test_database_settings()
 
 
 @asynccontextmanager

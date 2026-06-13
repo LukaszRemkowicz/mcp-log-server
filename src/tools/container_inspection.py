@@ -63,6 +63,7 @@ from tools.agent_hints import (
 )
 from tools.errors import build_container_inspection_error_result
 from tools.models import (
+    ContainerDetailEnvVarPayload,
     ContainerDetailMountPayload,
     ContainerDetailNetworkPayload,
     ContainerDetailPortPayload,
@@ -398,6 +399,15 @@ def create_container_detail_payload(
         ),
         created_at=detail.created_at,
         env_var_names=detail.env_var_names,
+        env_vars=[
+            ContainerDetailEnvVarPayload(
+                name=item.name,
+                value=item.value,
+                value_redacted=item.value_redacted,
+                secret=item.secret,
+            )
+            for item in detail.env_vars
+        ],
         label_keys=detail.label_keys,
         compose_labels=detail.compose_labels,
         restart_policy=ContainerRestartPolicyPayload(

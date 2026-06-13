@@ -5,6 +5,7 @@ from pydantic import ValidationError
 
 from manifests.loader import load_manifest
 from manifests.models import Manifest, SourceDefinition
+from services.project_manifest import ProjectManifestService
 from tests.conftest import TEST_MANIFESTS_DIR
 
 
@@ -47,6 +48,34 @@ def test_vps_security_manifest_declares_host_security_file_sources() -> None:
         "/app/src/tests/fixtures/logs/vps-security/nginx_runtime.log",
         "/app/src/tests/fixtures/logs/vps-security/traefik_access.log",
     ]
+
+
+def test_container_source_lookup_requires_manifest_source_key() -> None:
+    """Verify container detail lookup uses the manifest source key contract."""
+
+    source = SourceDefinition(
+        source_key="app",
+        source_type="docker",
+        target="backend-container",
+        description="Backend container.",
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+        inspect_path_prefixes=["/app"],
+        compose_project="portfolio",
+        compose_service="backend",
+    )
+    manifest = Manifest(
+        project_key="portfolio",
+        project_summary="Portfolio test project.",
+        sources=[source],
+    )
+
+    assert ProjectManifestService.get_container_source(manifest, "app") == source
+    with pytest.raises(ValueError, match="Requested source_key was not found"):
+        ProjectManifestService.get_container_source(manifest, "backend")
+    with pytest.raises(ValueError, match="Requested source_key was not found"):
+        ProjectManifestService.get_container_source(manifest, "backend-container")
 
 
 def test_manifest_loads_absolute_file_source_target(tmp_path: Path) -> None:

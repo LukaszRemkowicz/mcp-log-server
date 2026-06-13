@@ -9,7 +9,7 @@ uv run test
 ```
 
 `uv run test` delegates to `docker compose run --rm test`, which starts the
-Compose database dependency, creates `mcp_log_server_test` when needed, runs
+Compose `db` dependency, creates `mcp_log_server_test` when needed, runs
 `uv run migrate` against that test database, then runs the full `uv run pytest`
 suite inside the app test container. Tests that require the real database are
 marked with `@pytest.mark.db`; the test container provides normal

@@ -256,14 +256,14 @@ Characteristics:
 
 - bind-mounts `./src`
 - applies committed migrations with `uv run migrate`, then uses `watchfiles`
-- includes `app`, `db`, and `tests` services
+- includes `app`, `db`, and `test` services
 - uses the official `postgres:18` image for the `db` service
-- persists local database data in the named `postgres-data` Docker volume
+- persists local database data in the named `mcp-local_postgres-data` Docker volume
 - binds published service ports to `127.0.0.1` to avoid VPS-wide port exposure
 - uses host port `5437` for local MCP Postgres by default, leaving
   `landingpage`'s local `5436` binding separate
-- runs the `test` service against the separate `mcp_log_server_test` database,
-  not the local app database
+- runs the `test` service against the separate `mcp_log_server_test` database
+  in the Compose `db` service, not the local app database name
 - runs curl-driven HTTP MCP E2E checks through `infra/scripts/run_http_e2e.sh`
   against `mcp_log_server_test`, not the local app database
 

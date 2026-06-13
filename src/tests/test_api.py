@@ -22,6 +22,7 @@ from auth.scopes import (
 )
 from services.docker_service import (
     ContainerDetail,
+    ContainerDetailEnvVar,
     ContainerDetailMount,
     ContainerDetailNetwork,
     ContainerDetailPort,
@@ -2143,7 +2144,45 @@ async def test_inspect_container_detail_api_returns_curated_container_metadata(
                 finished_at=None,
             ),
             created_at="2026-05-16T09:55:00.000000000Z",
-            env_var_names=["SECRET_KEY", "DJANGO_SETTINGS_MODULE"],
+            env_var_names=[
+                "SECRET_KEY",
+                "DJANGO_SETTINGS_MODULE",
+                "DATABASE_URL",
+                "NODE_ENV",
+                "CUSTOM_VALUE",
+            ],
+            env_vars=[
+                ContainerDetailEnvVar(
+                    name="SECRET_KEY",
+                    value=None,
+                    value_redacted=True,
+                    secret=True,
+                ),
+                ContainerDetailEnvVar(
+                    name="DJANGO_SETTINGS_MODULE",
+                    value="app.settings",
+                    value_redacted=False,
+                    secret=False,
+                ),
+                ContainerDetailEnvVar(
+                    name="DATABASE_URL",
+                    value=None,
+                    value_redacted=True,
+                    secret=True,
+                ),
+                ContainerDetailEnvVar(
+                    name="NODE_ENV",
+                    value="production",
+                    value_redacted=False,
+                    secret=False,
+                ),
+                ContainerDetailEnvVar(
+                    name="CUSTOM_VALUE",
+                    value=None,
+                    value_redacted=True,
+                    secret=False,
+                ),
+            ],
             label_keys=["com.docker.compose.service"],
             compose_labels={"com.docker.compose.service": "backend"},
             restart_policy=ContainerRestartPolicy(
@@ -2212,7 +2251,33 @@ async def test_inspect_container_detail_api_returns_curated_container_metadata(
     assert payload["source_key"] == "backend"
     assert payload["container"]["container_name"] == "app-container"
     assert payload["created_at"] == "2026-05-16T09:55:00.000000000Z"
-    assert payload["env_var_names"] == ["SECRET_KEY", "DJANGO_SETTINGS_MODULE"]
+    assert payload["env_var_names"] == [
+        "SECRET_KEY",
+        "DJANGO_SETTINGS_MODULE",
+        "DATABASE_URL",
+        "NODE_ENV",
+        "CUSTOM_VALUE",
+    ]
+    assert payload["env_vars"] == [
+        {"name": "SECRET_KEY", "value": None, "value_redacted": True, "secret": True},
+        {
+            "name": "DJANGO_SETTINGS_MODULE",
+            "value": "app.settings",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {"name": "DATABASE_URL", "value": None, "value_redacted": True, "secret": True},
+        {
+            "name": "NODE_ENV",
+            "value": "production",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {"name": "CUSTOM_VALUE", "value": None, "value_redacted": True, "secret": False},
+    ]
+    assert "hidden" not in json.dumps(payload)
+    assert "postgres://user:pass@db/app" not in json.dumps(payload)
+    assert "should-not-leak" not in json.dumps(payload)
     assert payload["label_keys"] == ["com.docker.compose.service"]
     assert payload["compose_labels"] == {"com.docker.compose.service": "backend"}
     assert payload["restart_policy"] == {

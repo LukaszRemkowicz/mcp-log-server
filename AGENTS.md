@@ -372,12 +372,13 @@ Current local validation command:
 uv run test
 ```
 
-`uv run test` delegates to the Docker Compose `test` service. The test service
+`uv run test` delegates to the Docker Compose `test` service in
+`docker-compose.yml`. The test service connects to the Compose `db` service but
 uses the separate `mcp_log_server_test` database, creates it when needed, and
 runs `uv run migrate` before the full `uv run pytest` suite. DB-dependent
-service tests are marked with `@pytest.mark.db` and run against the Compose
-Postgres container using `Settings.db` from the test service `DATABASE_*`
-settings. Do not point tests at the local app database.
+service tests are marked with `@pytest.mark.db` and use `Settings.db` from the
+test service `DATABASE_*` settings. Do not point tests at the local app
+database name.
 
 Current collector test caveat:
 

@@ -127,3 +127,4 @@ services:
 
 volumes:
   postgres-data:
+    name: mcp-local_postgres-data
