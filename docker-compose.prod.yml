@@ -59,6 +59,18 @@ services:
       - "${FAIL2BAN_LOG_GID:-1}"
     ports:
       - "127.0.0.1:${MCP_PORT_HOST:-8001}:${MCP_PORT:-8001}"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-m",
+          "healthcheck",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
     networks:
       - default
       - traefik_proxy

@@ -7,13 +7,14 @@ from collections.abc import Callable, Coroutine
 from enum import StrEnum
 from functools import wraps
 from inspect import Parameter, Signature, iscoroutinefunction, signature
-from typing import Any
+from typing import Any, ParamSpec, TypeVar
 
 from fastmcp.server.auth import require_scopes
 from fastmcp.server.dependencies import get_http_request
 
 from app import mcp
 from auth.mcp_caller_context import get_request_mcp_caller
+from database.lifecycle import database_lifespan
 from logging_config import get_logger
 from services.project_authorization import ProjectAuthorizationError, ProjectAuthorizationService
 from utils.mcp_errors import build_agent_tool_error_result
@@ -22,6 +23,9 @@ from utils.types import JSONObject, JSONValue
 logger = get_logger("decorators")
 project_authorization_service = ProjectAuthorizationService()
 _workflow_discoverable_tools_by_name: dict[str, dict[str, Any]] = {}
+P = ParamSpec("P")
+T = TypeVar("T")
+AsyncCallable = Callable[P, Coroutine[Any, Any, T]]
 
 
 class ProjectArgumentName(StrEnum):
@@ -147,12 +151,23 @@ def list_workflow_discoverable_tool_registrations() -> list[dict[str, Any]]:
     return list(_workflow_discoverable_tools_by_name.values())
 
 
-def async_[**P, T](func: Callable[P, Coroutine[Any, Any, T]]) -> Callable[P, T]:
+def async_(func: AsyncCallable[P, T]) -> Callable[P, T]:  # noqa: UP047
     """Wrap an async Typer command so Click can execute it synchronously."""
 
     @wraps(func)
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
         return asyncio.run(func(*args, **kwargs))
+
+    return wrapper
+
+
+def db(func: AsyncCallable[P, T]) -> AsyncCallable[P, T]:  # noqa: UP047
+    """Wrap an async command with database startup and shutdown."""
+
+    @wraps(func)
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        async with database_lifespan(None):
+            return await func(*args, **kwargs)
 
     return wrapper
 

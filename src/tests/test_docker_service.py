@@ -4,8 +4,10 @@ import pytest
 from pytest_mock import MockerFixture
 
 from manifests.models import SourceDefinition
+from services.compose_state_service import ComposeStateService, ComposeStateUnavailable
 from services.docker_service import (
     ContainerDetail,
+    ContainerDetailEnvVar,
     ContainerDetailMount,
     ContainerDetailNetwork,
     ContainerDetailPort,
@@ -14,6 +16,8 @@ from services.docker_service import (
     ContainerRestartPolicy,
     DockerService,
     DockerServiceError,
+    VpsContainerInventory,
+    VpsVolumeInventory,
 )
 from tests.conftest import FakeDockerClient
 
@@ -518,7 +522,13 @@ def test_inspect_container_detail_returns_curated_docker_metadata(
         "Created": "2026-05-16T09:55:00.000000000Z",
         "Config": {
             "Image": "portfolio/backend:2026-05-16",
-            "Env": ["SECRET_KEY=hidden", "DJANGO_SETTINGS_MODULE=app.settings"],
+            "Env": [
+                "SECRET_KEY=hidden",
+                "DJANGO_SETTINGS_MODULE=app.settings",
+                "DATABASE_URL=postgres://user:pass@db/app",
+                "NODE_ENV=production",
+                "CUSTOM_VALUE=should-not-leak",
+            ],
             "Entrypoint": ["/entrypoint.sh"],
             "Cmd": ["gunicorn", "app.wsgi:application"],
             "WorkingDir": "/app",
@@ -608,7 +618,45 @@ def test_inspect_container_detail_returns_curated_docker_metadata(
             finished_at=None,
         ),
         created_at="2026-05-16T09:55:00.000000000Z",
-        env_var_names=["SECRET_KEY", "DJANGO_SETTINGS_MODULE"],
+        env_var_names=[
+            "SECRET_KEY",
+            "DJANGO_SETTINGS_MODULE",
+            "DATABASE_URL",
+            "NODE_ENV",
+            "CUSTOM_VALUE",
+        ],
+        env_vars=[
+            ContainerDetailEnvVar(
+                name="SECRET_KEY",
+                value=None,
+                value_redacted=True,
+                secret=True,
+            ),
+            ContainerDetailEnvVar(
+                name="DJANGO_SETTINGS_MODULE",
+                value="app.settings",
+                value_redacted=False,
+                secret=False,
+            ),
+            ContainerDetailEnvVar(
+                name="DATABASE_URL",
+                value=None,
+                value_redacted=True,
+                secret=True,
+            ),
+            ContainerDetailEnvVar(
+                name="NODE_ENV",
+                value="production",
+                value_redacted=False,
+                secret=False,
+            ),
+            ContainerDetailEnvVar(
+                name="CUSTOM_VALUE",
+                value=None,
+                value_redacted=True,
+                secret=False,
+            ),
+        ],
         label_keys=[
             "com.docker.compose.project",
             "com.docker.compose.service",
@@ -664,3 +712,510 @@ def test_inspect_container_detail_returns_curated_docker_metadata(
             }
         ],
     )
+
+
+def test_inspect_vps_containers_returns_bounded_docker_ps_inventory(
+    fake_docker_client: FakeDockerClient,
+    mocker: MockerFixture,
+) -> None:
+    class FakeContainer:
+        def __init__(self, attrs: dict[str, object]) -> None:
+            self.attrs = attrs
+
+    fake_docker_client.listed_containers = [
+        FakeContainer(
+            {
+                "Id": "abc123def4567890",
+                "Name": "/backend-container",
+                "Created": "2026-05-16T09:55:00.000000000Z",
+                "Config": {
+                    "Image": "portfolio/backend:2026-05-16",
+                    "Cmd": ["gunicorn", "app.wsgi:application", "--timeout", "120"],
+                    "Env": ["SECRET_KEY=hidden"],
+                    "Labels": {
+                        "com.docker.compose.project": "portfolio",
+                        "com.docker.compose.service": "backend",
+                        "secret.label": "hidden",
+                    },
+                },
+                "HostConfig": {
+                    "RestartPolicy": {
+                        "Name": "unless-stopped",
+                        "MaximumRetryCount": 0,
+                    }
+                },
+                "RestartCount": 8,
+                "State": {
+                    "Status": "running",
+                    "Running": True,
+                    "Restarting": False,
+                    "Paused": False,
+                    "Dead": False,
+                    "ExitCode": 0,
+                    "Error": "",
+                    "StartedAt": "2026-05-16T10:00:00.000000000Z",
+                    "Health": {"Status": "unhealthy"},
+                },
+                "Mounts": [{"Source": "/host/app", "Destination": "/app"}],
+                "NetworkSettings": {
+                    "Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "18080"}]},
+                    "Networks": {"web": {"IPAddress": "172.20.0.10"}},
+                },
+            }
+        ),
+        FakeContainer(
+            {
+                "Id": "def456abc1237890",
+                "Name": "/worker-container",
+                "Created": "2026-05-16T08:00:00.000000000Z",
+                "Config": {
+                    "Image": "portfolio/worker:2026-05-16",
+                    "Cmd": "celery -A app worker",
+                    "Labels": {
+                        "com.docker.compose.project": "portfolio",
+                        "com.docker.compose.service": "worker",
+                    },
+                },
+                "HostConfig": {"RestartPolicy": {"Name": "always"}},
+                "RestartCount": 1,
+                "State": {
+                    "Status": "exited",
+                    "Running": False,
+                    "Restarting": False,
+                    "Paused": False,
+                    "Dead": False,
+                    "ExitCode": 137,
+                    "Error": "",
+                    "StartedAt": "2026-05-16T08:05:00.000000000Z",
+                    "FinishedAt": "2026-05-16T08:10:00.000000000Z",
+                },
+                "NetworkSettings": {"Ports": {}, "Networks": {}},
+            }
+        ),
+    ]
+    mocker.patch("services.docker_service.docker.from_env", return_value=fake_docker_client)
+
+    result = DockerService().inspect_vps_containers()
+
+    assert result == [
+        VpsContainerInventory(
+            container_id="abc123def4567890",
+            short_container_id="abc123def456",
+            container_name="backend-container",
+            image="portfolio/backend:2026-05-16",
+            command=["gunicorn", "app.wsgi:application", "--timeout", "120"],
+            command_preview="gunicorn app.wsgi:application --timeout 120",
+            created_at="2026-05-16T09:55:00.000000000Z",
+            docker_status="running",
+            state="running",
+            health_status="unhealthy",
+            running=True,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=8,
+            started_at="2026-05-16T10:00:00.000000000Z",
+            finished_at=None,
+            compose_labels={
+                "com.docker.compose.project": "portfolio",
+                "com.docker.compose.service": "backend",
+            },
+            restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
+            ports=[
+                ContainerDetailPort(
+                    private_port="8000/tcp",
+                    host_ip="127.0.0.1",
+                    host_port="18080",
+                )
+            ],
+            network_names=["web"],
+            triage_notes=["health_status=unhealthy", "restart_count=8"],
+            env_var_names=["SECRET_KEY"],
+            mounts=[
+                ContainerDetailMount(
+                    type=None,
+                    destination="/app",
+                    mode=None,
+                    rw=None,
+                    name=None,
+                )
+            ],
+        ),
+        VpsContainerInventory(
+            container_id="def456abc1237890",
+            short_container_id="def456abc123",
+            container_name="worker-container",
+            image="portfolio/worker:2026-05-16",
+            command=["celery -A app worker"],
+            command_preview="celery -A app worker",
+            created_at="2026-05-16T08:00:00.000000000Z",
+            docker_status="exited",
+            state="exited",
+            health_status=None,
+            running=False,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=137,
+            error="",
+            restart_count=1,
+            started_at="2026-05-16T08:05:00.000000000Z",
+            finished_at="2026-05-16T08:10:00.000000000Z",
+            compose_labels={
+                "com.docker.compose.project": "portfolio",
+                "com.docker.compose.service": "worker",
+            },
+            restart_policy=ContainerRestartPolicy(name="always", maximum_retry_count=None),
+            ports=[],
+            network_names=[],
+            triage_notes=["not_running", "exit_code=137"],
+        ),
+    ]
+
+
+def test_inspect_vps_containers_returns_empty_inventory(
+    fake_docker_client: FakeDockerClient,
+    mocker: MockerFixture,
+) -> None:
+    fake_docker_client.listed_containers = []
+    mocker.patch("services.docker_service.docker.from_env", return_value=fake_docker_client)
+
+    result = DockerService().inspect_vps_containers()
+
+    assert result == []
+
+
+def test_compose_state_service_compares_expected_and_running_state() -> None:
+    """Verify Compose service identity is inferred from target container labels."""
+
+    sources = [
+        SourceDefinition(
+            source_key="backend",
+            source_type="docker",
+            target="backend-container",
+            description="Backend container.",
+            parser_type="plain_text",
+            normalization_profile="app",
+            retention_class="short",
+        ),
+        SourceDefinition(
+            source_key="worker",
+            source_type="docker",
+            target="worker-container",
+            description="Worker container.",
+            parser_type="plain_text",
+            normalization_profile="app",
+            retention_class="short",
+        ),
+    ]
+    running = [
+        VpsContainerInventory(
+            container_id="abc123def4567890",
+            short_container_id="abc123def456",
+            container_name="backend-container",
+            image="portfolio/backend:2026-05-17",
+            command=[],
+            command_preview="",
+            created_at=None,
+            docker_status="running",
+            state="running",
+            health_status="healthy",
+            running=True,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=0,
+            started_at=None,
+            finished_at=None,
+            compose_labels={
+                "com.docker.compose.project": "portfolio",
+                "com.docker.compose.service": "backend",
+            },
+            restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
+            ports=[
+                ContainerDetailPort(
+                    private_port="8000/tcp",
+                    host_ip="127.0.0.1",
+                    host_port="18080",
+                )
+            ],
+            network_names=[],
+            triage_notes=[],
+            env_var_names=["DJANGO_SETTINGS_MODULE", "SECRET_KEY"],
+            mounts=[
+                ContainerDetailMount(
+                    type="volume",
+                    destination="/app",
+                    mode="rw",
+                    rw=True,
+                    name="portfolio_static",
+                )
+            ],
+        ),
+        VpsContainerInventory(
+            container_id="def456abc1237890",
+            short_container_id="def456abc123",
+            container_name="worker-container",
+            image="portfolio/worker:2026-05-17",
+            command=[],
+            command_preview="",
+            created_at=None,
+            docker_status="exited",
+            state="exited",
+            health_status=None,
+            running=False,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=0,
+            started_at=None,
+            finished_at=None,
+            compose_labels={
+                "com.docker.compose.project": "portfolio",
+                "com.docker.compose.service": "worker",
+            },
+            restart_policy=ContainerRestartPolicy(name=None, maximum_retry_count=None),
+            ports=[],
+            network_names=[],
+            triage_notes=[],
+        ),
+        VpsContainerInventory(
+            container_id="ghi789abc1234560",
+            short_container_id="ghi789abc123",
+            container_name="extra-container",
+            image="portfolio/extra:2026-05-16",
+            command=[],
+            command_preview="",
+            created_at=None,
+            docker_status="running",
+            state="running",
+            health_status=None,
+            running=True,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=0,
+            started_at=None,
+            finished_at=None,
+            compose_labels={
+                "com.docker.compose.project": "portfolio",
+                "com.docker.compose.service": "extra",
+            },
+            restart_policy=ContainerRestartPolicy(name=None, maximum_retry_count=None),
+            ports=[],
+            network_names=[],
+            triage_notes=[],
+        ),
+    ]
+
+    result = ComposeStateService().compare(
+        project_name="landingpage",
+        sources=sources,
+        running_containers=running,
+    )
+
+    assert not isinstance(result, ComposeStateUnavailable)
+    assert result.compose_project == "portfolio"
+    assert [service.service_name for service in result.expected_services] == [
+        "backend",
+        "worker",
+    ]
+    assert result.running_containers[0].mounts[0].source_redacted is True
+    assert result.warnings[0].warning_type.__class__.__name__ == "ComposeStateWarningType"
+    assert {warning.warning_type for warning in result.warnings} == {
+        "expected_service_not_running",
+        "unexpected_running_service",
+    }
+
+
+def test_compose_state_service_returns_unavailable_without_expected_state() -> None:
+    """Verify the compose comparison needs a target container with Compose labels."""
+
+    source = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="backend-container",
+        description="Backend container.",
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+    )
+
+    result = ComposeStateService().compare(
+        project_name="landingpage",
+        sources=[source],
+        running_containers=[],
+    )
+
+    assert isinstance(result, ComposeStateUnavailable)
+    assert "matched a Compose-labelled container" in result.message
+
+
+def test_inspect_vps_volumes_returns_redacted_inventory(
+    fake_docker_client: FakeDockerClient,
+    mocker: MockerFixture,
+) -> None:
+    class FakeVolume:
+        def __init__(self, attrs: dict[str, object]) -> None:
+            self.attrs = attrs
+
+    fake_docker_client.listed_volumes = [
+        FakeVolume(
+            {
+                "Name": "dockerpage_db_data",
+                "Driver": "local",
+                "Mountpoint": "/var/lib/docker/volumes/dockerpage_db_data/_data",
+                "CreatedAt": "2026-05-16T09:55:00Z",
+                "Scope": "local",
+                "Labels": {
+                    "com.docker.compose.project": "dockerpage",
+                    "com.docker.compose.volume": "db_data",
+                    "secret.label": "hidden",
+                },
+                "Options": {"type": "none"},
+                "UsageData": {"RefCount": 2, "Size": 4096},
+            }
+        ),
+        FakeVolume(
+            {
+                "Name": "other_db_data",
+                "Driver": "local",
+                "Mountpoint": "/var/lib/docker/volumes/other_db_data/_data",
+                "Labels": {"com.docker.compose.project": "other"},
+            }
+        ),
+        FakeVolume(
+            {
+                "Name": "unlabeled_cache",
+                "Driver": "local",
+                "Mountpoint": "/var/lib/docker/volumes/unlabeled_cache/_data",
+                "Labels": {},
+            }
+        ),
+    ]
+    mocker.patch("services.docker_service.docker.from_env", return_value=fake_docker_client)
+
+    result = DockerService().inspect_vps_volumes()
+
+    assert result == [
+        VpsVolumeInventory(
+            volume_name="dockerpage_db_data",
+            driver="local",
+            scope="local",
+            created_at="2026-05-16T09:55:00Z",
+            compose_labels={
+                "com.docker.compose.project": "dockerpage",
+                "com.docker.compose.volume": "db_data",
+            },
+            option_keys=["type"],
+            mountpoint_available=True,
+            mountpoint_redacted=True,
+            usage_ref_count=2,
+            usage_size_bytes=4096,
+        ),
+        VpsVolumeInventory(
+            volume_name="other_db_data",
+            driver="local",
+            scope=None,
+            created_at=None,
+            compose_labels={"com.docker.compose.project": "other"},
+            option_keys=[],
+            mountpoint_available=True,
+            mountpoint_redacted=True,
+            usage_ref_count=None,
+            usage_size_bytes=None,
+        ),
+        VpsVolumeInventory(
+            volume_name="unlabeled_cache",
+            driver="local",
+            scope=None,
+            created_at=None,
+            compose_labels={},
+            option_keys=[],
+            mountpoint_available=True,
+            mountpoint_redacted=True,
+            usage_ref_count=None,
+            usage_size_bytes=None,
+        ),
+    ]
+
+
+def test_inspect_vps_volumes_passes_dangling_filter_to_docker(
+    fake_docker_client: FakeDockerClient,
+    mocker: MockerFixture,
+) -> None:
+    fake_docker_client.listed_volumes = []
+    mocker.patch("services.docker_service.docker.from_env", return_value=fake_docker_client)
+
+    result = DockerService().inspect_vps_volumes(dangling_only=True)
+
+    assert result == []
+    assert fake_docker_client.captured_volume_filters == {"dangling": True}
+
+
+def test_inspect_vps_volumes_filters_by_anonymous_name_and_prefix(
+    fake_docker_client: FakeDockerClient,
+    mocker: MockerFixture,
+) -> None:
+    class FakeVolume:
+        def __init__(self, attrs: dict[str, object]) -> None:
+            self.attrs = attrs
+
+    matching_hash = "a" * 64
+    other_hash = "b" * 64
+    fake_docker_client.listed_volumes = [
+        FakeVolume(
+            {
+                "Name": matching_hash,
+                "Driver": "local",
+                "Labels": {"com.docker.compose.project": "dockerpage"},
+            }
+        ),
+        FakeVolume(
+            {
+                "Name": other_hash,
+                "Driver": "local",
+                "Labels": {"com.docker.compose.project": "dockerpage"},
+            }
+        ),
+        FakeVolume(
+            {
+                "Name": "dockerpage_db_data",
+                "Driver": "local",
+                "Labels": {"com.docker.compose.project": "dockerpage"},
+            }
+        ),
+        FakeVolume(
+            {
+                "Name": matching_hash.replace("a", "c"),
+                "Driver": "local",
+                "Labels": {"com.docker.compose.project": "other"},
+            }
+        ),
+    ]
+    mocker.patch("services.docker_service.docker.from_env", return_value=fake_docker_client)
+
+    result = DockerService().inspect_vps_volumes(anonymous_only=True, name_prefix="aa")
+
+    assert isinstance(result, list)
+    assert [volume.volume_name for volume in result] == [matching_hash]
+
+
+def test_inspect_vps_volumes_returns_empty_inventory(
+    fake_docker_client: FakeDockerClient,
+    mocker: MockerFixture,
+) -> None:
+    fake_docker_client.listed_volumes = []
+    mocker.patch("services.docker_service.docker.from_env", return_value=fake_docker_client)
+
+    result = DockerService().inspect_vps_volumes()
+
+    assert result == []

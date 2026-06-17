@@ -41,9 +41,9 @@ After deploy records `current_tag`, host-side `uv run shell` and
 `uv run command ...` helpers default `TAG` from that file when `TAG` is unset.
 
 The deploy script verifies the local image, creates a DB backup by default,
-applies committed migrations with `uv run migrate`, starts the app service, and
-checks that the app accepts an authenticated MCP `tools/list` request exposing
-`get_mcp_health_check`. It asks for confirmation before mutating the target
-stack unless `AUTO_APPROVE=true`, and starts the app with `--force-recreate` so
-the selected image is rerun. Use `SKIP_BACKUP=true` or `SKIP_MIGRATE=true` only
-for an intentional operator-controlled run.
+applies committed migrations with `uv run migrate`, starts the app service, waits
+for Docker to mark the app healthy through the unauthenticated `/healthz`
+liveness endpoint, and then records the deployed tag. It asks for confirmation
+before mutating the target stack unless `AUTO_APPROVE=true`, and starts the app
+with `--force-recreate` so the selected image is rerun. Use `SKIP_BACKUP=true`
+or `SKIP_MIGRATE=true` only for an intentional operator-controlled run.

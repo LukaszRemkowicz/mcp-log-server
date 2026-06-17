@@ -84,6 +84,23 @@ INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION = (
     "analysis."
 )
 
+INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION = (
+    "Inspect the TLS certificate for the configured SITE_DOMAIN on port 443. "
+    "Returns certificate subject, issuer, validity timestamps, days until "
+    "expiry, SAN hostname-match status, and warning level for expiry, hostname "
+    "mismatch, connection failure, or unsupported TLS responses. This tool does "
+    "not accept arbitrary hostnames, IPs, wildcards, or ports and does not "
+    "modify DNS, Traefik, ACME, or certificate state."
+)
+
+READ_PROJECT_MANIFEST_TOOL_DESCRIPTION = (
+    "Read the persisted manifest contract for one authorized project, optionally "
+    "filtered to one source_key. Returns project summary, static asset hints, "
+    "source keys, configured source targets, parser and normalization profiles, "
+    "retention class, noise profile, inspect path prefixes, and required-source "
+    "flags without inspecting live runtime state."
+)
+
 INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION = (
     "Inspect Docker runtime status for all docker-backed sources in one project. "
     "Returns a compact per-source overview with container status, healthcheck "
@@ -91,14 +108,33 @@ INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION = (
     "without exposing raw docker ps output."
 )
 
+INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION = (
+    "Inspect all Docker containers visible to the MCP runtime, like a bounded "
+    "read-only docker ps view for VPS incident triage. Returns container id, "
+    "name, image, command preview, created/status/state fields, published ports, "
+    "safe Compose labels, restart policy, network names, health status, restart "
+    "count, and deterministic triage notes without exposing raw inspect JSON, "
+    "environment values, host mount source paths, or mutation operations."
+)
+
+INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION = (
+    "Inspect all Docker volumes visible to the MCP runtime, like a bounded "
+    "read-only docker volume ls view for VPS storage triage. Returns volume "
+    "name, driver, scope, created timestamp, safe Compose labels, option keys, "
+    "redacted mountpoint presence, and Docker-provided usage hints when "
+    "available. Supports cleanup-oriented filters: dangling_only, anonymous_only, "
+    "and name_prefix. Host mount paths and volume contents are not returned."
+)
+
 INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION = (
     "Inspect curated Docker metadata for one manifest-approved source container. "
     "Use this after inspect_containers_health points to a suspicious container. "
     "Returns bounded docker-inspect-style details such as status, image, restart "
     "policy, ports, command, entrypoint, working directory, runtime user, env var "
-    "names without values, label keys without values, selected safe Compose label "
-    "values, mounts without host source paths, networks and aliases, and recent "
-    "healthcheck log entries."
+    "names plus selected non-secret values, redacted secret/unknown env values, "
+    "label keys without values, selected safe Compose label values, mounts "
+    "without host source paths, networks and aliases, and recent healthcheck log "
+    "entries."
 )
 
 GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION = (
@@ -139,6 +175,35 @@ LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION = (
     "the tool lists the source's first approved inspection root, usually the "
     "main project folder such as /app/. Directory paths return immediate "
     "children; file paths return one metadata entry for that file."
+)
+
+STAT_PROJECT_PATH_TOOL_DESCRIPTION = (
+    "Return metadata for one manifest-approved host file or directory path. "
+    "If path is omitted, the tool stats the selected file source target. "
+    "Requests must stay inside the source target, source parent directory, or "
+    "configured inspect_path_prefixes allowlist."
+)
+
+READ_PROJECT_FILE_TOOL_DESCRIPTION = (
+    "Read a bounded text preview from one manifest-approved host file path. "
+    "If path is omitted, the tool reads the selected file source target. "
+    "The tool rejects directories, prevents traversal and symlink escapes, "
+    "and reports whether max_bytes truncated the returned content."
+)
+
+LIST_PROJECT_DIRECTORY_TOOL_DESCRIPTION = (
+    "List files and directories inside one manifest-approved host directory, "
+    "like a bounded ls -la view. If path is omitted, the tool lists the selected "
+    "file source parent directory. Directory listings are non-recursive and "
+    "prevent traversal and symlink escapes."
+)
+
+INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION = (
+    "Inspect Docker Compose runtime state for one authorized project by matching "
+    "manifest docker source targets to current Docker Compose labels. Returns "
+    "inferred Compose services, matching containers, status, ports, mounts, "
+    "volumes, environment variable names, and runtime-shape warnings. This tool "
+    "does not parse Compose files, expose env values, or mutate Docker state."
 )
 
 LOG_ANALYSIS_CAUTIONS = [

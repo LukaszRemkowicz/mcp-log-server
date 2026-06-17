@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
@@ -20,12 +21,53 @@ if TYPE_CHECKING:
 DOCKER_INSPECTION_TIMEOUT_SECONDS = 15
 MAX_CONTAINER_FILE_BYTES = 200_000
 MAX_DIRECTORY_ENTRIES = 200
+MAX_VPS_CONTAINERS = 200
+MAX_VPS_VOLUMES = 200
+MAX_CONTAINER_COMMAND_PREVIEW_CHARS = 240
+HIGH_RESTART_COUNT_THRESHOLD = 5
+ANONYMOUS_VOLUME_NAME_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+SAFE_ENV_VALUE_NAMES = frozenset(
+    {
+        "APP_ENV",
+        "DEBUG",
+        "DJANGO_SETTINGS_MODULE",
+        "ENV",
+        "ENVIRONMENT",
+        "FLASK_ENV",
+        "HOST",
+        "LANG",
+        "LOG_LEVEL",
+        "NODE_ENV",
+        "PORT",
+        "PYTHON_ENV",
+        "TZ",
+    }
+)
+SECRET_ENV_NAME_PARTS = frozenset(
+    {
+        "ACCESS_KEY",
+        "API_KEY",
+        "AUTH",
+        "BROKER_URL",
+        "CREDENTIAL",
+        "DATABASE_URL",
+        "DB_URL",
+        "DSN",
+        "KEY_FILE",
+        "PASSWORD",
+        "PRIVATE_KEY",
+        "REDIS_URL",
+        "SECRET",
+        "TOKEN",
+    }
+)
 SAFE_COMPOSE_LABEL_KEYS = frozenset(
     {
         "com.docker.compose.project",
         "com.docker.compose.service",
         "com.docker.compose.container-number",
         "com.docker.compose.oneoff",
+        "com.docker.compose.volume",
     }
 )
 
@@ -69,6 +111,7 @@ class ContainerDetailMount:
     destination: str | None
     mode: str | None
     rw: bool | None
+    name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +130,16 @@ class ContainerDetailPort:
     private_port: str
     host_ip: str | None
     host_port: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ContainerDetailEnvVar:
+    """Curated environment variable entry with secret values redacted."""
+
+    name: str
+    value: str | None
+    value_redacted: bool
+    secret: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +168,55 @@ class ContainerDetail:
     mounts: list[ContainerDetailMount]
     networks: list[ContainerDetailNetwork]
     health_log: list[dict[str, object]]
+    env_vars: list[ContainerDetailEnvVar] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class VpsContainerInventory:
+    """Bounded Docker ps-style inventory row for one VPS container."""
+
+    container_id: str
+    short_container_id: str
+    container_name: str
+    image: str | None
+    command: list[str]
+    command_preview: str
+    created_at: str | None
+    docker_status: str | None
+    state: str | None
+    health_status: str | None
+    running: bool
+    restarting: bool
+    paused: bool
+    dead: bool
+    exit_code: int | None
+    error: str | None
+    restart_count: int | None
+    started_at: str | None
+    finished_at: str | None
+    compose_labels: dict[str, str]
+    restart_policy: ContainerRestartPolicy
+    ports: list[ContainerDetailPort]
+    network_names: list[str]
+    triage_notes: list[str]
+    env_var_names: list[str] = field(default_factory=list)
+    mounts: list[ContainerDetailMount] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class VpsVolumeInventory:
+    """Bounded Docker volume ls-style inventory row for one VPS volume."""
+
+    volume_name: str
+    driver: str | None
+    scope: str | None
+    created_at: str | None
+    compose_labels: dict[str, str]
+    option_keys: list[str]
+    mountpoint_available: bool
+    mountpoint_redacted: bool
+    usage_ref_count: int | None
+    usage_size_bytes: int | None
 
 
 class DockerServiceError(BaseModel):
@@ -500,6 +602,7 @@ class DockerService:
             health=self._parse_container_health(attrs, container_name),
             created_at=created_at,
             env_var_names=self._extract_env_var_names(config.get("Env")),
+            env_vars=self._extract_env_vars(config.get("Env")),
             label_keys=self._extract_label_keys(config.get("Labels")),
             compose_labels=self._extract_compose_labels(config.get("Labels")),
             restart_policy=self._extract_restart_policy(
@@ -519,6 +622,214 @@ class DockerService:
             health_log=self._extract_health_log(state.get("Health")),
         )
 
+    def inspect_vps_containers(
+        self,
+    ) -> list[VpsContainerInventory] | DockerServiceError:
+        """Return a bounded Docker ps-style inventory for visible VPS containers."""
+
+        try:
+            client: DockerClient = docker.from_env(  # type: ignore[attr-defined]
+                timeout=DOCKER_INSPECTION_TIMEOUT_SECONDS
+            )
+            containers = client.containers.list(all=True)
+        except requests_exceptions.Timeout:
+            return DockerServiceError(message="Timed out listing Docker containers.")
+        except DockerException:
+            return DockerServiceError(
+                message="Docker Engine API is not available in the current runtime."
+            )
+
+        results: list[VpsContainerInventory] = []
+        for container in containers[:MAX_VPS_CONTAINERS]:
+            attrs = container.attrs
+            results.append(self._parse_vps_container_inventory(attrs))
+        return sorted(results, key=lambda item: item.container_name)
+
+    def inspect_vps_volumes(
+        self,
+        *,
+        dangling_only: bool = False,
+        anonymous_only: bool = False,
+        name_prefix: str | None = None,
+    ) -> list[VpsVolumeInventory] | DockerServiceError:
+        """Return a bounded Docker volume ls-style inventory for visible VPS volumes."""
+
+        try:
+            client: DockerClient = docker.from_env(  # type: ignore[attr-defined]
+                timeout=DOCKER_INSPECTION_TIMEOUT_SECONDS
+            )
+            volume_filters = {"dangling": True} if dangling_only else None
+            volumes = (
+                client.volumes.list(filters=volume_filters)
+                if volume_filters is not None
+                else client.volumes.list()
+            )
+        except requests_exceptions.Timeout:
+            return DockerServiceError(message="Timed out listing Docker volumes.")
+        except DockerException:
+            return DockerServiceError(
+                message="Docker Engine API is not available in the current runtime."
+            )
+
+        results: list[VpsVolumeInventory] = []
+        for volume in volumes[:MAX_VPS_VOLUMES]:
+            attrs = volume.attrs
+            parsed = self._parse_vps_volume_inventory(attrs)
+            if not self._matches_vps_volume_filters(
+                parsed,
+                anonymous_only=anonymous_only,
+                name_prefix=name_prefix,
+            ):
+                continue
+            results.append(parsed)
+        return sorted(results, key=lambda item: item.volume_name)
+
+    def _parse_vps_container_inventory(self, attrs: object) -> VpsContainerInventory:
+        """Parse Docker SDK attrs into one bounded VPS inventory row."""
+
+        health = self._parse_container_health(attrs, "")
+        config = attrs.get("Config") if isinstance(attrs, dict) else {}
+        if not isinstance(config, dict):
+            config = {}
+        container_id = health.container_id
+        command = self._extract_string_list(config.get("Cmd"))
+
+        created_at = None
+        if isinstance(attrs, dict) and attrs.get("Created") is not None:
+            created_at = str(attrs.get("Created"))
+
+        ports = self._extract_ports(
+            attrs.get("NetworkSettings") if isinstance(attrs, dict) else None
+        )
+        networks = self._extract_networks(
+            attrs.get("NetworkSettings") if isinstance(attrs, dict) else None
+        )
+
+        return VpsContainerInventory(
+            container_id=container_id,
+            short_container_id=container_id[:12],
+            container_name=health.container_name,
+            image=health.image,
+            command=command,
+            command_preview=self._build_command_preview(command),
+            created_at=created_at,
+            docker_status=health.docker_status,
+            state=health.docker_status,
+            health_status=health.health_status,
+            running=health.running,
+            restarting=health.restarting,
+            paused=health.paused,
+            dead=health.dead,
+            exit_code=health.exit_code,
+            error=health.error,
+            restart_count=health.restart_count,
+            started_at=health.started_at,
+            finished_at=health.finished_at,
+            compose_labels=self._extract_compose_labels(config.get("Labels")),
+            restart_policy=self._extract_restart_policy(
+                attrs.get("HostConfig") if isinstance(attrs, dict) else None
+            ),
+            ports=ports,
+            network_names=sorted(network.name for network in networks),
+            triage_notes=self._build_container_triage_notes(health),
+            env_var_names=self._extract_env_var_names(config.get("Env")),
+            mounts=self._extract_mounts(attrs.get("Mounts") if isinstance(attrs, dict) else None),
+        )
+
+    def _parse_vps_volume_inventory(self, attrs: object) -> VpsVolumeInventory:
+        """Parse Docker SDK volume attrs into one redacted VPS volume row."""
+
+        labels = attrs.get("Labels") if isinstance(attrs, dict) else {}
+        options = attrs.get("Options") if isinstance(attrs, dict) else {}
+        usage_data = attrs.get("UsageData") if isinstance(attrs, dict) else {}
+        mountpoint = attrs.get("Mountpoint") if isinstance(attrs, dict) else None
+
+        return VpsVolumeInventory(
+            volume_name=(
+                str(attrs.get("Name"))
+                if isinstance(attrs, dict) and attrs.get("Name") is not None
+                else ""
+            ),
+            driver=(
+                str(attrs.get("Driver"))
+                if isinstance(attrs, dict) and attrs.get("Driver") is not None
+                else None
+            ),
+            scope=(
+                str(attrs.get("Scope"))
+                if isinstance(attrs, dict) and attrs.get("Scope") is not None
+                else None
+            ),
+            created_at=(
+                str(attrs.get("CreatedAt"))
+                if isinstance(attrs, dict) and attrs.get("CreatedAt") is not None
+                else None
+            ),
+            compose_labels=self._extract_compose_labels(labels),
+            option_keys=self._extract_label_keys(options),
+            mountpoint_available=isinstance(mountpoint, str) and bool(mountpoint),
+            mountpoint_redacted=isinstance(mountpoint, str) and bool(mountpoint),
+            usage_ref_count=self._extract_usage_integer(usage_data, "RefCount"),
+            usage_size_bytes=self._extract_usage_integer(usage_data, "Size"),
+        )
+
+    @staticmethod
+    def _matches_vps_volume_filters(
+        volume: VpsVolumeInventory,
+        *,
+        anonymous_only: bool,
+        name_prefix: str | None,
+    ) -> bool:
+        """Return whether one parsed volume matches MCP-side filters."""
+
+        if anonymous_only and not ANONYMOUS_VOLUME_NAME_PATTERN.fullmatch(volume.volume_name):
+            return False
+        if name_prefix is not None and not volume.volume_name.startswith(name_prefix):
+            return False
+        return True
+
+    @staticmethod
+    def _build_command_preview(command: list[str]) -> str:
+        """Return a bounded human-readable command preview."""
+
+        preview = " ".join(command)
+        if len(preview) <= MAX_CONTAINER_COMMAND_PREVIEW_CHARS:
+            return preview
+        return f"{preview[:MAX_CONTAINER_COMMAND_PREVIEW_CHARS].rstrip()}..."
+
+    @staticmethod
+    def _build_container_triage_notes(health: ContainerHealth) -> list[str]:
+        """Return deterministic triage notes for suspicious container states."""
+
+        notes: list[str] = []
+        if not health.running:
+            notes.append("not_running")
+        if health.restarting:
+            notes.append("restarting")
+        if health.paused:
+            notes.append("paused")
+        if health.dead:
+            notes.append("dead")
+        if health.health_status not in {None, "healthy"}:
+            notes.append(f"health_status={health.health_status}")
+        if health.exit_code not in {None, 0}:
+            notes.append(f"exit_code={health.exit_code}")
+        if (
+            health.restart_count is not None
+            and health.restart_count >= HIGH_RESTART_COUNT_THRESHOLD
+        ):
+            notes.append(f"restart_count={health.restart_count}")
+        return notes
+
+    @staticmethod
+    def _extract_usage_integer(usage_data: object, key: str) -> int | None:
+        """Return one Docker volume usage integer when Docker provides it."""
+
+        if not isinstance(usage_data, dict):
+            return None
+        value = usage_data.get(key)
+        return value if isinstance(value, int) else None
+
     @staticmethod
     def _extract_env_var_names(env: object) -> list[str]:
         """Return environment variable names without exposing values."""
@@ -533,6 +844,38 @@ class DockerService:
             if name:
                 names.append(name)
         return names
+
+    @classmethod
+    def _extract_env_vars(cls, env: object) -> list[ContainerDetailEnvVar]:
+        """Return bounded environment metadata with unsafe values redacted."""
+
+        if not isinstance(env, list):
+            return []
+        results: list[ContainerDetailEnvVar] = []
+        for item in env:
+            if not isinstance(item, str) or "=" not in item:
+                continue
+            name, value = item.split("=", 1)
+            if not name:
+                continue
+            secret = cls._env_name_is_secret(name)
+            expose_value = not secret and name in SAFE_ENV_VALUE_NAMES
+            results.append(
+                ContainerDetailEnvVar(
+                    name=name,
+                    value=value if expose_value else None,
+                    value_redacted=not expose_value,
+                    secret=secret,
+                )
+            )
+        return results
+
+    @staticmethod
+    def _env_name_is_secret(name: str) -> bool:
+        """Return whether an env var name commonly carries a secret value."""
+
+        normalized = name.upper()
+        return any(part in normalized for part in SECRET_ENV_NAME_PARTS)
 
     @staticmethod
     def _extract_label_keys(labels: object) -> list[str]:
@@ -650,6 +993,7 @@ class DockerService:
                     ),
                     mode=str(item.get("Mode")) if item.get("Mode") is not None else None,
                     rw=item.get("RW") if isinstance(item.get("RW"), bool) else None,
+                    name=str(item.get("Name")) if item.get("Name") is not None else None,
                 )
             )
         return results

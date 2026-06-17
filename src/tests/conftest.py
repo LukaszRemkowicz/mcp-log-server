@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import time
+from builtins import list as builtins_list
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
@@ -47,6 +49,19 @@ INIT_DB_REQUIRED_MESSAGES = (
     "You need to run `aerich init-db` first",
     "You may need to run `aerich init-db` first",
 )
+TEST_DATABASE_NAME = "mcp_log_server_test"
+
+
+def _apply_global_test_database_settings() -> None:
+    """Force pytest to use a test database name before migrations run."""
+
+    env_database_name = os.environ.get("DATABASE_NAME", TEST_DATABASE_NAME)
+    database_name = env_database_name if env_database_name.endswith("_test") else TEST_DATABASE_NAME
+    current_settings = settings.copy()
+    set_settings(current_settings.copy(DATABASE_NAME=database_name))
+
+
+_apply_global_test_database_settings()
 
 
 @asynccontextmanager
@@ -121,29 +136,45 @@ class FakeDockerClient:
     """Small Docker SDK fake for container log and inspection tests."""
 
     containers: FakeDockerClient
+    volumes: FakeDockerClient
 
     def __init__(self) -> None:
         self.containers = self
+        self.volumes = self
         self.outputs_by_command: dict[tuple[str, ...], str] = {}
         self.commands: list[list[str]] = []
         self.captured_logs_kwargs: dict[str, object] = {}
         self.logs_exception: Exception | None = None
         self.attrs: dict[str, object] = {}
+        self.listed_containers: builtins_list[object] = []
+        self.listed_volumes: builtins_list[object] = []
+        self.captured_volume_filters: dict[str, object] | None = None
 
     def get(self, container_name: str) -> FakeDockerClient:
         assert container_name == "backend-container"
         return self
 
+    def list(self, **kwargs: object) -> builtins_list[object]:
+        if kwargs == {}:
+            return self.listed_volumes
+        if set(kwargs) == {"filters"}:
+            filters = kwargs["filters"]
+            assert isinstance(filters, dict)
+            self.captured_volume_filters = filters
+            return self.listed_volumes
+        assert kwargs == {"all": True}
+        return self.listed_containers
+
     def exec_run(
         self,
-        command: list[str],
+        command: builtins_list[str],
         stdout: bool = True,
         stderr: bool = True,
     ) -> FakeDockerExecResult:
         assert stdout is True
         assert stderr is True
         self.commands.append(command)
-        command_key = tuple(command)
+        command_key: tuple[str, ...] = tuple(command)
         return FakeDockerExecResult(output=self.outputs_by_command[command_key])
 
     def logs(self, **kwargs: object):

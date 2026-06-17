@@ -1,8 +1,7 @@
-"""Typer command for local development JWT generation."""
+"""Local development JWT generation implementation."""
 
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 from dataclasses import dataclass
@@ -25,9 +24,8 @@ from auth.scopes import (
 )
 from conf import Settings, get_settings
 from core.types import LogWorkspace
-from database.config import TORTOISE_ORM
-from database.lifecycle import close_database, initialize_database
 from database.models import McpCaller
+from decorators import async_, db
 
 TOKEN_WORKSPACES = {
     "workflow_agent": LogWorkspace.WORKFLOW,
@@ -117,6 +115,7 @@ def build_example_token_payloads(
             "allowed_projects": workflow_caller.allowed_projects,
             "scope": " ".join(
                 (
+                    CONTAINER_FILES_READ_SCOPE,
                     LOGS_COLLECT_SCOPE,
                     PROJECTS_READ_SCOPE,
                     WORKFLOW_BOOTSTRAP_SCOPE,
@@ -192,35 +191,11 @@ async def build_example_token_response(
     }
 
 
-async def _build_example_token_response_with_database(
-    settings: Settings,
-    *,
+@async_
+@db
+async def generate_dev_jwt(
+    output_file: Path | None = None,
     exp_time_hours: int | None = None,
-) -> dict[str, str]:
-    """Initialize the database, build tokens from caller rows, and close connections."""
-
-    await initialize_database(TORTOISE_ORM)
-    try:
-        return await build_example_token_response(settings, exp_time_hours=exp_time_hours)
-    finally:
-        await close_database()
-
-
-def generate_dev_jwt(
-    output_file: Path | None = typer.Option(
-        None,
-        "--output-file",
-        "-o",
-        help="Write the generated token JSON to this file instead of stdout.",
-    ),
-    exp_time_hours: int | None = typer.Option(
-        None,
-        "--exp-time",
-        min=1,
-        help=(
-            "Override token lifetime in hours. Defaults to JWT_EXPIRATION_SECONDS from settings."
-        ),
-    ),
 ) -> None:
     """Generate signed local development JWTs for MCP clients.
 
@@ -233,12 +208,7 @@ def generate_dev_jwt(
     """
 
     try:
-        payload = asyncio.run(
-            _build_example_token_response_with_database(
-                get_settings(),
-                exp_time_hours=exp_time_hours,
-            )
-        )
+        payload = await build_example_token_response(get_settings(), exp_time_hours=exp_time_hours)
     except RuntimeError as exc:
         typer.echo(f"Error: {exc}", err=True)
         raise typer.Exit(1) from exc

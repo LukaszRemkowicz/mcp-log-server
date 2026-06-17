@@ -182,6 +182,39 @@ class ProjectManifestSummary(BaseModel):
         return getattr(self, key)
 
 
+class ProjectManifestSourcePayload(BaseModel):
+    """Detailed source contract returned by `read_project_manifest`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_key: str
+    source_type: Literal["docker", "file"]
+    target: str
+    description: str
+    required: bool
+    parser_type: str
+    normalization_profile: str
+    retention_class: str
+    default_noise_profile: str | None
+    stream: Literal["stdout", "stderr"] | None
+    inspect_path_prefixes: list[str]
+
+
+class ReadProjectManifestPayload(BaseModel):
+    """Structured response returned by `read_project_manifest`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["read_project_manifest"]
+    project_name: str
+    project_summary: str
+    requested_source_key: str | None
+    source_keys: list[str]
+    static_asset_paths: list[str]
+    static_asset_extensions: list[str]
+    sources: list[ProjectManifestSourcePayload]
+
+
 class ProjectManifestList(RootModel[list[ProjectManifestSummary]]):
     """Collection wrapper for manifest-backed project summaries."""
 
@@ -431,7 +464,7 @@ class Fail2banJailStatusPayload(BaseModel):
 
 
 class InspectLiveFail2banActivityPayload(BaseModel):
-    """TODO(post-MVP): response for live fail2ban runtime diagnostics."""
+    """Structured response returned by `inspect_live_fail2ban_activity`."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -443,6 +476,36 @@ class InspectLiveFail2banActivityPayload(BaseModel):
     retry_tips: list[str]
     service: Fail2banServiceStatusPayload
     jails: list[Fail2banJailStatusPayload]
+
+
+class InspectTlsCertificatePayload(BaseModel):
+    """Structured response returned by `inspect_tls_certificate`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_tls_certificate"]
+    domain_key: Literal["site"]
+    hostname: str | None
+    port: int
+    inspection_status: Literal["ok", "warning", "unavailable"]
+    warning_level: Literal[
+        "ok",
+        "expired",
+        "expiring_soon",
+        "hostname_mismatch",
+        "connection_failure",
+        "unsupported_tls_response",
+        "configuration_error",
+    ]
+    subject_summary: str | None
+    issuer_summary: str | None
+    not_before: str | None
+    not_after: str | None
+    days_until_expiry: int | None
+    hostname_matches: bool | None
+    matched_names: list[str]
+    error_code: str | None
+    message: str
 
 
 class InspectProxyActivityPayload(BaseModel):
@@ -463,6 +526,11 @@ class InspectProxyActivityPayload(BaseModel):
     upstream_error_count: int
     max_groups: int
     truncated: bool
+    returned_route_group_count: int
+    distinct_route_group_count: int
+    distinct_route_group_count_is_exact: bool
+    omitted_route_group_count: int
+    route_groups_omitted: bool
     status_class_counts: list[ProxyStatusClassCountPayload]
     top_routes: list[ProxyRouteSignalPayload]
 
@@ -655,6 +723,146 @@ class InspectContainersHealthPayload(BaseModel):
     containers: list[ContainerHealthPayload]
 
 
+class VpsContainerInventoryPayload(BaseModel):
+    """One bounded Docker ps-style inventory item returned by VPS diagnostics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    container_id: str
+    short_container_id: str
+    container_name: str
+    image: str | None
+    command: list[str]
+    command_preview: str
+    created_at: str | None
+    docker_status: str | None
+    state: str | None
+    health_status: str | None
+    running: bool
+    restarting: bool
+    paused: bool
+    dead: bool
+    exit_code: int | None
+    error: str | None
+    restart_count: int | None
+    started_at: str | None
+    finished_at: str | None
+    compose_labels: dict[str, str]
+    restart_policy: ContainerRestartPolicyPayload
+    ports: list[ContainerDetailPortPayload]
+    network_names: list[str]
+    triage_notes: list[str]
+
+
+class InspectVpsContainersPayload(BaseModel):
+    """Structured success payload returned by `inspect_vps_containers`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_vps_containers"]
+    container_count: int
+    truncated: bool
+    containers: list[VpsContainerInventoryPayload]
+
+
+class VpsVolumeInventoryPayload(BaseModel):
+    """One bounded Docker volume ls-style inventory item for VPS diagnostics."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    volume_name: str
+    driver: str | None
+    scope: str | None
+    created_at: str | None
+    compose_labels: dict[str, str]
+    option_keys: list[str]
+    mountpoint_available: bool
+    mountpoint_redacted: bool
+    usage_ref_count: int | None
+    usage_size_bytes: int | None
+
+
+class InspectVpsVolumesPayload(BaseModel):
+    """Structured success payload returned by `inspect_vps_volumes`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_vps_volumes"]
+    filters: dict[str, bool | str | None]
+    volume_count: int
+    truncated: bool
+    volumes: list[VpsVolumeInventoryPayload]
+
+
+class ExpectedComposeServicePayload(BaseModel):
+    """Expected Compose service identity inferred from runtime labels."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_key: str
+    compose_project: str
+    service_name: str
+
+
+class ComposeRunningMountPayload(BaseModel):
+    """Redacted running mount metadata for Compose comparison."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str | None
+    destination: str | None
+    mode: str | None
+    rw: bool | None
+    name: str | None
+    source_redacted: bool
+
+
+class ComposeRunningContainerPayload(BaseModel):
+    """Running Docker container facts matched through Compose labels."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    container_id: str
+    container_name: str
+    image: str | None
+    docker_status: str | None
+    health_status: str | None
+    running: bool
+    compose_labels: dict[str, str]
+    service_name: str | None
+    ports: list[str]
+    mount_destinations: list[str]
+    volume_names: list[str]
+    env_var_names: list[str]
+    mounts: list[ComposeRunningMountPayload]
+
+
+class ComposeStateWarningPayload(BaseModel):
+    """One expected-vs-running drift warning."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    warning_type: str
+    service_name: str | None
+    message: str
+    expected: str | None
+    actual: str | None
+    container_name: str | None
+
+
+class InspectProjectComposeStatePayload(BaseModel):
+    """Structured success payload returned by `inspect_project_compose_state`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_project_compose_state"]
+    project_name: str
+    compose_project: str | None
+    expected_services: list[ExpectedComposeServicePayload]
+    running_containers: list[ComposeRunningContainerPayload]
+    warnings: list[ComposeStateWarningPayload]
+
+
 class ContainerDetailMountPayload(BaseModel):
     """Curated mount metadata returned by `inspect_container_detail`."""
 
@@ -686,6 +894,17 @@ class ContainerDetailPortPayload(BaseModel):
     host_port: str | None
 
 
+class ContainerDetailEnvVarPayload(BaseModel):
+    """Curated environment variable metadata returned by `inspect_container_detail`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    value: str | None
+    value_redacted: bool
+    secret: bool
+
+
 class ContainerRestartPolicyPayload(BaseModel):
     """Curated restart-policy metadata returned by `inspect_container_detail`."""
 
@@ -706,6 +925,7 @@ class InspectContainerDetailPayload(BaseModel):
     container: ContainerHealthPayload
     created_at: str | None
     env_var_names: list[str]
+    env_vars: list[ContainerDetailEnvVarPayload]
     label_keys: list[str]
     compose_labels: dict[str, str]
     restart_policy: ContainerRestartPolicyPayload
@@ -781,3 +1001,66 @@ class ListContainerDirectoryPayload(BaseModel):
     path: str
     truncated: bool
     entries: list[ContainerPathMetadataPayload]
+
+
+class ProjectPathMetadataPayload(BaseModel):
+    """Describe one inspected file or directory on the manifest-bounded host path."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    name: str
+    exists: bool
+    is_file: bool
+    is_dir: bool
+    is_symlink: bool
+    size: int | None
+    mode: int | None
+    modified_at: str | None
+    uid: int | None
+    gid: int | None
+    readable: bool
+    symlink_target: str | None
+
+
+class StatProjectPathPayload(BaseModel):
+    """Structured success payload returned by `stat_project_path`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["stat_project_path"]
+    requested_project_name: str | None
+    project_name: str
+    source_key: str
+    path: str
+    file: ProjectPathMetadataPayload
+
+
+class ReadProjectFilePayload(BaseModel):
+    """Structured success payload returned by `read_project_file`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["read_project_file"]
+    requested_project_name: str | None
+    project_name: str
+    source_key: str
+    path: str
+    max_bytes: int
+    truncated: bool
+    content: str
+    file: ProjectPathMetadataPayload
+
+
+class ListProjectDirectoryPayload(BaseModel):
+    """Structured success payload returned by `list_project_directory`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["list_project_directory"]
+    requested_project_name: str | None
+    project_name: str
+    source_key: str
+    path: str
+    truncated: bool
+    entries: list[ProjectPathMetadataPayload]

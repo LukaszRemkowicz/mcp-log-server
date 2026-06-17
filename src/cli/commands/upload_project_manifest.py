@@ -2,21 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Literal
 
 import typer
 
 from conf import settings
-from database.config import TORTOISE_ORM
-from database.lifecycle import close_database, initialize_database
 from database.models import ProjectManifest
 from database.schemas import ProjectManifestCreate, ProjectManifestUpdate
 from database.services.project_manifests import ProjectManifestService
-from decorators import async_
+from decorators import async_, db
 from manifests.loader import list_project_manifests, load_project_manifest
 from manifests.models import Manifest
 
@@ -31,17 +27,6 @@ class ProjectManifestCommandResult:
     source_count: int
     row_id: str | None = None
     status: ProjectManifestCommandStatus = "created"
-
-
-@asynccontextmanager
-async def database_context() -> AsyncIterator[None]:
-    """Initialize database access for the upload command."""
-
-    await initialize_database(TORTOISE_ORM)
-    try:
-        yield
-    finally:
-        await close_database()
 
 
 def _load_manifests(
@@ -105,26 +90,25 @@ async def upload_manifests(
     """Create missing manifests and leave existing rows untouched."""
 
     results: list[ProjectManifestCommandResult] = []
-    async with database_context():
-        for manifest in manifests:
-            if await service.exists(manifest.project_key):
-                results.append(
-                    ProjectManifestCommandResult(
-                        project_key=manifest.project_key,
-                        source_count=len(manifest.sources),
-                        status="exists",
-                    )
-                )
-                continue
-
-            row: ProjectManifest = await service.create(_create_payload(manifest))
+    for manifest in manifests:
+        if await service.exists(manifest.project_key):
             results.append(
                 ProjectManifestCommandResult(
                     project_key=manifest.project_key,
                     source_count=len(manifest.sources),
-                    row_id=str(row.id),
+                    status="exists",
                 )
             )
+            continue
+
+        row: ProjectManifest = await service.create(_create_payload(manifest))
+        results.append(
+            ProjectManifestCommandResult(
+                project_key=manifest.project_key,
+                source_count=len(manifest.sources),
+                row_id=str(row.id),
+            )
+        )
     return results
 
 
@@ -135,14 +119,13 @@ async def update_manifest(
 ) -> ProjectManifestCommandResult:
     """Update one existing manifest."""
 
-    async with database_context():
-        if not await service.exists(manifest.project_key):
-            return ProjectManifestCommandResult(
-                project_key=manifest.project_key,
-                source_count=len(manifest.sources),
-                status="missing",
-            )
-        row = await service.update(await _update_payload(manifest=manifest, service=service))
+    if not await service.exists(manifest.project_key):
+        return ProjectManifestCommandResult(
+            project_key=manifest.project_key,
+            source_count=len(manifest.sources),
+            status="missing",
+        )
+    row = await service.update(await _update_payload(manifest=manifest, service=service))
     return ProjectManifestCommandResult(
         project_key=manifest.project_key,
         source_count=len(manifest.sources),
@@ -159,26 +142,25 @@ async def update_manifests(
     """Update existing manifests and report missing rows."""
 
     results: list[ProjectManifestCommandResult] = []
-    async with database_context():
-        for manifest in manifests:
-            if not await service.exists(manifest.project_key):
-                results.append(
-                    ProjectManifestCommandResult(
-                        project_key=manifest.project_key,
-                        source_count=len(manifest.sources),
-                        status="missing",
-                    )
-                )
-                continue
-            row = await service.update(await _update_payload(manifest=manifest, service=service))
+    for manifest in manifests:
+        if not await service.exists(manifest.project_key):
             results.append(
                 ProjectManifestCommandResult(
                     project_key=manifest.project_key,
                     source_count=len(manifest.sources),
-                    row_id=str(row.id),
-                    status="updated",
+                    status="missing",
                 )
             )
+            continue
+        row = await service.update(await _update_payload(manifest=manifest, service=service))
+        results.append(
+            ProjectManifestCommandResult(
+                project_key=manifest.project_key,
+                source_count=len(manifest.sources),
+                row_id=str(row.id),
+                status="updated",
+            )
+        )
     return results
 
 
@@ -227,22 +209,11 @@ def _echo_update_results(results: list[ProjectManifestCommandResult]) -> None:
 
 
 @async_
+@db
 async def upload_project_manifest(
-    project_name: Annotated[
-        str | None,
-        typer.Argument(help="Project key to load from <path>/<project>.json."),
-    ] = None,
-    all_projects: Annotated[
-        bool,
-        typer.Option("--all", help="Upload every manifest JSON file from --path."),
-    ] = False,
-    path: Annotated[
-        Path | None,
-        typer.Option(
-            "--path",
-            help="Directory with project manifest JSON files. Defaults to PROJECT_MANIFESTS_PATH.",
-        ),
-    ] = None,
+    project_name: str | None = None,
+    all_projects: bool = False,
+    path: Path | None = None,
 ) -> None:
     """Upload one or all configured project manifests into the database."""
 
@@ -262,28 +233,11 @@ async def upload_project_manifest(
 
 
 @async_
+@db
 async def update_project_manifest(
-    project_name: Annotated[
-        str | None,
-        typer.Option(
-            "--project",
-            help="Project key to update from <path>/<project>.json. Required unless --all is used.",
-        ),
-    ] = None,
-    all_projects: Annotated[
-        bool,
-        typer.Option(
-            "--all",
-            help="Update every manifest JSON file from --path instead of using --project.",
-        ),
-    ] = False,
-    path: Annotated[
-        Path | None,
-        typer.Option(
-            "--path",
-            help="Directory with project manifest JSON files. Defaults to PROJECT_MANIFESTS_PATH.",
-        ),
-    ] = None,
+    project_name: str | None = None,
+    all_projects: bool = False,
+    path: Path | None = None,
 ) -> None:
     """Update one or all configured project manifests in the database."""
 

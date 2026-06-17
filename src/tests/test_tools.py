@@ -26,10 +26,18 @@ from tools.agent_hints import (
     INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
     INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
     INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION,
+    INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION,
     INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
+    INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION,
+    INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
+    INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
+    LIST_PROJECT_DIRECTORY_TOOL_DESCRIPTION,
     READ_CONTAINER_FILE_TOOL_DESCRIPTION,
+    READ_PROJECT_FILE_TOOL_DESCRIPTION,
+    READ_PROJECT_MANIFEST_TOOL_DESCRIPTION,
     STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
+    STAT_PROJECT_PATH_TOOL_DESCRIPTION,
     SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION,
 )
 from tools.workflow import (
@@ -65,13 +73,21 @@ def test_application_registers_expected_mcp_components(
         assert "inspect_proxy_activity" in tool_names
         assert "suggest_followup_window" in tool_names
         assert "list_projects" in tool_names
+        assert "read_project_manifest" in tool_names
+        assert "inspect_vps_containers" in tool_names
+        assert "inspect_vps_volumes" in tool_names
+        assert "inspect_project_compose_state" in tool_names
         assert "inspect_containers_health" in tool_names
         assert "inspect_container_detail" in tool_names
         assert "stat_container_path" in tool_names
         assert "read_container_file" in tool_names
         assert "list_container_directory" in tool_names
+        assert "stat_project_path" in tool_names
+        assert "read_project_file" in tool_names
+        assert "list_project_directory" in tool_names
         assert "close_agent_session" in tool_names
         assert "inspect_live_fail2ban_activity" in tool_names
+        assert "inspect_tls_certificate" in tool_names
         assert "get_mcp_service_status" in tool_names
         assert "get_mcp_health_check" in tool_names
         assert "list_workflow_skills" not in tool_names
@@ -92,6 +108,7 @@ def test_application_registers_expected_mcp_components(
         workflow_token = custom_access_token(
             "workflow-agent",
             [
+                CONTAINER_FILES_READ_SCOPE,
                 WORKFLOW_BOOTSTRAP_SCOPE,
                 LOGS_COLLECT_SCOPE,
                 PROJECTS_READ_SCOPE,
@@ -163,6 +180,33 @@ def test_application_registers_expected_mcp_components(
             item["tool_name"] == "inspect_live_fail2ban_activity"
             for item in bootstrap_text["tools"]
         )
+        assert any(
+            item["tool_name"] == "inspect_tls_certificate" for item in bootstrap_text["tools"]
+        )
+        assert any(item["tool_name"] == "read_project_manifest" for item in bootstrap_text["tools"])
+        assert any(
+            item["tool_name"] == "inspect_project_compose_state" for item in bootstrap_text["tools"]
+        )
+        assert any(
+            item["tool_name"] == "inspect_vps_containers" for item in bootstrap_text["tools"]
+        )
+        assert any(item["tool_name"] == "inspect_vps_volumes" for item in bootstrap_text["tools"])
+        assert any(
+            item["tool_name"] == "inspect_containers_health" for item in bootstrap_text["tools"]
+        )
+        assert any(
+            item["tool_name"] == "inspect_container_detail" for item in bootstrap_text["tools"]
+        )
+        assert any(item["tool_name"] == "stat_container_path" for item in bootstrap_text["tools"])
+        assert any(item["tool_name"] == "read_container_file" for item in bootstrap_text["tools"])
+        assert any(
+            item["tool_name"] == "list_container_directory" for item in bootstrap_text["tools"]
+        )
+        assert any(item["tool_name"] == "stat_project_path" for item in bootstrap_text["tools"])
+        assert any(item["tool_name"] == "read_project_file" for item in bootstrap_text["tools"])
+        assert any(
+            item["tool_name"] == "list_project_directory" for item in bootstrap_text["tools"]
+        )
         collect_logs_tool = next(
             item for item in bootstrap_text["tools"] if item["tool_name"] == "collect_logs"
         )
@@ -199,6 +243,12 @@ def test_application_registers_expected_mcp_components(
             tool for tool in tools if tool.name == "inspect_containers_health"
         )
         assert app_container_health_tool.description == INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION
+        app_vps_volumes_tool = next(tool for tool in tools if tool.name == "inspect_vps_volumes")
+        assert app_vps_volumes_tool.description == INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION
+        app_vps_containers_tool = next(
+            tool for tool in tools if tool.name == "inspect_vps_containers"
+        )
+        assert app_vps_containers_tool.description == INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION
         app_container_detail_tool = next(
             tool for tool in tools if tool.name == "inspect_container_detail"
         )
@@ -218,10 +268,27 @@ def test_application_registers_expected_mcp_components(
         )
         assert app_list_container_tool.description == LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION
         assert "path" not in app_list_container_tool.parameters["required"]
+        app_stat_project_tool = next(tool for tool in tools if tool.name == "stat_project_path")
+        assert app_stat_project_tool.description == STAT_PROJECT_PATH_TOOL_DESCRIPTION
+        app_read_project_tool = next(tool for tool in tools if tool.name == "read_project_file")
+        assert app_read_project_tool.description == READ_PROJECT_FILE_TOOL_DESCRIPTION
+        app_list_project_tool = next(
+            tool for tool in tools if tool.name == "list_project_directory"
+        )
+        assert app_list_project_tool.description == LIST_PROJECT_DIRECTORY_TOOL_DESCRIPTION
+        assert "path" not in app_list_project_tool.parameters["required"]
         app_fail2ban_tool = next(
             tool for tool in tools if tool.name == "inspect_live_fail2ban_activity"
         )
         assert app_fail2ban_tool.description == INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION
+        app_tls_tool = next(tool for tool in tools if tool.name == "inspect_tls_certificate")
+        assert app_tls_tool.description == INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION
+        app_manifest_tool = next(tool for tool in tools if tool.name == "read_project_manifest")
+        assert app_manifest_tool.description == READ_PROJECT_MANIFEST_TOOL_DESCRIPTION
+        app_compose_state_tool = next(
+            tool for tool in tools if tool.name == "inspect_project_compose_state"
+        )
+        assert app_compose_state_tool.description == INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION
         workflow_followup_tool = next(
             item
             for item in bootstrap_text["tools"]
@@ -240,6 +307,7 @@ def test_application_registers_expected_mcp_components(
         request_caller_tool_names = {
             "get_mcp_service_status",
             "list_projects",
+            "read_project_manifest",
             "collect_logs",
             "list_log_snapshot_files",
             "read_log_snapshot_file",
@@ -248,10 +316,16 @@ def test_application_registers_expected_mcp_components(
             "build_incident_bundle",
             "create_filtered_view",
             "inspect_proxy_activity",
+            "inspect_vps_containers",
+            "inspect_vps_volumes",
+            "inspect_project_compose_state",
             "inspect_containers_health",
             "stat_container_path",
             "read_container_file",
             "list_container_directory",
+            "stat_project_path",
+            "read_project_file",
+            "list_project_directory",
         }
         tools_by_name = {tool.name: tool for tool in tools}
         for tool_name in request_caller_tool_names:
@@ -300,7 +374,7 @@ def test_tool_metadata_filters_tools_by_token_scopes(
     ]
 
     assert "get_mcp_health_check" in allowed_tool_names
-    assert "read_container_file" not in allowed_tool_names
+    assert "read_container_file" in allowed_tool_names
     assert "close_agent_session" not in allowed_tool_names
     assert "analyze_daily_log_bundle" not in allowed_tool_names
     assert "get_mcp_service_status" not in allowed_tool_names

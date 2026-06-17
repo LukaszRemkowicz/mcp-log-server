@@ -24,8 +24,6 @@ class SourceDefinition(BaseModel):
     default_noise_profile: str | None = None
     stream: Literal["stdout", "stderr"] | None = None
     inspect_path_prefixes: list[str] = Field(default_factory=list)
-    compose_project: str | None = None
-    compose_service: str | None = None
 
     @model_validator(mode="after")
     def validate_file_target_path_shape(self) -> SourceDefinition:
@@ -48,24 +46,6 @@ class SourceDefinition(BaseModel):
         )
         if invalid_path:
             raise ValueError("file source target must be a clean absolute path.")
-        return self
-
-    @model_validator(mode="after")
-    def validate_docker_compose_selector(self) -> SourceDefinition:
-        """Require complete Compose selectors when docker sources opt into label lookup."""
-
-        if self.source_type != "docker":
-            return self
-        if self.compose_project is None and self.compose_service is None:
-            return self
-        if not self.compose_project or not self.compose_project.strip():
-            raise ValueError(
-                "docker compose_project must be non-empty when compose_service is set."
-            )
-        if not self.compose_service or not self.compose_service.strip():
-            raise ValueError(
-                "docker compose_service must be non-empty when compose_project is set."
-            )
         return self
 
 

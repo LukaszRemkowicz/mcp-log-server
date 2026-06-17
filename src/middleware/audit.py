@@ -62,20 +62,28 @@ WORKFLOW_AGENT_CLIENT_TYPE = "workflow_agent"
 SESSION_WORKSPACE_TOOLS = frozenset(
     {
         "close_agent_session",
-        "inspect_container_detail",
-        "inspect_containers_health",
-        "list_container_directory",
-        "read_container_file",
-        "stat_container_path",
     }
 )
 WORKSPACE_AGNOSTIC_TOOLS = frozenset(
     {
         "get_mcp_health_check",
         "get_mcp_service_status",
+        "inspect_container_detail",
+        "inspect_containers_health",
         "inspect_live_fail2ban_activity",
+        "inspect_project_compose_state",
+        "inspect_tls_certificate",
+        "inspect_vps_containers",
+        "inspect_vps_volumes",
+        "list_container_directory",
         "list_projects",
+        "list_project_directory",
+        "read_container_file",
+        "read_project_file",
+        "read_project_manifest",
         "suggest_followup_window",
+        "stat_container_path",
+        "stat_project_path",
     }
 )
 
@@ -268,28 +276,6 @@ def _collect_logs_workspace_argument_error() -> AgentToolErrorResult:
     )
 
 
-def _client_has_no_allowed_projects_error(
-    *,
-    client_id: str,
-    client_type: str,
-    workspace: LogWorkspace,
-) -> AgentToolErrorResult:
-    """Return an agent-facing error when an allowlisted caller has no projects."""
-
-    return build_agent_tool_error_result(
-        error_code="mcp_client_has_no_allowed_projects",
-        message="Authenticated MCP client is not allowed to access any project.",
-        retry_tips=[
-            "Ask an administrator to add at least one project to mcp_callers.allowed_projects.",
-        ],
-        details={
-            "client_id": client_id,
-            "client_type": client_type,
-            "workspace": workspace,
-        },
-    )
-
-
 def _caller_unavailable_error() -> AgentToolErrorResult:
     """Return an agent-facing error when the allowlist cannot be checked."""
 
@@ -390,7 +376,6 @@ async def _authorize_mcp_client(
     client_id: str,
     client_type: str,
     workspace: LogWorkspace,
-    allow_empty_projects: bool = False,
     allow_any_workspace: bool = False,
 ) -> AuthenticatedMcpCaller | AgentToolErrorResult | None:
     """Return the DB-backed caller when a matching allowlist row exists."""
@@ -413,12 +398,6 @@ async def _authorize_mcp_client(
         allowed_project_names = frozenset(
             project_manifest.project_key
             for project_manifest in await project_manifest_db_service.all()
-        )
-    if not allowed_project_names and not allow_empty_projects:
-        return _client_has_no_allowed_projects_error(
-            client_id=client_id,
-            client_type=client_type,
-            workspace=caller.workspace,
         )
     return AuthenticatedMcpCaller(
         caller_id=caller.id,
@@ -511,8 +490,6 @@ async def _authenticate_mcp_caller(
             client_id=client_id,
             client_type=client_type,
             workspace=workspace,
-            allow_empty_projects=tool_name
-            in {"get_mcp_service_status", "list_projects", "mcp_discovery"},
             allow_any_workspace=allow_any_workspace,
         )
     except BaseORMException:

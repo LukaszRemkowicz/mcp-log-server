@@ -28,51 +28,76 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import cast
 
-from fastmcp.server.auth import require_scopes
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
 
-from app import mcp
 from auth.mcp_authorized_manifests import AuthorizedProjectManifests
 from auth.scopes import CONTAINER_FILES_READ_SCOPE
 from conf import settings
-from decorators import project_authorized_tool
+from decorators import project_authorized_tool, workflow_discoverable_tool
 from logging_config import get_logger
 from manifests.models import Manifest, SourceDefinition
+from services.compose_state_service import (
+    ComposeRunningContainer,
+    ComposeRunningMount,
+    ComposeStateInspection,
+    ComposeStateService,
+    ComposeStateUnavailable,
+    ComposeStateWarning,
+    ExpectedComposeService,
+)
 from services.docker_service import (
     MAX_CONTAINER_FILE_BYTES,
+    MAX_VPS_CONTAINERS,
+    MAX_VPS_VOLUMES,
     ContainerDetail,
     ContainerHealth,
     ContainerPathStat,
     DockerService,
     DockerServiceError,
+    VpsContainerInventory,
+    VpsVolumeInventory,
 )
 from services.project_manifest import ProjectManifestError, ProjectManifestService
 from tools.agent_hints import (
     INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
     INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
+    INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION,
+    INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
+    INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
     READ_CONTAINER_FILE_TOOL_DESCRIPTION,
     STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
 )
 from tools.errors import build_container_inspection_error_result
 from tools.models import (
+    ComposeRunningContainerPayload,
+    ComposeRunningMountPayload,
+    ComposeStateWarningPayload,
+    ContainerDetailEnvVarPayload,
     ContainerDetailMountPayload,
     ContainerDetailNetworkPayload,
     ContainerDetailPortPayload,
     ContainerHealthPayload,
     ContainerPathMetadataPayload,
     ContainerRestartPolicyPayload,
+    ExpectedComposeServicePayload,
     InspectContainerDetailPayload,
     InspectContainersHealthPayload,
+    InspectProjectComposeStatePayload,
+    InspectVpsContainersPayload,
+    InspectVpsVolumesPayload,
     ListContainerDirectoryPayload,
     ReadContainerFilePayload,
     StatContainerPathPayload,
+    VpsContainerInventoryPayload,
+    VpsVolumeInventoryPayload,
 )
 
 logger: logging.Logger = get_logger("tools.container_inspection")
 manifest_service = ProjectManifestService()
 docker_service = DockerService()
+compose_state_service = ComposeStateService()
 
 
 def _get_authorized_manifest(project_name: str) -> Manifest | None:
@@ -388,6 +413,15 @@ def create_container_detail_payload(
         ),
         created_at=detail.created_at,
         env_var_names=detail.env_var_names,
+        env_vars=[
+            ContainerDetailEnvVarPayload(
+                name=item.name,
+                value=item.value,
+                value_redacted=item.value_redacted,
+                secret=item.secret,
+            )
+            for item in detail.env_vars
+        ],
         label_keys=detail.label_keys,
         compose_labels=detail.compose_labels,
         restart_policy=ContainerRestartPolicyPayload(
@@ -427,9 +461,305 @@ def create_container_detail_payload(
     )
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
+def create_vps_container_inventory_payload(
+    container: VpsContainerInventory,
+) -> VpsContainerInventoryPayload:
+    """Convert Docker ps-style service inventory into one MCP response row."""
+
+    return VpsContainerInventoryPayload(
+        container_id=container.container_id,
+        short_container_id=container.short_container_id,
+        container_name=container.container_name,
+        image=container.image,
+        command=container.command,
+        command_preview=container.command_preview,
+        created_at=container.created_at,
+        docker_status=container.docker_status,
+        state=container.state,
+        health_status=container.health_status,
+        running=container.running,
+        restarting=container.restarting,
+        paused=container.paused,
+        dead=container.dead,
+        exit_code=container.exit_code,
+        error=container.error,
+        restart_count=container.restart_count,
+        started_at=container.started_at,
+        finished_at=container.finished_at,
+        compose_labels=container.compose_labels,
+        restart_policy=ContainerRestartPolicyPayload(
+            name=container.restart_policy.name,
+            maximum_retry_count=container.restart_policy.maximum_retry_count,
+        ),
+        ports=[
+            ContainerDetailPortPayload(
+                private_port=item.private_port,
+                host_ip=item.host_ip,
+                host_port=item.host_port,
+            )
+            for item in container.ports
+        ],
+        network_names=container.network_names,
+        triage_notes=container.triage_notes,
+    )
+
+
+def create_vps_volume_inventory_payload(
+    volume: VpsVolumeInventory,
+) -> VpsVolumeInventoryPayload:
+    """Convert Docker volume service inventory into one MCP response row."""
+
+    return VpsVolumeInventoryPayload(
+        volume_name=volume.volume_name,
+        driver=volume.driver,
+        scope=volume.scope,
+        created_at=volume.created_at,
+        compose_labels=volume.compose_labels,
+        option_keys=volume.option_keys,
+        mountpoint_available=volume.mountpoint_available,
+        mountpoint_redacted=volume.mountpoint_redacted,
+        usage_ref_count=volume.usage_ref_count,
+        usage_size_bytes=volume.usage_size_bytes,
+    )
+
+
+def create_expected_compose_service_payload(
+    service: ExpectedComposeService,
+) -> ExpectedComposeServicePayload:
+    """Convert inferred Compose service identity into an MCP payload row."""
+
+    return ExpectedComposeServicePayload(
+        source_key=service.source_key,
+        compose_project=service.compose_project,
+        service_name=service.service_name,
+    )
+
+
+def create_compose_running_mount_payload(
+    mount: ComposeRunningMount,
+) -> ComposeRunningMountPayload:
+    """Convert redacted running mount metadata into an MCP payload row."""
+
+    return ComposeRunningMountPayload(
+        type=mount.type,
+        destination=mount.destination,
+        mode=mount.mode,
+        rw=mount.rw,
+        name=mount.name,
+        source_redacted=mount.source_redacted,
+    )
+
+
+def create_compose_running_container_payload(
+    container: ComposeRunningContainer,
+) -> ComposeRunningContainerPayload:
+    """Convert one matched running container into an MCP payload row."""
+
+    return ComposeRunningContainerPayload(
+        container_id=container.container_id,
+        container_name=container.container_name,
+        image=container.image,
+        docker_status=container.docker_status,
+        health_status=container.health_status,
+        running=container.running,
+        compose_labels=container.compose_labels,
+        service_name=container.service_name,
+        ports=container.ports,
+        mount_destinations=container.mount_destinations,
+        volume_names=container.volume_names,
+        env_var_names=container.env_var_names,
+        mounts=[create_compose_running_mount_payload(mount) for mount in container.mounts],
+    )
+
+
+def create_compose_state_warning_payload(
+    warning: ComposeStateWarning,
+) -> ComposeStateWarningPayload:
+    """Convert one drift warning into an MCP payload row."""
+
+    return ComposeStateWarningPayload(
+        warning_type=warning.warning_type,
+        service_name=warning.service_name,
+        message=warning.message,
+        expected=warning.expected,
+        actual=warning.actual,
+        container_name=warning.container_name,
+    )
+
+
+def create_project_compose_state_payload(
+    inspection: ComposeStateInspection,
+) -> InspectProjectComposeStatePayload:
+    """Convert Compose runtime state into the MCP response payload."""
+
+    return InspectProjectComposeStatePayload(
+        action="inspect_project_compose_state",
+        project_name=inspection.project_name,
+        compose_project=inspection.compose_project,
+        expected_services=[
+            create_expected_compose_service_payload(service)
+            for service in inspection.expected_services
+        ],
+        running_containers=[
+            create_compose_running_container_payload(container)
+            for container in inspection.running_containers
+        ],
+        warnings=[create_compose_state_warning_payload(warning) for warning in inspection.warnings],
+    )
+
+
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
+)
+async def inspect_vps_containers() -> ToolResult:
+    """Return a bounded Docker ps-style inventory for visible VPS containers."""
+
+    containers = docker_service.inspect_vps_containers()
+    if isinstance(containers, DockerServiceError):
+        return build_container_inspection_error_result(
+            action="inspect_vps_containers",
+            message=containers.message,
+            requested_project_name=None,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    payload = InspectVpsContainersPayload(
+        action="inspect_vps_containers",
+        container_count=len(containers),
+        truncated=len(containers) >= MAX_VPS_CONTAINERS,
+        containers=[create_vps_container_inventory_payload(item) for item in containers],
+    )
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_vps_containers",
+            "container_count": payload.container_count,
+            "truncated": payload.truncated,
+        },
+    )
+    return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
+
+
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
+)
+async def inspect_vps_volumes(
+    dangling_only: bool = False,
+    anonymous_only: bool = False,
+    name_prefix: str | None = None,
+) -> ToolResult:
+    """Return a bounded Docker volume ls-style inventory for visible VPS volumes."""
+
+    volumes = docker_service.inspect_vps_volumes(
+        dangling_only=dangling_only,
+        anonymous_only=anonymous_only,
+        name_prefix=name_prefix,
+    )
+    if isinstance(volumes, DockerServiceError):
+        return build_container_inspection_error_result(
+            action="inspect_vps_volumes",
+            message=volumes.message,
+            requested_project_name=None,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    payload = InspectVpsVolumesPayload(
+        action="inspect_vps_volumes",
+        filters={
+            "dangling_only": dangling_only,
+            "anonymous_only": anonymous_only,
+            "name_prefix": name_prefix,
+        },
+        volume_count=len(volumes),
+        truncated=len(volumes) >= MAX_VPS_VOLUMES,
+        volumes=[create_vps_volume_inventory_payload(item) for item in volumes],
+    )
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_vps_volumes",
+            "volume_count": payload.volume_count,
+            "truncated": payload.truncated,
+        },
+    )
+    return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
+
+
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION,
+)
+@project_authorized_tool
+async def inspect_project_compose_state(
+    project_name: str | None = None,
+) -> ToolResult:
+    """Inspect Compose state by matching manifest targets to Docker labels."""
+
+    assert project_name is not None
+    manifest = _get_authorized_manifest(project_name)
+    if manifest is None:
+        manifest_error = _build_unknown_project_manifest_error(project_name)
+        return build_container_inspection_error_result(
+            action="inspect_project_compose_state",
+            message=manifest_error.message,
+            requested_project_name=project_name,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    containers = docker_service.inspect_vps_containers()
+    if isinstance(containers, DockerServiceError):
+        return build_container_inspection_error_result(
+            action="inspect_project_compose_state",
+            message=containers.message,
+            requested_project_name=project_name,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    inspection = compose_state_service.compare(
+        project_name=manifest.project_key,
+        sources=manifest.sources,
+        running_containers=containers,
+    )
+    if isinstance(inspection, ComposeStateUnavailable):
+        return build_container_inspection_error_result(
+            action="inspect_project_compose_state",
+            message=inspection.message,
+            requested_project_name=project_name,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    payload = create_project_compose_state_payload(inspection)
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_project_compose_state",
+            "project_name": payload.project_name,
+            "expected_service_count": len(payload.expected_services),
+            "running_container_count": len(payload.running_containers),
+            "warning_count": len(payload.warnings),
+        },
+    )
+    return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
+
+
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def inspect_containers_health(
@@ -488,9 +818,9 @@ async def inspect_containers_health(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def inspect_container_detail(
@@ -537,9 +867,9 @@ async def inspect_container_detail(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def stat_container_path(
@@ -598,9 +928,9 @@ async def stat_container_path(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=READ_CONTAINER_FILE_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=READ_CONTAINER_FILE_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def read_container_file(
@@ -692,9 +1022,9 @@ async def read_container_file(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def list_container_directory(
