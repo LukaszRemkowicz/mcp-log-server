@@ -53,6 +53,7 @@ force-exclude = '''
 [tool.isort]
 profile = "black"
 line_length = 100
+known_third_party = ["docker", "requests"]
 
 [tool.mypy]
 python_version = "3.13"
