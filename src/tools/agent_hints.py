@@ -97,8 +97,8 @@ READ_PROJECT_MANIFEST_TOOL_DESCRIPTION = (
     "Read the persisted manifest contract for one authorized project, optionally "
     "filtered to one source_key. Returns project summary, static asset hints, "
     "source keys, configured source targets, parser and normalization profiles, "
-    "retention class, noise profile, inspect path prefixes, Compose metadata, "
-    "and required-source flags without inspecting live runtime state."
+    "retention class, noise profile, inspect path prefixes, and required-source "
+    "flags without inspecting live runtime state."
 )
 
 INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION = (
@@ -196,6 +196,14 @@ LIST_PROJECT_DIRECTORY_TOOL_DESCRIPTION = (
     "like a bounded ls -la view. If path is omitted, the tool lists the selected "
     "file source parent directory. Directory listings are non-recursive and "
     "prevent traversal and symlink escapes."
+)
+
+INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION = (
+    "Inspect Docker Compose runtime state for one authorized project by matching "
+    "manifest docker source targets to current Docker Compose labels. Returns "
+    "inferred Compose services, matching containers, status, ports, mounts, "
+    "volumes, environment variable names, and runtime-shape warnings. This tool "
+    "does not parse Compose files, expose env values, or mutate Docker state."
 )
 
 LOG_ANALYSIS_CAUTIONS = [

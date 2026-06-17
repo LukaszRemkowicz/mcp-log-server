@@ -76,6 +76,7 @@ WORKSPACE_AGNOSTIC_TOOLS = frozenset(
         "get_mcp_health_check",
         "get_mcp_service_status",
         "inspect_live_fail2ban_activity",
+        "inspect_project_compose_state",
         "inspect_tls_certificate",
         "list_projects",
         "list_project_directory",

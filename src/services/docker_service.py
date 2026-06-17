@@ -111,6 +111,7 @@ class ContainerDetailMount:
     destination: str | None
     mode: str | None
     rw: bool | None
+    name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,6 +199,8 @@ class VpsContainerInventory:
     ports: list[ContainerDetailPort]
     network_names: list[str]
     triage_notes: list[str]
+    env_var_names: list[str] = field(default_factory=list)
+    mounts: list[ContainerDetailMount] = field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
@@ -729,6 +732,8 @@ class DockerService:
             ports=ports,
             network_names=sorted(network.name for network in networks),
             triage_notes=self._build_container_triage_notes(health),
+            env_var_names=self._extract_env_var_names(config.get("Env")),
+            mounts=self._extract_mounts(attrs.get("Mounts") if isinstance(attrs, dict) else None),
         )
 
     def _parse_vps_volume_inventory(self, attrs: object) -> VpsVolumeInventory:
@@ -988,6 +993,7 @@ class DockerService:
                     ),
                     mode=str(item.get("Mode")) if item.get("Mode") is not None else None,
                     rw=item.get("RW") if isinstance(item.get("RW"), bool) else None,
+                    name=str(item.get("Name")) if item.get("Name") is not None else None,
                 )
             )
         return results

@@ -69,6 +69,10 @@ SNAPSHOT_TOOL_CALLS: tuple[ToolCall, ...] = (
 )
 CONTAINER_TOOL_CALLS: tuple[ToolCall, ...] = (
     (
+        "inspect_project_compose_state",
+        {"project_name": "dockerpage"},
+    ),
+    (
         "inspect_containers_health",
         {"project_name": "dockerpage"},
     ),
@@ -305,6 +309,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
             },
             {
                 "inspect_containers_health",
+                "inspect_project_compose_state",
                 "inspect_vps_containers",
                 "inspect_vps_volumes",
                 "inspect_container_detail",
@@ -342,6 +347,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "list_projects",
                 "read_project_manifest",
                 "inspect_containers_health",
+                "inspect_project_compose_state",
                 "inspect_vps_containers",
                 "inspect_vps_volumes",
                 "inspect_container_detail",
@@ -558,7 +564,7 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
             "tools.container_inspection.docker_service.inspect_container_health",
             return_value=ContainerHealth(
                 container_id="abc123def456",
-                container_name="app-container",
+                container_name="backend-container",
                 image="portfolio/backend:2026-05-16",
                 docker_status="running",
                 health_status="healthy",
@@ -626,6 +632,44 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
                 ],
                 False,
             ),
+        )
+    if tool_name == "inspect_project_compose_state":
+        mocker.patch(
+            "tools.container_inspection.docker_service.inspect_vps_containers",
+            return_value=[
+                VpsContainerInventory(
+                    container_id="abc123def4567890",
+                    short_container_id="abc123def456",
+                    container_name="app-container",
+                    image="portfolio/backend:2026-05-16",
+                    command=[],
+                    command_preview="",
+                    created_at=None,
+                    docker_status="running",
+                    state="running",
+                    health_status="healthy",
+                    running=True,
+                    restarting=False,
+                    paused=False,
+                    dead=False,
+                    exit_code=0,
+                    error="",
+                    restart_count=0,
+                    started_at=None,
+                    finished_at=None,
+                    compose_labels={
+                        "com.docker.compose.project": "dockerpage",
+                        "com.docker.compose.service": "backend",
+                    },
+                    restart_policy=ContainerRestartPolicy(
+                        name="unless-stopped",
+                        maximum_retry_count=0,
+                    ),
+                    ports=[],
+                    network_names=[],
+                    triage_notes=[],
+                )
+            ],
         )
 
     request_data = {
@@ -1875,8 +1919,6 @@ async def test_read_project_manifest_api_returns_authorized_manifest_contract(
     assert backend_source["default_noise_profile"] == "backend_noise"
     assert backend_source["stream"] is None
     assert backend_source["inspect_path_prefixes"] == []
-    assert backend_source["compose_project"] is None
-    assert backend_source["compose_service"] is None
     assert "id" not in payload
     assert "created_at" not in payload
     assert "updated_at" not in payload
@@ -2649,6 +2691,144 @@ async def test_stat_container_path_api_returns_file_metadata(
     assert payload["path"] == "/app/VERSION"
     assert payload["file"]["name"] == "VERSION"
     assert payload["file"]["size"] == 12
+
+
+async def test_inspect_project_compose_state_api_returns_comparison(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify compose-state inspection returns runtime-derived Compose state."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+    mocker.patch(
+        "tools.container_inspection.docker_service.inspect_vps_containers",
+        return_value=[
+            VpsContainerInventory(
+                container_id="abc123def4567890",
+                short_container_id="abc123def456",
+                container_name="app-container",
+                image="portfolio/backend:2026-05-17",
+                command=[],
+                command_preview="",
+                created_at=None,
+                docker_status="running",
+                state="running",
+                health_status="healthy",
+                running=True,
+                restarting=False,
+                paused=False,
+                dead=False,
+                exit_code=0,
+                error="",
+                restart_count=0,
+                started_at=None,
+                finished_at=None,
+                compose_labels={
+                    "com.docker.compose.project": "dockerpage",
+                    "com.docker.compose.service": "backend",
+                },
+                restart_policy=ContainerRestartPolicy(
+                    name="unless-stopped",
+                    maximum_retry_count=0,
+                ),
+                ports=[
+                    ContainerDetailPort(
+                        private_port="8000/tcp",
+                        host_ip="127.0.0.1",
+                        host_port="18080",
+                    )
+                ],
+                network_names=[],
+                triage_notes=[],
+                env_var_names=["SECRET_KEY"],
+                mounts=[
+                    ContainerDetailMount(
+                        type="volume",
+                        destination="/app",
+                        mode="rw",
+                        rw=True,
+                        name="dockerpage_static",
+                    )
+                ],
+            )
+        ],
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-project-compose-state",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_project_compose_state",
+                "arguments": {"project_name": "dockerpage"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_project_compose_state"
+    assert payload["project_name"] == "dockerpage"
+    assert payload["compose_project"] == "dockerpage"
+    assert payload["expected_services"][0] == {
+        "source_key": "backend",
+        "compose_project": "dockerpage",
+        "service_name": "backend",
+    }
+    assert payload["running_containers"][0]["mounts"][0]["source_redacted"] is True
+    assert payload["running_containers"][0]["volume_names"] == ["dockerpage_static"]
+    assert payload["warnings"] == []
+    assert "hidden" not in json.dumps(payload)
+
+
+async def test_inspect_project_compose_state_api_requires_expected_state(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify compose-state inspection requires labelled target containers."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+    mocker.patch(
+        "tools.container_inspection.docker_service.inspect_vps_containers",
+        return_value=[],
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-project-compose-state-unavailable",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_project_compose_state",
+                "arguments": {"project_name": "dockerpage"},
+            },
+        },
+    )
+
+    result = response.json()["result"]
+    payload = result["structuredContent"]
+
+    assert response.status_code == 200
+    assert result["isError"] is True
+    assert payload["action"] == "inspect_project_compose_state"
+    assert payload["error_code"] == "compose_expected_state_unavailable"
 
 
 @pytest.mark.parametrize(

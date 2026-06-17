@@ -157,5 +157,7 @@ Preview the Docker Compose command without running it:
 uv run command --dry-run generate-dev-jwt
 ```
 
-Production commands read the deployed tag from `current_tag` under the
-production state directory and pass it into Docker Compose for image selection.
+Production commands read the deployed tag from
+`/var/lib/mcp-log-server/prod/current_tag` and pass it into Docker Compose for
+image selection. Set `TAG=vX.Y.Z` explicitly to run a command against a
+specific production image before or outside the recorded deployment state.

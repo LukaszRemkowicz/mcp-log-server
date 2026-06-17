@@ -4,6 +4,7 @@ import pytest
 from pytest_mock import MockerFixture
 
 from manifests.models import SourceDefinition
+from services.compose_state_service import ComposeStateService, ComposeStateUnavailable
 from services.docker_service import (
     ContainerDetail,
     ContainerDetailEnvVar,
@@ -831,6 +832,16 @@ def test_inspect_vps_containers_returns_bounded_docker_ps_inventory(
             ],
             network_names=["web"],
             triage_notes=["health_status=unhealthy", "restart_count=8"],
+            env_var_names=["SECRET_KEY"],
+            mounts=[
+                ContainerDetailMount(
+                    type=None,
+                    destination="/app",
+                    mode=None,
+                    rw=None,
+                    name=None,
+                )
+            ],
         ),
         VpsContainerInventory(
             container_id="def456abc1237890",
@@ -874,6 +885,178 @@ def test_inspect_vps_containers_returns_empty_inventory(
     result = DockerService().inspect_vps_containers()
 
     assert result == []
+
+
+def test_compose_state_service_compares_expected_and_running_state() -> None:
+    """Verify Compose service identity is inferred from target container labels."""
+
+    sources = [
+        SourceDefinition(
+            source_key="backend",
+            source_type="docker",
+            target="backend-container",
+            description="Backend container.",
+            parser_type="plain_text",
+            normalization_profile="app",
+            retention_class="short",
+        ),
+        SourceDefinition(
+            source_key="worker",
+            source_type="docker",
+            target="worker-container",
+            description="Worker container.",
+            parser_type="plain_text",
+            normalization_profile="app",
+            retention_class="short",
+        ),
+    ]
+    running = [
+        VpsContainerInventory(
+            container_id="abc123def4567890",
+            short_container_id="abc123def456",
+            container_name="backend-container",
+            image="portfolio/backend:2026-05-17",
+            command=[],
+            command_preview="",
+            created_at=None,
+            docker_status="running",
+            state="running",
+            health_status="healthy",
+            running=True,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=0,
+            started_at=None,
+            finished_at=None,
+            compose_labels={
+                "com.docker.compose.project": "portfolio",
+                "com.docker.compose.service": "backend",
+            },
+            restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
+            ports=[
+                ContainerDetailPort(
+                    private_port="8000/tcp",
+                    host_ip="127.0.0.1",
+                    host_port="18080",
+                )
+            ],
+            network_names=[],
+            triage_notes=[],
+            env_var_names=["DJANGO_SETTINGS_MODULE", "SECRET_KEY"],
+            mounts=[
+                ContainerDetailMount(
+                    type="volume",
+                    destination="/app",
+                    mode="rw",
+                    rw=True,
+                    name="portfolio_static",
+                )
+            ],
+        ),
+        VpsContainerInventory(
+            container_id="def456abc1237890",
+            short_container_id="def456abc123",
+            container_name="worker-container",
+            image="portfolio/worker:2026-05-17",
+            command=[],
+            command_preview="",
+            created_at=None,
+            docker_status="exited",
+            state="exited",
+            health_status=None,
+            running=False,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=0,
+            started_at=None,
+            finished_at=None,
+            compose_labels={
+                "com.docker.compose.project": "portfolio",
+                "com.docker.compose.service": "worker",
+            },
+            restart_policy=ContainerRestartPolicy(name=None, maximum_retry_count=None),
+            ports=[],
+            network_names=[],
+            triage_notes=[],
+        ),
+        VpsContainerInventory(
+            container_id="ghi789abc1234560",
+            short_container_id="ghi789abc123",
+            container_name="extra-container",
+            image="portfolio/extra:2026-05-16",
+            command=[],
+            command_preview="",
+            created_at=None,
+            docker_status="running",
+            state="running",
+            health_status=None,
+            running=True,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=0,
+            started_at=None,
+            finished_at=None,
+            compose_labels={
+                "com.docker.compose.project": "portfolio",
+                "com.docker.compose.service": "extra",
+            },
+            restart_policy=ContainerRestartPolicy(name=None, maximum_retry_count=None),
+            ports=[],
+            network_names=[],
+            triage_notes=[],
+        ),
+    ]
+
+    result = ComposeStateService().compare(
+        project_name="landingpage",
+        sources=sources,
+        running_containers=running,
+    )
+
+    assert not isinstance(result, ComposeStateUnavailable)
+    assert result.compose_project == "portfolio"
+    assert [service.service_name for service in result.expected_services] == [
+        "backend",
+        "worker",
+    ]
+    assert result.running_containers[0].mounts[0].source_redacted is True
+    assert result.warnings[0].warning_type.__class__.__name__ == "ComposeStateWarningType"
+    assert {warning.warning_type for warning in result.warnings} == {
+        "expected_service_not_running",
+        "unexpected_running_service",
+    }
+
+
+def test_compose_state_service_returns_unavailable_without_expected_state() -> None:
+    """Verify the compose comparison needs a target container with Compose labels."""
+
+    source = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="backend-container",
+        description="Backend container.",
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+    )
+
+    result = ComposeStateService().compare(
+        project_name="landingpage",
+        sources=[source],
+        running_containers=[],
+    )
+
+    assert isinstance(result, ComposeStateUnavailable)
+    assert "matched a Compose-labelled container" in result.message
 
 
 def test_inspect_vps_volumes_returns_redacted_inventory(

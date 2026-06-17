@@ -827,16 +827,14 @@ def test_collect_source_resolves_compose_project_service_target(
 
 def test_resolve_docker_log_container_returns_stream_target_name() -> None:
     gateway = FakeDockerLogGateway()
-    gateway.resolved_by_project_service[("portfolio-stage", "be")] = ResolvedDockerContainer(
-        name="portfolio-stage-be-1",
+    gateway.resolved_by_name["configured-container"] = ResolvedDockerContainer(
+        name="configured-container",
         created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
     )
     definition = SourceDefinition(
         source_key="backend",
         source_type="docker",
         target="configured-container",
-        compose_project="portfolio-stage",
-        compose_service="be",
         description="Backend logs.",
         required=True,
         parser_type="plain_text",
@@ -850,7 +848,41 @@ def test_resolve_docker_log_container_returns_stream_target_name() -> None:
 
     resolved_target = service._resolve_docker_log_container(definition)
 
-    assert resolved_target == "portfolio-stage-be-1"
+    assert resolved_target == "configured-container"
+
+
+def test_resolve_docker_log_container_prefers_compose_service_identity() -> None:
+    gateway = FakeDockerLogGateway()
+    gateway.resolved_by_name["configured-container"] = ResolvedDockerContainer(
+        name="wrong-container",
+        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
+    )
+    gateway.resolved_by_project_service[("portfolio", "backend")] = ResolvedDockerContainer(
+        name="portfolio-backend-1",
+        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
+    )
+    definition = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="configured-container",
+        description="Backend logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="backend",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream="stdout",
+        compose_project="portfolio",
+        compose_service="backend",
+    )
+
+    service = LogCollectionService(docker_log_gateway=gateway)
+
+    resolved_target = service._resolve_docker_log_container(definition)
+
+    assert resolved_target == "portfolio-backend-1"
+    assert gateway.project_service_calls == [("portfolio", "backend")]
+    assert gateway.name_calls == []
 
 
 def test_collect_source_streams_persisted_file_logs_to_output_file(tmp_path) -> None:

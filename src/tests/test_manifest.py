@@ -62,8 +62,6 @@ def test_container_source_lookup_requires_manifest_source_key() -> None:
         normalization_profile="app",
         retention_class="short",
         inspect_path_prefixes=["/app"],
-        compose_project="portfolio",
-        compose_service="backend",
     )
     manifest = Manifest(
         project_key="portfolio",

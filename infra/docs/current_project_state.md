@@ -130,6 +130,7 @@ Currently implemented tools:
 - `get_mcp_health_check`
 - `inspect_containers_health`
 - `inspect_container_detail`
+- `inspect_project_compose_state`
 - `stat_container_path`
 - `read_container_file`
 - `list_container_directory`
@@ -250,6 +251,12 @@ File source targets must be absolute paths as seen by the MCP container. In
 production Compose, host `/var/log` is mounted at `/host/var/log`, and host
 `/etc/nginx/logs` is mounted at `/host/etc/nginx/logs`. Manifest targets are
 literal paths; MCP does not expand dated filename templates.
+
+`inspect_project_compose_state` uses manifest docker source targets and current
+Docker runtime labels/metadata only. It can report inferred Compose service
+identity, running containers, ports, mounts, volumes, env var names, and
+runtime-shape warnings, but it does not read Compose files or validate desired
+image/port/mount/volume/env configuration.
 
 ## Current Docker Paths
 

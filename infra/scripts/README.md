@@ -179,11 +179,14 @@ Deploy behavior:
 - starts the app service with `--force-recreate` so the selected image is rerun
 - waits for Docker to mark the app service healthy through the unauthenticated
   `/healthz` liveness endpoint
-- records the deployed tag under the script state directory after health passes
+- records the deployed tag under `/var/lib/mcp-log-server/prod/current_tag`
+  after health passes
 
 After deploy records `current_tag`, host-side `uv run shell` and
 `uv run command ...` helpers use that tag as the default `TAG` when the caller
-does not provide one.
+does not provide one. Set `TAG=vX.Y.Z` explicitly to run a host-side command
+against a specific production image before or outside the recorded deployment
+state.
 
 Production Postgres data is stored in the Compose-managed `postgres-data`
 Docker volume. Keep database backups current before Docker volume cleanup or

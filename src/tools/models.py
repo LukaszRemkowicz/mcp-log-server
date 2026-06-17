@@ -198,8 +198,6 @@ class ProjectManifestSourcePayload(BaseModel):
     default_noise_profile: str | None
     stream: Literal["stdout", "stderr"] | None
     inspect_path_prefixes: list[str]
-    compose_project: str | None
-    compose_service: str | None
 
 
 class ReadProjectManifestPayload(BaseModel):
@@ -466,7 +464,7 @@ class Fail2banJailStatusPayload(BaseModel):
 
 
 class InspectLiveFail2banActivityPayload(BaseModel):
-    """TODO(post-MVP): response for live fail2ban runtime diagnostics."""
+    """Structured response returned by `inspect_live_fail2ban_activity`."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -794,6 +792,75 @@ class InspectVpsVolumesPayload(BaseModel):
     volume_count: int
     truncated: bool
     volumes: list[VpsVolumeInventoryPayload]
+
+
+class ExpectedComposeServicePayload(BaseModel):
+    """Expected Compose service identity inferred from runtime labels."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_key: str
+    compose_project: str
+    service_name: str
+
+
+class ComposeRunningMountPayload(BaseModel):
+    """Redacted running mount metadata for Compose comparison."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: str | None
+    destination: str | None
+    mode: str | None
+    rw: bool | None
+    name: str | None
+    source_redacted: bool
+
+
+class ComposeRunningContainerPayload(BaseModel):
+    """Running Docker container facts matched through Compose labels."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    container_id: str
+    container_name: str
+    image: str | None
+    docker_status: str | None
+    health_status: str | None
+    running: bool
+    compose_labels: dict[str, str]
+    service_name: str | None
+    ports: list[str]
+    mount_destinations: list[str]
+    volume_names: list[str]
+    env_var_names: list[str]
+    mounts: list[ComposeRunningMountPayload]
+
+
+class ComposeStateWarningPayload(BaseModel):
+    """One expected-vs-running drift warning."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    warning_type: str
+    service_name: str | None
+    message: str
+    expected: str | None
+    actual: str | None
+    container_name: str | None
+
+
+class InspectProjectComposeStatePayload(BaseModel):
+    """Structured success payload returned by `inspect_project_compose_state`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_project_compose_state"]
+    project_name: str
+    compose_project: str | None
+    expected_services: list[ExpectedComposeServicePayload]
+    running_containers: list[ComposeRunningContainerPayload]
+    warnings: list[ComposeStateWarningPayload]
 
 
 class ContainerDetailMountPayload(BaseModel):

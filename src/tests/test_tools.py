@@ -26,6 +26,7 @@ from tools.agent_hints import (
     INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
     INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
     INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION,
+    INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION,
     INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
     INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION,
     INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
@@ -75,6 +76,7 @@ def test_application_registers_expected_mcp_components(
         assert "read_project_manifest" in tool_names
         assert "inspect_vps_containers" in tool_names
         assert "inspect_vps_volumes" in tool_names
+        assert "inspect_project_compose_state" in tool_names
         assert "inspect_containers_health" in tool_names
         assert "inspect_container_detail" in tool_names
         assert "stat_container_path" in tool_names
@@ -185,6 +187,9 @@ def test_application_registers_expected_mcp_components(
         assert all(
             item["tool_name"] != "list_project_directory" for item in bootstrap_text["tools"]
         )
+        assert all(
+            item["tool_name"] != "inspect_project_compose_state" for item in bootstrap_text["tools"]
+        )
         collect_logs_tool = next(
             item for item in bootstrap_text["tools"] if item["tool_name"] == "collect_logs"
         )
@@ -264,6 +269,10 @@ def test_application_registers_expected_mcp_components(
         assert app_tls_tool.description == INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION
         app_manifest_tool = next(tool for tool in tools if tool.name == "read_project_manifest")
         assert app_manifest_tool.description == READ_PROJECT_MANIFEST_TOOL_DESCRIPTION
+        app_compose_state_tool = next(
+            tool for tool in tools if tool.name == "inspect_project_compose_state"
+        )
+        assert app_compose_state_tool.description == INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION
         workflow_followup_tool = next(
             item
             for item in bootstrap_text["tools"]
@@ -293,6 +302,7 @@ def test_application_registers_expected_mcp_components(
             "inspect_proxy_activity",
             "inspect_vps_containers",
             "inspect_vps_volumes",
+            "inspect_project_compose_state",
             "inspect_containers_health",
             "stat_container_path",
             "read_container_file",
