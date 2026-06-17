@@ -26,17 +26,15 @@ consumer app
   -> /var/run/docker.sock
 ```
 
-Default socket path:
+The socket path comes from `DOCKER_SOCKET_APP_SOCKET_PATH`. In this repository's
+Compose files, both the MCP app and this app use:
 
 ```text
-/run/docker-socket-app/docker.sock
+/run/docker-socket-app/gateway.sock
 ```
 
-Override it with:
-
-```text
-DOCKER_SOCKET_APP_SOCKET_PATH=/path/to/docker.sock
-```
+The socket file is created by `docker-socket-app`. A consuming app only needs
+the shared directory that contains that socket file.
 
 ## Protocol
 
@@ -183,7 +181,7 @@ Build the container image from the repository root:
 docker build -f docker/docker-socket-app/Dockerfile -t docker-socket-app .
 ```
 
-Run locally with a short socket path:
+Run locally with an explicit socket path:
 
 ```bash
 DOCKER_SOCKET_APP_SOCKET_PATH=/tmp/docker-socket-app.sock \

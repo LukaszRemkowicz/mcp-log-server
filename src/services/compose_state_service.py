@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from manifests.models import SourceDefinition
-from services.docker_service import ContainerDetailPort, VpsContainerInventory
+from services.inspection_tools_service import ContainerDetailPort, VpsContainerInventory
 
 COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 COMPOSE_SERVICE_LABEL = "com.docker.compose.service"

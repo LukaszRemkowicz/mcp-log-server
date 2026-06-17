@@ -40,6 +40,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      docker-socket-app:
+        condition: service_started
     volumes:
       - ./src:/app/src
       - ./migrations:/app/migrations
@@ -54,11 +56,10 @@ services:
         source: ${AGENT_MONITORING_LOGS_HOST_PATH:-../agent-monitoring/logs}
         target: /host/var/log/agent-monitoring
         read_only: true
-      - /var/run/docker.sock:/var/run/docker.sock
-    group_add:
-      - "${DOCKER_SOCKET_GID:-0}"
+      - docker-socket-app-run:/run/docker-socket-app
     environment:
       LOGS_DIR: ${LOGS_DIR:-/app/logs}
+      DOCKER_SOCKET_APP_SOCKET_PATH: /run/docker-socket-app/gateway.sock
       DATABASE_HOST: db
       DATABASE_PORT: 5432
       DATABASE_NAME: ${DATABASE_NAME:-mcp_log_server}
@@ -92,6 +93,20 @@ services:
         "uv run migrate && uv run watchfiles --filter all 'python -m main' /app/src",
       ]
 
+  docker-socket-app:
+    build:
+      context: .
+      dockerfile: docker/docker-socket-app/Dockerfile
+      target: production
+    restart: unless-stopped
+    environment:
+      DOCKER_SOCKET_APP_SOCKET_PATH: /run/docker-socket-app/gateway.sock
+    volumes:
+      - docker-socket-app-run:/run/docker-socket-app
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_SOCKET_GID:-0}"
+
   test:
     env_file:
       - path: .env
@@ -112,6 +127,7 @@ services:
       - ./logs:/app/logs
     environment:
       LOGS_DIR: /app/logs
+      DOCKER_SOCKET_APP_SOCKET_PATH: /tmp/docker-socket-app-test.sock
       DATABASE_HOST: db
       DATABASE_PORT: 5432
       DATABASE_NAME: mcp_log_server_test
@@ -132,3 +148,4 @@ services:
 volumes:
   postgres-data:
     name: mcp-local_postgres-data
+  docker-socket-app-run:

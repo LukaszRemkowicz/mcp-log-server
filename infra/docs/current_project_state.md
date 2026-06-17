@@ -50,6 +50,8 @@ The repository currently includes:
 - workflow bootstrap through `analyze_daily_log_bundle`
 - on-demand workflow skill resources
 - local Docker development and production compose paths
+- Docker access through a separate Unix-socket app instead of mounting
+  `/var/run/docker.sock` into the MCP app
 - local PostgreSQL runtime wiring
 - Tortoise ORM and Aerich migration configuration
 - database migrations generated through the local `uv run makemigrations` alias
@@ -274,8 +276,12 @@ Characteristics:
 - bind-mounts `./src`
 - applies committed migrations with `uv run migrate`, then uses `watchfiles`
 - includes `app`, `db`, and `test` services
+- includes `docker-socket-app` for Docker-backed reads
 - uses the official `postgres:18` image for the `db` service
 - persists local database data in the named `mcp-local_postgres-data` Docker volume
+- mounts `/var/run/docker.sock` only into `docker-socket-app`, not into `app`
+- shares `/run/docker-socket-app` between `app` and `docker-socket-app` through
+  the `docker-socket-app-run` named volume
 - binds published service ports to `127.0.0.1` to avoid VPS-wide port exposure
 - uses host port `5437` for local MCP Postgres by default, leaving
   `landingpage`'s local `5436` binding separate
@@ -292,9 +298,12 @@ Characteristics:
 
 - no bind mounts
 - no file watching
-- runs `app` and `db` services
+- runs `app`, `db`, and `docker-socket-app` services
 - uses the official `postgres:18` image for the `db` service
 - persists database data in the Compose-managed `postgres-data` Docker volume
+- mounts `/var/run/docker.sock` only into `docker-socket-app`, not into `app`
+- shares `/run/docker-socket-app` between `app` and `docker-socket-app` through
+  the `docker-socket-app-run` named volume
 - binds the MCP HTTP host port to `127.0.0.1`
 - starts with `uv run python -m main`
 

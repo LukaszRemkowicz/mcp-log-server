@@ -37,6 +37,8 @@ LOG_SNAPSHOT_RETENTION = "7d"
 FAIL2BAN_SOCKET_PATH = Path(
     env.str("FAIL2BAN_SOCKET_PATH", default="/var/run/fail2ban/fail2ban.sock")
 )
+DOCKER_SOCKET_APP_SOCKET_PATH = Path(env.str("DOCKER_SOCKET_APP_SOCKET_PATH"))
+DOCKER_SOCKET_APP_TIMEOUT_SECONDS = 15
 FAIL2BAN_CLIENT_COMMAND = "fail2ban-client"
 FAIL2BAN_JAILS = ["portfolio-nginx-probes", "portfolio-traefik-probes"]
 FAIL2BAN_COMMAND_TIMEOUT_SECONDS = 5

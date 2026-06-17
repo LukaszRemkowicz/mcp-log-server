@@ -36,7 +36,17 @@ class DockerBackendError(RuntimeError):
 
 
 class DockerSdkAdapter(DockerBackend):
-    """Run fixed Docker SDK operations."""
+    """Run the socket app's fixed read-only operations with the Docker SDK.
+
+    This adapter is the only layer that touches the real Docker daemon. It is
+    deliberately narrower than the Docker SDK itself: each public method maps
+    to one supported socket operation, returns a JSON-serializable dictionary,
+    and avoids Docker mutation APIs.
+
+    Container file and directory reads use bounded `exec_run` calls with
+    explicit command arguments. They are not a generic shell feature; callers
+    cannot provide arbitrary commands through the socket protocol.
+    """
 
     def __init__(self, client: Any | None = None) -> None:
         self.client = client or from_env(timeout=DOCKER_TIMEOUT_SECONDS)
@@ -53,9 +63,9 @@ class DockerSdkAdapter(DockerBackend):
 
         kwargs: dict[str, Any] = {}
         if since is not None:
-            kwargs["since"] = since
+            kwargs["since"] = self._parse_log_timestamp(since, "since")
         if until is not None:
-            kwargs["until"] = until
+            kwargs["until"] = self._parse_log_timestamp(until, "until")
         if tail is not None:
             kwargs["tail"] = tail
 
@@ -88,6 +98,20 @@ class DockerSdkAdapter(DockerBackend):
             lines.append(raw.decode("utf-8", errors="replace").rstrip("\n"))
         return {"container_name": container_name, "logs": lines, "truncated": truncated}
 
+    @staticmethod
+    def _parse_log_timestamp(value: str, param_name: str) -> datetime:
+        """Return a Docker SDK-compatible timestamp from a JSON timestamp string."""
+
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise DockerBackendError(
+                f"Parameter '{param_name}' must be an ISO 8601 timestamp."
+            ) from error
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
+
     def container_health(self, *, container_name: str) -> dict[str, Any]:
         """Return bounded runtime state for one container."""
 
@@ -115,6 +139,8 @@ class DockerSdkAdapter(DockerBackend):
             "ports": self._extract_ports(attrs.get("NetworkSettings")),
             "mounts": self._extract_mounts(attrs.get("Mounts")),
             "networks": self._extract_networks(attrs.get("NetworkSettings")),
+            "health_log": self._extract_health_log(attrs.get("State")),
+            "env_vars": self._extract_env_vars(config.get("Env")),
         }
 
     def container_path_stat(self, *, container_name: str, path: str) -> dict[str, Any]:
@@ -352,7 +378,10 @@ class DockerSdkAdapter(DockerBackend):
             "exit_code": health["exit_code"],
             "error": health["error"],
             "restart_count": health["restart_count"],
+            "started_at": health["started_at"],
+            "finished_at": health["finished_at"],
             "compose_labels": self._extract_compose_labels(config.get("Labels")),
+            "restart_policy": self._extract_restart_policy(attrs_dict.get("HostConfig")),
             "ports": self._extract_ports(attrs_dict.get("NetworkSettings")),
             "network_names": [
                 network["name"]
@@ -360,6 +389,10 @@ class DockerSdkAdapter(DockerBackend):
             ],
             "mounts": self._extract_mounts(attrs_dict.get("Mounts")),
             "env_var_names": self._extract_env_var_names(config.get("Env")),
+            "command_preview": self._build_command_preview(
+                self._extract_string_list(config.get("Cmd"))
+            ),
+            "triage_notes": self._build_container_triage_notes(health),
         }
 
     @staticmethod
@@ -428,6 +461,29 @@ class DockerSdkAdapter(DockerBackend):
         return sorted(names)
 
     @staticmethod
+    def _extract_env_vars(value: object) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        safe_value_names = {"APP_ENV", "ENV", "ENVIRONMENT", "LOG_LEVEL", "NODE_ENV", "PORT"}
+        results = []
+        for item in value:
+            if not isinstance(item, str) or "=" not in item:
+                continue
+            name, raw_value = item.split("=", 1)
+            expose_value = name in safe_value_names
+            results.append(
+                {
+                    "name": name,
+                    "value": raw_value if expose_value else None,
+                    "value_redacted": not expose_value,
+                    "secret": any(
+                        part in name.upper() for part in ("SECRET", "TOKEN", "PASSWORD", "KEY")
+                    ),
+                }
+            )
+        return results
+
+    @staticmethod
     def _extract_compose_labels(value: object) -> dict[str, str]:
         if not isinstance(value, dict):
             return {}
@@ -487,6 +543,23 @@ class DockerSdkAdapter(DockerBackend):
         return results
 
     @staticmethod
+    def _extract_restart_policy(value: object) -> dict[str, Any]:
+        host_config = value if isinstance(value, dict) else {}
+        restart_policy = (
+            host_config.get("RestartPolicy")
+            if isinstance(host_config.get("RestartPolicy"), dict)
+            else {}
+        )
+        return {
+            "name": DockerSdkAdapter._optional_string(restart_policy.get("Name")),
+            "maximum_retry_count": (
+                restart_policy.get("MaximumRetryCount")
+                if isinstance(restart_policy.get("MaximumRetryCount"), int)
+                else None
+            ),
+        }
+
+    @staticmethod
     def _extract_networks(value: object) -> list[dict[str, Any]]:
         network_settings = value if isinstance(value, dict) else {}
         networks = (
@@ -514,3 +587,50 @@ class DockerSdkAdapter(DockerBackend):
         if value is None or value == "":
             return None
         return str(value)
+
+    @staticmethod
+    def _build_command_preview(command: list[str]) -> str:
+        preview = " ".join(command)
+        return preview if len(preview) <= 240 else f"{preview[:240].rstrip()}..."
+
+    @staticmethod
+    def _build_container_triage_notes(health: dict[str, Any]) -> list[str]:
+        notes: list[str] = []
+        if not health.get("running"):
+            notes.append("not_running")
+        if health.get("restarting"):
+            notes.append("restarting")
+        if health.get("paused"):
+            notes.append("paused")
+        if health.get("dead"):
+            notes.append("dead")
+        health_status = health.get("health_status")
+        if health_status not in {None, "healthy"}:
+            notes.append(f"health_status={health_status}")
+        exit_code = health.get("exit_code")
+        if exit_code not in {None, 0}:
+            notes.append(f"exit_code={exit_code}")
+        restart_count = health.get("restart_count")
+        if isinstance(restart_count, int) and restart_count >= 5:
+            notes.append(f"restart_count={restart_count}")
+        return notes
+
+    @staticmethod
+    def _extract_health_log(value: object) -> list[dict[str, Any]]:
+        state = value if isinstance(value, dict) else {}
+        health = state.get("Health") if isinstance(state.get("Health"), dict) else {}
+        raw_entries = health.get("Log") if isinstance(health.get("Log"), list) else []
+        entries = []
+        for item in raw_entries[-5:]:
+            if not isinstance(item, dict):
+                continue
+            output = item.get("Output")
+            entries.append(
+                {
+                    "start": item.get("Start"),
+                    "end": item.get("End"),
+                    "exit_code": item.get("ExitCode"),
+                    "output": str(output)[:4000] if output is not None else None,
+                }
+            )
+        return entries

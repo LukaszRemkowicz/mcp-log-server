@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import re
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel
 
@@ -34,7 +35,7 @@ from utils.log_snapshots import (
     COLLECTION_DIAGNOSTICS_SOURCE_KEY,
 )
 
-from .docker_log_gateway import DockerLogGateway, DockerLogGatewayError, DockerLogGatewayProtocol
+from .docker_socket_gateway import DockerSocketGatewayClient, DockerSocketGatewayError
 from .log_snapshots import LogSnapshotService
 from .session_ids import SESSION_ID_MAX_LENGTH, generate_session_id
 
@@ -50,6 +51,12 @@ _ISO_PREFIX_TIMESTAMP_PATTERN = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)"
 )
 DockerTimeFilter = datetime | int | None
+
+
+class DockerSocketClientProtocol(Protocol):
+    """Fixed-operation socket client contract used by log collection."""
+
+    def request(self, operation: str, params: Mapping[str, object]) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,7 +195,7 @@ class LogCollectionService:
         collect_logs_db_service: CollectLogsDBService | None = None,
         collect_logs_source_db_service: CollectLogsSourceDBService | None = None,
         agent_session_db_service: AgentSessionDBService | None = None,
-        docker_log_gateway: DockerLogGatewayProtocol | None = None,
+        docker_socket_client: DockerSocketClientProtocol | None = None,
     ) -> None:
         self.snapshot_service = LogSnapshotService()
         self.collect_logs_db_service = collect_logs_db_service or CollectLogsDBService()
@@ -196,7 +203,7 @@ class LogCollectionService:
             collect_logs_source_db_service or CollectLogsSourceDBService()
         )
         self.agent_session_db_service = agent_session_db_service or AgentSessionDBService()
-        self.docker_log_gateway = docker_log_gateway
+        self.docker_socket_client = docker_socket_client or DockerSocketGatewayClient()
 
     @staticmethod
     def normalize_params(
@@ -1086,14 +1093,12 @@ class LogCollectionService:
         stream_target = self._resolve_docker_log_container(definition)
         if isinstance(stream_target, SourceCollectionResult):
             return stream_target
-        docker_log_gateway = self._get_docker_log_gateway()
-
         try:
             byte_count = 0
             newline_count = 0
             trailing_byte: bytes = b""
             with output_file.open("wb") as handle:
-                for chunk in docker_log_gateway.stream_logs(
+                for chunk in self._stream_docker_logs(
                     container_name=stream_target,
                     logs_kwargs=logs_kwargs,
                 ):
@@ -1109,7 +1114,7 @@ class LogCollectionService:
                 line_count = newline_count
             else:
                 line_count = newline_count + 1
-        except DockerLogGatewayError as error:
+        except DockerSocketGatewayError as error:
             if error.error_code == "docker_log_timeout":
                 error_message = error.message
                 error_message += (
@@ -1133,8 +1138,7 @@ class LogCollectionService:
         """Resolve the concrete Docker container name used for one docker log source."""
 
         try:
-            docker_log_gateway = self._get_docker_log_gateway()
-            resolved_container = docker_log_gateway.resolve_container_by_name(definition.target)
+            resolved_container = self._resolve_container_by_name(definition.target)
             if resolved_container is None:
                 return self._build_docker_source_error(
                     definition,
@@ -1143,18 +1147,65 @@ class LogCollectionService:
                         "in the current runtime."
                     ),
                 )
-            return resolved_container.name
-        except DockerLogGatewayError as error:
+            return resolved_container
+        except DockerSocketGatewayError as error:
             if error.error_code == "docker_engine_unavailable":
                 return self._build_docker_unavailable_error(definition)
             return self._build_docker_source_error(definition, error=error.message)
 
-    def _get_docker_log_gateway(self) -> DockerLogGatewayProtocol:
-        """Return the configured Docker log gateway, creating the SDK gateway lazily."""
+    def _resolve_container_by_name(self, container_name: str) -> str | None:
+        """Return the newest running container that exactly matches a container name."""
 
-        if self.docker_log_gateway is None:
-            self.docker_log_gateway = DockerLogGateway.from_env()
-        return self.docker_log_gateway
+        payload = self.docker_socket_client.request("vps_containers_inventory", {})
+        containers = payload.get("containers", [])
+        if not isinstance(containers, list):
+            raise DockerSocketGatewayError(message="Docker socket app returned invalid inventory.")
+        exact_matches = [
+            container
+            for container in containers
+            if isinstance(container, dict)
+            and container.get("container_name") == container_name
+            and container.get("running") is True
+        ]
+        if not exact_matches:
+            return None
+        newest = max(exact_matches, key=self._inventory_created_at)
+        return str(newest.get("container_name") or "")
+
+    def _stream_docker_logs(
+        self,
+        *,
+        container_name: str,
+        logs_kwargs: dict[str, int | str | datetime],
+    ):
+        """Yield encoded Docker log lines from the socket app."""
+
+        params: dict[str, object] = {"container_name": container_name}
+        for key in ("since", "until", "tail"):
+            value = logs_kwargs.get(key)
+            if isinstance(value, datetime):
+                params[key] = value.isoformat()
+            elif isinstance(value, (int, str)):
+                params[key] = value
+        payload = self.docker_socket_client.request("container_logs", params)
+        logs = payload.get("logs", [])
+        if not isinstance(logs, list):
+            raise DockerSocketGatewayError(message="Docker socket app returned invalid logs.")
+        for line in logs:
+            yield f"{line}\n".encode()
+
+    @staticmethod
+    def _inventory_created_at(container: dict[str, Any]) -> datetime:
+        raw_created = str(container.get("created_at") or "").strip()
+        if not raw_created:
+            return datetime.min.replace(tzinfo=UTC)
+        try:
+            created_at = datetime.fromisoformat(raw_created.replace("Z", "+00:00"))
+        except ValueError:
+            return datetime.min.replace(tzinfo=UTC)
+        if created_at.tzinfo is None:
+            return created_at.replace(tzinfo=UTC)
+        return created_at.astimezone(UTC)
 
     @staticmethod
     def _build_docker_source_error(

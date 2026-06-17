@@ -10,13 +10,11 @@ from .adapters import DockerSdkAdapter
 from .server import DockerSocketServer
 from .services import DockerSocketService
 
-DEFAULT_SOCKET_PATH = "/run/docker-socket-app/docker.sock"
-
 
 def main() -> None:
     """Start the Unix-socket Docker app."""
 
-    socket_path = Path(os.environ.get("DOCKER_SOCKET_APP_SOCKET_PATH", DEFAULT_SOCKET_PATH))
+    socket_path = Path(os.environ["DOCKER_SOCKET_APP_SOCKET_PATH"])
     service = DockerSocketService(backend=DockerSdkAdapter())
     server = DockerSocketServer(socket_path=socket_path, service=service)
     try:
