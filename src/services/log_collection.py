@@ -1134,22 +1134,6 @@ class LogCollectionService:
 
         try:
             docker_log_gateway = self._get_docker_log_gateway()
-            if definition.compose_project and definition.compose_service:
-                resolved_container = docker_log_gateway.resolve_container_by_project_service(
-                    project_name=definition.compose_project,
-                    service_name=definition.compose_service,
-                )
-                if resolved_container is None:
-                    return self._build_docker_source_error(
-                        definition,
-                        error=(
-                            "No running docker container found for Compose project "
-                            f"{definition.compose_project!r} service "
-                            f"{definition.compose_service!r}."
-                        ),
-                    )
-                return resolved_container.name
-
             resolved_container = docker_log_gateway.resolve_container_by_name(definition.target)
             if resolved_container is None:
                 return self._build_docker_source_error(

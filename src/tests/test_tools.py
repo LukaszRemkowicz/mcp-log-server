@@ -108,6 +108,7 @@ def test_application_registers_expected_mcp_components(
         workflow_token = custom_access_token(
             "workflow-agent",
             [
+                CONTAINER_FILES_READ_SCOPE,
                 WORKFLOW_BOOTSTRAP_SCOPE,
                 LOGS_COLLECT_SCOPE,
                 PROJECTS_READ_SCOPE,
@@ -179,23 +180,38 @@ def test_application_registers_expected_mcp_components(
             item["tool_name"] == "inspect_live_fail2ban_activity"
             for item in bootstrap_text["tools"]
         )
-        assert all(
-            item["tool_name"] != "inspect_tls_certificate" for item in bootstrap_text["tools"]
+        assert any(
+            item["tool_name"] == "inspect_tls_certificate" for item in bootstrap_text["tools"]
         )
-        assert all(item["tool_name"] != "stat_project_path" for item in bootstrap_text["tools"])
-        assert all(item["tool_name"] != "read_project_file" for item in bootstrap_text["tools"])
-        assert all(
-            item["tool_name"] != "list_project_directory" for item in bootstrap_text["tools"]
+        assert any(item["tool_name"] == "read_project_manifest" for item in bootstrap_text["tools"])
+        assert any(
+            item["tool_name"] == "inspect_project_compose_state" for item in bootstrap_text["tools"]
         )
-        assert all(
-            item["tool_name"] != "inspect_project_compose_state" for item in bootstrap_text["tools"]
+        assert any(
+            item["tool_name"] == "inspect_vps_containers" for item in bootstrap_text["tools"]
+        )
+        assert any(item["tool_name"] == "inspect_vps_volumes" for item in bootstrap_text["tools"])
+        assert any(
+            item["tool_name"] == "inspect_containers_health" for item in bootstrap_text["tools"]
+        )
+        assert any(
+            item["tool_name"] == "inspect_container_detail" for item in bootstrap_text["tools"]
+        )
+        assert any(item["tool_name"] == "stat_container_path" for item in bootstrap_text["tools"])
+        assert any(item["tool_name"] == "read_container_file" for item in bootstrap_text["tools"])
+        assert any(
+            item["tool_name"] == "list_container_directory" for item in bootstrap_text["tools"]
+        )
+        assert any(item["tool_name"] == "stat_project_path" for item in bootstrap_text["tools"])
+        assert any(item["tool_name"] == "read_project_file" for item in bootstrap_text["tools"])
+        assert any(
+            item["tool_name"] == "list_project_directory" for item in bootstrap_text["tools"]
         )
         collect_logs_tool = next(
             item for item in bootstrap_text["tools"] if item["tool_name"] == "collect_logs"
         )
         assert all(argument["name"] != "workspace" for argument in collect_logs_tool["arguments"])
         assert any(item["tool_name"] == "list_projects" for item in bootstrap_text["tools"])
-        assert all(item["tool_name"] != "read_project_manifest" for item in bootstrap_text["tools"])
         assert any(
             item["tool_name"] == "get_mcp_service_status" for item in bootstrap_text["tools"]
         )
@@ -358,7 +374,7 @@ def test_tool_metadata_filters_tools_by_token_scopes(
     ]
 
     assert "get_mcp_health_check" in allowed_tool_names
-    assert "read_container_file" not in allowed_tool_names
+    assert "read_container_file" in allowed_tool_names
     assert "close_agent_session" not in allowed_tool_names
     assert "analyze_daily_log_bundle" not in allowed_tool_names
     assert "get_mcp_service_status" not in allowed_tool_names

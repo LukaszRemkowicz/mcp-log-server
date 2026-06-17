@@ -44,6 +44,7 @@ async def test_generate_dev_jwt_uses_database_callers_for_claims(db: None) -> No
     assert workflow_claims["client_id"] == "workflow-prod"
     assert workflow_claims["client_type"] == "workflow_agent_prod"
     assert workflow_claims["allowed_projects"] == ["landingpage", "shop"]
+    assert "container.files.read" in workflow_claims["scope"].split()
     assert codex_claims["sub"] == "codex-prod"
     assert codex_claims["client_id"] == "codex-prod"
     assert codex_claims["client_type"] == "codex_prod"

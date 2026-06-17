@@ -115,6 +115,7 @@ def build_example_token_payloads(
             "allowed_projects": workflow_caller.allowed_projects,
             "scope": " ".join(
                 (
+                    CONTAINER_FILES_READ_SCOPE,
                     LOGS_COLLECT_SCOPE,
                     PROJECTS_READ_SCOPE,
                     WORKFLOW_BOOTSTRAP_SCOPE,

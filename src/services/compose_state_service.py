@@ -6,8 +6,10 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from manifests.models import SourceDefinition
-from services.docker_log_gateway import COMPOSE_PROJECT_LABEL, COMPOSE_SERVICE_LABEL
 from services.docker_service import ContainerDetailPort, VpsContainerInventory
+
+COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
+COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
 
 
 class ComposeStateWarningType(StrEnum):

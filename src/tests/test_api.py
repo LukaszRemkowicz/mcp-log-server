@@ -404,6 +404,7 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     workflow_token: str = custom_jwt_token(
         "workflow-agent",
         [
+            CONTAINER_FILES_READ_SCOPE,
             LOGS_COLLECT_SCOPE,
             PROJECTS_READ_SCOPE,
             WORKFLOW_BOOTSTRAP_SCOPE,
@@ -470,6 +471,19 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert any(item["tool_name"] == "inspect_proxy_activity" for item in payload["tools"])
     assert any(item["tool_name"] == "suggest_followup_window" for item in payload["tools"])
     assert any(item["tool_name"] == "list_projects" for item in payload["tools"])
+    assert any(item["tool_name"] == "read_project_manifest" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_tls_certificate" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_vps_containers" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_vps_volumes" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_project_compose_state" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_containers_health" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_container_detail" for item in payload["tools"])
+    assert any(item["tool_name"] == "stat_container_path" for item in payload["tools"])
+    assert any(item["tool_name"] == "read_container_file" for item in payload["tools"])
+    assert any(item["tool_name"] == "list_container_directory" for item in payload["tools"])
+    assert any(item["tool_name"] == "stat_project_path" for item in payload["tools"])
+    assert any(item["tool_name"] == "read_project_file" for item in payload["tools"])
+    assert any(item["tool_name"] == "list_project_directory" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_service_status" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_health_check" for item in payload["tools"])
     collect_logs_tool = next(
@@ -1273,7 +1287,7 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
                 request_id="collect-vps-security-fixture",
                 project_names=["vps-security"],
                 source_keys=["all"],
-                since="30d",
+                since="2026-05-18T00:00:00Z",
             ),
         )
         grep_response = await jsonrpc.post(
@@ -1391,7 +1405,7 @@ async def test_inspect_probe_blocking_activity_api_correlates_probe_and_fail2ban
                 request_id="collect-vps-security-probe-blocking",
                 project_names=["vps-security"],
                 source_keys=["all"],
-                since="30d",
+                since="2026-05-18T00:00:00Z",
             ),
         )
         response = await jsonrpc.post(

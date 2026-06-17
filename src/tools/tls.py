@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import logging
 
-from fastmcp.server.auth import require_scopes
 from fastmcp.tools.base import ToolResult
 
-from app import mcp
 from auth.scopes import MCP_STATUS_READ_SCOPE
+from decorators import workflow_discoverable_tool
 from logging_config import get_logger
 from services.tls_certificate_service import TlsCertificateInspection, TlsCertificateService
 from tools.agent_hints import INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION
@@ -42,9 +41,9 @@ def _build_tls_certificate_payload(
     )
 
 
-@mcp.tool(
-    auth=require_scopes(MCP_STATUS_READ_SCOPE),
-    description=INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    MCP_STATUS_READ_SCOPE,
+    mcp_description=INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION,
 )
 async def inspect_tls_certificate() -> ToolResult:
     """Inspect TLS certificate expiry and hostname validity for SITE_DOMAIN."""

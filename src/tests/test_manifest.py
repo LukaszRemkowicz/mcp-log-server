@@ -76,6 +76,13 @@ def test_container_source_lookup_requires_manifest_source_key() -> None:
         ProjectManifestService.get_container_source(manifest, "backend-container")
 
 
+def test_source_definition_does_not_expose_compose_selector_fields() -> None:
+    """Verify manifests do not maintain Compose service identity as source metadata."""
+
+    assert "compose_project" not in SourceDefinition.model_fields
+    assert "compose_service" not in SourceDefinition.model_fields
+
+
 def test_manifest_loads_absolute_file_source_target(tmp_path: Path) -> None:
     """Verify production manifests may point at absolute log paths."""
 

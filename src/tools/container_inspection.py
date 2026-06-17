@@ -28,15 +28,13 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import cast
 
-from fastmcp.server.auth import require_scopes
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
 
-from app import mcp
 from auth.mcp_authorized_manifests import AuthorizedProjectManifests
 from auth.scopes import CONTAINER_FILES_READ_SCOPE
 from conf import settings
-from decorators import project_authorized_tool
+from decorators import project_authorized_tool, workflow_discoverable_tool
 from logging_config import get_logger
 from manifests.models import Manifest, SourceDefinition
 from services.compose_state_service import (
@@ -610,9 +608,9 @@ def create_project_compose_state_payload(
     )
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
 )
 async def inspect_vps_containers() -> ToolResult:
     """Return a bounded Docker ps-style inventory for visible VPS containers."""
@@ -646,9 +644,9 @@ async def inspect_vps_containers() -> ToolResult:
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
 )
 async def inspect_vps_volumes(
     dangling_only: bool = False,
@@ -695,9 +693,9 @@ async def inspect_vps_volumes(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def inspect_project_compose_state(
@@ -759,9 +757,9 @@ async def inspect_project_compose_state(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def inspect_containers_health(
@@ -820,9 +818,9 @@ async def inspect_containers_health(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def inspect_container_detail(
@@ -869,9 +867,9 @@ async def inspect_container_detail(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def stat_container_path(
@@ -930,9 +928,9 @@ async def stat_container_path(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=READ_CONTAINER_FILE_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=READ_CONTAINER_FILE_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def read_container_file(
@@ -1024,9 +1022,9 @@ async def read_container_file(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def list_container_directory(

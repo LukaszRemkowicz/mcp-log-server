@@ -7,15 +7,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
-from fastmcp.server.auth import require_scopes
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
 from mcp.types import TextContent
 
-from app import mcp
 from auth.mcp_authorized_manifests import AuthorizedProjectManifests
 from auth.scopes import CONTAINER_FILES_READ_SCOPE
-from decorators import project_authorized_tool
+from decorators import project_authorized_tool, workflow_discoverable_tool
 from logging_config import get_logger
 from manifests.models import Manifest, SourceDefinition
 from services.host_path_service import (
@@ -210,9 +208,9 @@ def _project_path_payload(metadata: HostPathMetadata) -> ProjectPathMetadataPayl
     )
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=STAT_PROJECT_PATH_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=STAT_PROJECT_PATH_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def stat_project_path(
@@ -263,9 +261,9 @@ async def stat_project_path(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=READ_PROJECT_FILE_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=READ_PROJECT_FILE_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def read_project_file(
@@ -335,9 +333,9 @@ async def read_project_file(
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
 
 
-@mcp.tool(
-    auth=require_scopes(CONTAINER_FILES_READ_SCOPE),
-    description=LIST_PROJECT_DIRECTORY_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=LIST_PROJECT_DIRECTORY_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def list_project_directory(

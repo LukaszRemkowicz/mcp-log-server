@@ -121,6 +121,7 @@ Currently implemented tools:
 - `grep_log_snapshot`
 - `create_filtered_view`
 - `group_errors`
+- `inspect_probe_blocking_activity`
 - `build_incident_bundle`
 - `inspect_proxy_activity`
 - `suggest_followup_window`
@@ -128,6 +129,8 @@ Currently implemented tools:
 - `read_project_manifest`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
+- `inspect_vps_containers`
+- `inspect_vps_volumes`
 - `inspect_containers_health`
 - `inspect_container_detail`
 - `inspect_project_compose_state`
@@ -137,7 +140,9 @@ Currently implemented tools:
 - `stat_project_path`
 - `read_project_file`
 - `list_project_directory`
+- `inspect_live_fail2ban_activity`
 - `inspect_tls_certificate`
+- `analyze_sitemap_bundle`
 
 ### Resources
 

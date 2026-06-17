@@ -117,6 +117,20 @@ Current example JWT capabilities:
   - `read_log_snapshot_file`
   - `grep_log_snapshot`
   - `list_projects`
+  - `read_project_manifest`
+  - `inspect_live_fail2ban_activity`
+  - `inspect_tls_certificate`
+  - `inspect_vps_containers`
+  - `inspect_vps_volumes`
+  - `inspect_project_compose_state`
+  - `inspect_containers_health`
+  - `inspect_container_detail`
+  - `stat_container_path`
+  - `read_container_file`
+  - `list_container_directory`
+  - `stat_project_path`
+  - `read_project_file`
+  - `list_project_directory`
   - `analyze_daily_log_bundle`
   - `get_mcp_service_status`
   - `get_mcp_health_check`
@@ -132,12 +146,20 @@ Current example JWT capabilities:
   - `read_log_snapshot_file`
   - `grep_log_snapshot`
   - `list_projects`
+  - `read_project_manifest`
   - `get_mcp_service_status`
   - `get_mcp_health_check`
+  - `inspect_vps_containers`
+  - `inspect_vps_volumes`
+  - `inspect_project_compose_state`
   - `inspect_containers_health`
   - `inspect_container_detail`
+  - `stat_container_path`
   - `read_container_file`
   - `list_container_directory`
+  - `stat_project_path`
+  - `read_project_file`
+  - `list_project_directory`
   - `close_agent_session`
 
 Important:

@@ -640,6 +640,130 @@ async def test_audit_middleware_authorizes_vps_containers_as_session_tool(
 
 @pytest.mark.anyio
 @pytest.mark.usefixtures("db")
+@pytest.mark.parametrize("tool_name", ["inspect_vps_containers", "inspect_vps_volumes"])
+async def test_audit_middleware_allows_vps_inventory_without_project_access(
+    mocker: MockerFixture,
+    tool_name: str,
+) -> None:
+    """Verify VPS-wide diagnostics do not require project access."""
+
+    caller = await McpCallerFactory.save_to_db(
+        client_id=f"session-{tool_name}-no-project-client",
+        client_type="codex",
+        workspace=LogWorkspace.SESSION,
+        allowed_projects=[],
+    )
+    token = AccessToken(
+        token="test-token",
+        client_id=caller.client_id,
+        scopes=["container.files.read"],
+        claims={
+            "sub": "codex-subject",
+            "client_type": caller.client_type,
+        },
+    )
+    mocker.patch("middleware.audit.get_access_token", return_value=token)
+    request = SimpleNamespace(state=SimpleNamespace())
+    mocker.patch("middleware.audit.get_http_request", return_value=request)
+    context = MiddlewareContext(
+        message=mt.CallToolRequestParams(
+            name=tool_name,
+            arguments={},
+        )
+    )
+    middleware = AccessAuditMiddleware()
+    call_next = mocker.AsyncMock(
+        return_value=ToolResult(content=[], structured_content={"ok": True})
+    )
+
+    result = await middleware.on_call_tool(
+        context,
+        cast(CallNext[mt.CallToolRequestParams, ToolResult], call_next),
+    )
+
+    call_next.assert_awaited_once()
+    request_caller = request.state.caller
+    assert isinstance(request_caller, AuthenticatedMcpCaller)
+    assert request_caller.allowed_projects == frozenset()
+    assert result.structured_content == {"ok": True}
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("db")
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("inspect_vps_containers", {}),
+        ("inspect_vps_volumes", {}),
+        ("inspect_containers_health", {"project_name": "dockerpage"}),
+        (
+            "inspect_container_detail",
+            {"project_name": "dockerpage", "source_key": "backend"},
+        ),
+        (
+            "stat_container_path",
+            {"project_name": "dockerpage", "source_key": "backend", "path": "/app"},
+        ),
+        (
+            "read_container_file",
+            {"project_name": "dockerpage", "source_key": "backend", "path": "/app/VERSION"},
+        ),
+        (
+            "list_container_directory",
+            {"project_name": "dockerpage", "source_key": "backend", "path": "/app"},
+        ),
+    ],
+)
+async def test_audit_middleware_authorizes_workflow_container_tools(
+    mocker: MockerFixture,
+    tool_name: str,
+    arguments: dict[str, object],
+) -> None:
+    """Verify workflow-advertised runtime tools can use the workflow caller row."""
+
+    caller = await McpCallerFactory.save_to_db(
+        client_id="workflow-container-client",
+        client_type="workflow_agent",
+        workspace=LogWorkspace.WORKFLOW,
+        allowed_projects=["dockerpage"],
+    )
+    token = AccessToken(
+        token="test-token",
+        client_id=caller.client_id,
+        scopes=["container.files.read"],
+        claims={
+            "sub": "workflow-subject",
+            "client_type": caller.client_type,
+        },
+    )
+    mocker.patch("middleware.audit.get_access_token", return_value=token)
+    request = SimpleNamespace(state=SimpleNamespace())
+    mocker.patch("middleware.audit.get_http_request", return_value=request)
+    context = MiddlewareContext(
+        message=mt.CallToolRequestParams(
+            name=tool_name,
+            arguments=arguments,
+        )
+    )
+    middleware = AccessAuditMiddleware()
+    call_next = mocker.AsyncMock(
+        return_value=ToolResult(content=[], structured_content={"ok": tool_name})
+    )
+
+    result = await middleware.on_call_tool(
+        context,
+        cast(CallNext[mt.CallToolRequestParams, ToolResult], call_next),
+    )
+
+    call_next.assert_awaited_once()
+    request_caller = request.state.caller
+    assert isinstance(request_caller, AuthenticatedMcpCaller)
+    assert request_caller.workspace == LogWorkspace.WORKFLOW
+    assert result.structured_content == {"ok": tool_name}
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("db")
 async def test_audit_middleware_authorizes_vps_volumes_as_session_tool(
     mocker: MockerFixture,
 ) -> None:

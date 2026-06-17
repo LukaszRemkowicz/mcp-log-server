@@ -5,11 +5,9 @@ from __future__ import annotations
 import logging
 from typing import cast
 
-from fastmcp.server.auth import require_scopes
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
 
-from app import mcp
 from auth.mcp_authorized_manifests import AuthorizedProjectManifests
 from auth.scopes import LOGS_COLLECT_SCOPE, PROJECTS_READ_SCOPE
 from conf import settings
@@ -133,9 +131,9 @@ def _build_project_manifest_source_payloads(
     ]
 
 
-@mcp.tool(
-    auth=require_scopes(PROJECTS_READ_SCOPE),
-    description=READ_PROJECT_MANIFEST_TOOL_DESCRIPTION,
+@workflow_discoverable_tool(
+    PROJECTS_READ_SCOPE,
+    mcp_description=READ_PROJECT_MANIFEST_TOOL_DESCRIPTION,
 )
 @project_authorized_tool
 async def read_project_manifest(

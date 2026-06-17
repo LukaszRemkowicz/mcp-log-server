@@ -537,13 +537,14 @@ curl -sS \
 
 ### 2c. Inspect Allowed Container Paths
 
-Use these specialist tools with the codex token when an agent needs to verify
-deployed project files inside an approved container.
+Use these specialist tools when an agent needs to verify deployed project files
+inside an approved container.
 
 Important:
 
-- these tools are not part of the workflow bootstrap inventory
-- they are available to the codex token because it includes
+- these tools are part of the workflow bootstrap inventory when the workflow
+  token includes `container.files.read`
+- they are also available to the codex token because it includes
   `container.files.read`
 - `source_key` is the manifest container alias such as `backend`, `frontend`,
   `nginx`, or `traefik`
