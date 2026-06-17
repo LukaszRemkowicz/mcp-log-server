@@ -37,7 +37,7 @@ def test_tls_certificate_service_reports_valid_certificate() -> None:
             ),
         )
 
-        result = service.inspect_site_certificate()
+        result = service.inspect_certificates()[0]
 
     assert result.domain_key == "site"
     assert result.hostname == "example.com"
@@ -49,6 +49,63 @@ def test_tls_certificate_service_reports_valid_certificate() -> None:
     assert result.hostname_matches is True
     assert result.matched_names == ["example.com"]
     assert result.error_code is None
+
+
+def test_tls_certificate_service_inspects_site_domain_and_configured_subdomains() -> None:
+    requested_hostnames: list[str] = []
+
+    def fetch_certificate(hostname: str, _port: int, _timeout: float) -> TlsCertificateData:
+        requested_hostnames.append(hostname)
+        return _certificate(hostname=hostname)
+
+    with override_settings(
+        SITE_DOMAIN="example.com",
+        TLS_CERTIFICATE_SUBDOMAINS=["admin", "stage", "mcp"],
+        TLS_CERTIFICATE_TIMEOUT_SECONDS=5,
+        TLS_CERTIFICATE_EXPIRY_WARNING_DAYS=30,
+    ):
+        service = TlsCertificateService(fetch_certificate=fetch_certificate)
+
+        results = service.inspect_certificates()
+
+    assert requested_hostnames == [
+        "example.com",
+        "admin.example.com",
+        "stage.example.com",
+        "mcp.example.com",
+    ]
+    assert [result.hostname for result in results] == [
+        "example.com",
+        "admin.example.com",
+        "stage.example.com",
+        "mcp.example.com",
+    ]
+    assert [result.domain_key for result in results] == [
+        "site",
+        "site_subdomain",
+        "site_subdomain",
+        "site_subdomain",
+    ]
+    assert all(result.inspection_status == "ok" for result in results)
+
+
+def test_tls_certificate_service_rejects_invalid_configured_subdomains() -> None:
+    with override_settings(
+        SITE_DOMAIN="example.com",
+        TLS_CERTIFICATE_SUBDOMAINS=["admin", "https://evil.test"],
+        TLS_CERTIFICATE_TIMEOUT_SECONDS=5,
+        TLS_CERTIFICATE_EXPIRY_WARNING_DAYS=30,
+    ):
+        service = TlsCertificateService()
+
+        results = service.inspect_certificates()
+
+    assert results[0].hostname == "example.com"
+    assert results[1].hostname == "admin.example.com"
+    assert results[2].hostname == "https://evil.test"
+    assert results[2].inspection_status == "unavailable"
+    assert results[2].warning_level == "configuration_error"
+    assert results[2].error_code == "tls_subdomain_invalid"
 
 
 def test_tls_certificate_service_warns_for_expiring_certificate() -> None:
@@ -63,7 +120,7 @@ def test_tls_certificate_service_warns_for_expiring_certificate() -> None:
             ),
         )
 
-        result = service.inspect_site_certificate()
+        result = service.inspect_certificates()[0]
 
     assert result.inspection_status == "warning"
     assert result.warning_level == "expiring_soon"
@@ -83,7 +140,7 @@ def test_tls_certificate_service_warns_for_expired_certificate() -> None:
             ),
         )
 
-        result = service.inspect_site_certificate()
+        result = service.inspect_certificates()[0]
 
     assert result.inspection_status == "warning"
     assert result.warning_level == "expired"
@@ -103,7 +160,7 @@ def test_tls_certificate_service_warns_for_hostname_mismatch() -> None:
             ),
         )
 
-        result = service.inspect_site_certificate()
+        result = service.inspect_certificates()[0]
 
     assert result.inspection_status == "warning"
     assert result.warning_level == "hostname_mismatch"
@@ -122,7 +179,7 @@ def test_tls_certificate_service_reports_connection_failure() -> None:
     ):
         service = TlsCertificateService(fetch_certificate=raise_timeout)
 
-        result = service.inspect_site_certificate()
+        result = service.inspect_certificates()[0]
 
     assert result.inspection_status == "unavailable"
     assert result.warning_level == "connection_failure"
@@ -194,7 +251,7 @@ def test_tls_certificate_service_rejects_unconfigured_site_domain() -> None:
     ):
         service = TlsCertificateService()
 
-        result = service.inspect_site_certificate()
+        result = service.inspect_certificates()[0]
 
     assert result.inspection_status == "unavailable"
     assert result.warning_level == "configuration_error"

@@ -44,6 +44,10 @@ FAIL2BAN_PROXY_URL = env.str("FAIL2BAN_PROXY_URL", default="").rstrip("/")
 FAIL2BAN_PROXY_HOST = env.str("FAIL2BAN_PROXY_HOST", default="0.0.0.0")
 FAIL2BAN_PROXY_PORT = env.int("FAIL2BAN_PROXY_PORT", default=8765)
 SITE_DOMAIN = env.str("SITE_DOMAIN", default="localhost").strip()
+TLS_CERTIFICATE_SUBDOMAINS = env.list(
+    "TLS_CERTIFICATE_SUBDOMAINS",
+    default=["admin", "stage", "mcp"],
+)
 TLS_CERTIFICATE_TIMEOUT_SECONDS = env.int("TLS_CERTIFICATE_TIMEOUT_SECONDS", default=5)
 TLS_CERTIFICATE_EXPIRY_WARNING_DAYS = env.int("TLS_CERTIFICATE_EXPIRY_WARNING_DAYS", default=30)
 MCP_PATH = "/mcp"

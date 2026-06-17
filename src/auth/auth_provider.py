@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from fastmcp.server.auth import AuthProvider, JWTVerifier
+from fastmcp.server.auth import AuthProvider
+from fastmcp.server.auth.providers.jwt import JWTVerifier
 
 from conf import Settings
 

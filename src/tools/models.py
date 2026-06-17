@@ -478,13 +478,12 @@ class InspectLiveFail2banActivityPayload(BaseModel):
     jails: list[Fail2banJailStatusPayload]
 
 
-class InspectTlsCertificatePayload(BaseModel):
-    """Structured response returned by `inspect_tls_certificate`."""
+class TlsCertificateInspectionPayload(BaseModel):
+    """Describe one TLS certificate inspection result."""
 
     model_config = ConfigDict(extra="forbid")
 
-    action: Literal["inspect_tls_certificate"]
-    domain_key: Literal["site"]
+    domain_key: Literal["site", "site_subdomain"]
     hostname: str | None
     port: int
     inspection_status: Literal["ok", "warning", "unavailable"]
@@ -506,6 +505,18 @@ class InspectTlsCertificatePayload(BaseModel):
     matched_names: list[str]
     error_code: str | None
     message: str
+
+
+class InspectTlsCertificatePayload(BaseModel):
+    """Structured response returned by `inspect_tls_certificate`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_tls_certificate"]
+    site_domain: str | None
+    configured_subdomains: list[str]
+    inspection_status: Literal["ok", "warning", "unavailable"]
+    inspections: list[TlsCertificateInspectionPayload]
 
 
 class InspectProxyActivityPayload(BaseModel):
