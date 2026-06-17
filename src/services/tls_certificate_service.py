@@ -13,7 +13,9 @@ from typing import Any, Literal, cast
 from conf import settings
 
 TLS_CERTIFICATE_PORT = 443
+DEFAULT_TLS_CERTIFICATE_HOST_LIMIT = 8
 TlsInspectionStatus = Literal["ok", "warning", "unavailable"]
+TlsDomainKey = Literal["site", "site_subdomain"]
 TlsWarningLevel = Literal[
     "ok",
     "expired",
@@ -43,7 +45,7 @@ class TlsCertificateData:
 class TlsCertificateInspection:
     """Agent-facing TLS certificate inspection result."""
 
-    domain_key: Literal["site"]
+    domain_key: TlsDomainKey
     hostname: str | None
     port: int
     inspection_status: TlsInspectionStatus
@@ -71,8 +73,8 @@ class TlsCertificateService:
     ) -> None:
         self._fetch_certificate = fetch_certificate or self._fetch_certificate_from_network
 
-    def inspect_site_certificate(self) -> TlsCertificateInspection:
-        """Return certificate status for the configured SITE_DOMAIN."""
+    def inspect_certificates(self) -> list[TlsCertificateInspection]:
+        """Return certificate status for SITE_DOMAIN and approved subdomains."""
 
         hostname = settings.SITE_DOMAIN.strip()
         port = TLS_CERTIFICATE_PORT
@@ -80,25 +82,73 @@ class TlsCertificateService:
         warning_days = settings.TLS_CERTIFICATE_EXPIRY_WARNING_DAYS
 
         if not hostname:
-            return self._configuration_error(
-                hostname=None,
-                port=port,
-                error_code="tls_site_domain_not_configured",
-                message="SITE_DOMAIN is not configured.",
-            )
+            return [
+                self._configuration_error(
+                    hostname=None,
+                    port=port,
+                    error_code="tls_site_domain_not_configured",
+                    message="SITE_DOMAIN is not configured.",
+                )
+            ]
         if self._hostname_is_denied(hostname):
-            return self._configuration_error(
-                hostname=hostname,
-                port=port,
-                error_code="tls_site_domain_invalid",
-                message="SITE_DOMAIN must be a public domain name without scheme, path, or port.",
+            return [
+                self._configuration_error(
+                    hostname=hostname,
+                    port=port,
+                    error_code="tls_site_domain_invalid",
+                    message=(
+                        "SITE_DOMAIN must be a public domain name without scheme, path, or port."
+                    ),
+                )
+            ]
+
+        normalized_hostnames = self._configured_hostnames(hostname)
+        inspections: list[TlsCertificateInspection] = []
+        for normalized_hostname in normalized_hostnames:
+            if not self._hostname_is_allowed_for_site(hostname.lower(), normalized_hostname):
+                inspections.append(
+                    self._configuration_error(
+                        domain_key="site_subdomain",
+                        hostname=normalized_hostname,
+                        port=port,
+                        error_code="tls_subdomain_invalid",
+                        message=(
+                            "TLS certificate subdomains must be names that expand under "
+                            "SITE_DOMAIN."
+                        ),
+                    )
+                )
+                continue
+            domain_key: TlsDomainKey = (
+                "site" if normalized_hostname == hostname.lower() else "site_subdomain"
             )
+            inspections.append(
+                self._inspect_certificate(
+                    domain_key=domain_key,
+                    hostname=normalized_hostname,
+                    port=port,
+                    timeout=timeout,
+                    warning_days=warning_days,
+                )
+            )
+        return inspections
+
+    def _inspect_certificate(
+        self,
+        *,
+        domain_key: TlsDomainKey,
+        hostname: str,
+        port: int,
+        timeout: float,
+        warning_days: int,
+    ) -> TlsCertificateInspection:
+        """Inspect one already-normalized hostname."""
 
         try:
             certificate = self._fetch_certificate(hostname, port, timeout)
         except (TimeoutError, OSError, ssl.SSLError) as exc:
             return TlsCertificateInspection(
-                domain_key="site",
+                domain_key=domain_key,
                 hostname=hostname,
                 port=port,
                 inspection_status="unavailable",
@@ -135,7 +185,7 @@ class TlsCertificateService:
             message = "TLS certificate is valid for SITE_DOMAIN."
 
         return TlsCertificateInspection(
-            domain_key="site",
+            domain_key=domain_key,
             hostname=hostname,
             port=port,
             inspection_status=inspection_status,
@@ -151,17 +201,52 @@ class TlsCertificateService:
             message=message,
         )
 
+    def _configured_hostnames(self, site_domain: str) -> list[str]:
+        """Return SITE_DOMAIN plus configured TLS subdomains expanded to FQDNs."""
+
+        site_domain = site_domain.lower()
+        subdomains = getattr(settings, "TLS_CERTIFICATE_SUBDOMAINS", [])
+        raw_hostnames = [site_domain, *subdomains]
+        normalized_hostnames: list[str] = []
+        seen_hostnames: set[str] = set()
+        for raw_hostname in raw_hostnames[:DEFAULT_TLS_CERTIFICATE_HOST_LIMIT]:
+            normalized_hostname = self._normalize_one_configured_hostname(
+                site_domain, str(raw_hostname)
+            )
+            if normalized_hostname in seen_hostnames:
+                continue
+            seen_hostnames.add(normalized_hostname)
+            normalized_hostnames.append(normalized_hostname)
+        return normalized_hostnames or [site_domain]
+
+    @staticmethod
+    def _normalize_one_configured_hostname(site_domain: str, raw_hostname: str) -> str:
+        """Return one normalized configured SITE_DOMAIN or subdomain candidate."""
+
+        hostname = raw_hostname.strip().lower().rstrip(".")
+        if hostname != site_domain and "." not in hostname:
+            hostname = f"{hostname}.{site_domain}"
+        return hostname
+
+    def _hostname_is_allowed_for_site(self, site_domain: str, hostname: str) -> bool:
+        """Return whether hostname can be inspected by this bounded tool."""
+
+        if self._hostname_is_denied(hostname):
+            return False
+        return hostname == site_domain or hostname.endswith(f".{site_domain}")
+
     @staticmethod
     def _configuration_error(
         hostname: str | None,
         port: int,
         error_code: str,
         message: str,
+        domain_key: TlsDomainKey = "site",
     ) -> TlsCertificateInspection:
         """Return one configuration failure without opening a network connection."""
 
         return TlsCertificateInspection(
-            domain_key="site",
+            domain_key=domain_key,
             hostname=hostname,
             port=port,
             inspection_status="unavailable",

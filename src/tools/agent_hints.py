@@ -85,12 +85,13 @@ INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION = (
 )
 
 INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION = (
-    "Inspect the TLS certificate for the configured SITE_DOMAIN on port 443. "
+    "Inspect TLS certificates for the configured SITE_DOMAIN and each configured "
+    "TLS_CERTIFICATE_SUBDOMAINS entry expanded under SITE_DOMAIN on port 443. "
     "Returns certificate subject, issuer, validity timestamps, days until "
     "expiry, SAN hostname-match status, and warning level for expiry, hostname "
     "mismatch, connection failure, or unsupported TLS responses. This tool does "
-    "not accept arbitrary hostnames, IPs, wildcards, or ports and does not "
-    "modify DNS, Traefik, ACME, or certificate state."
+    "not accept caller-provided hostnames, IPs, wildcards, or ports and does "
+    "not modify DNS, Traefik, ACME, or certificate state."
 )
 
 READ_PROJECT_MANIFEST_TOOL_DESCRIPTION = (

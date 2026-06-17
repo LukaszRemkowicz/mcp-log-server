@@ -69,6 +69,8 @@ services:
       MCP_PORT: ${MCP_PORT:-8001}
       PROJECT_MANIFESTS_PATH: /app/project-manifests
       PYTHONPATH: /app/src
+      SITE_DOMAIN: ${SITE_DOMAIN:-lukaszremkowicz.com}
+      TLS_CERTIFICATE_SUBDOMAINS: ${TLS_CERTIFICATE_SUBDOMAINS:-admin,stage,mcp}
     ports:
       - "127.0.0.1:${MCP_PORT_HOST:-8001}:${MCP_PORT:-8001}"
     healthcheck:
@@ -118,6 +120,8 @@ services:
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8001
       PYTHONPATH: /app/src
+      SITE_DOMAIN: ${SITE_DOMAIN:-lukaszremkowicz.com}
+      TLS_CERTIFICATE_SUBDOMAINS: ${TLS_CERTIFICATE_SUBDOMAINS:-admin,stage,mcp}
     command:
       [
         "sh",
