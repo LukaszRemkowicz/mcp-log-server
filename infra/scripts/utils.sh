@@ -107,17 +107,9 @@ get_state_dir() {
     local environment
     environment="$(normalize_environment "${1:-local}")"
 
-    if [[ -n "${STATE_DIR:-}" ]]; then
-        printf "%s" "$STATE_DIR"
-        return
-    fi
-
-    local preferred="/var/lib/mcp-log-server/$environment"
-    if [[ -d "$(dirname "$preferred")" && -w "$(dirname "$preferred")" ]] || [[ "$(id -u)" == "0" ]]; then
-        printf "%s" "$preferred"
-    else
-        printf "%s/.agent/state/%s" "$(get_project_dir)" "$environment"
-    fi
+    PYTHONPATH="$(get_project_dir)/src" python3 -m utils.state_dir \
+        "$environment" \
+        --project-dir "$(get_project_dir)"
 }
 
 get_backup_dir() {

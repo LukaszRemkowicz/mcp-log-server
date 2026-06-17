@@ -15,9 +15,6 @@ if TYPE_CHECKING:
     from docker.client import DockerClient  # type: ignore[import-not-found]
 
 DOCKER_LOG_TIMEOUT_SECONDS = 15
-COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
-COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
-COMPOSE_ONEOFF_LABEL = "com.docker.compose.oneoff"
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,13 +37,6 @@ class DockerLogGatewayProtocol(Protocol):
     """Container resolution and log streaming contract used by collection."""
 
     def resolve_container_by_name(self, container_name: str) -> ResolvedDockerContainer | None: ...
-
-    def resolve_container_by_project_service(
-        self,
-        *,
-        project_name: str,
-        service_name: str,
-    ) -> ResolvedDockerContainer | None: ...
 
     def stream_logs(
         self,
@@ -87,27 +77,6 @@ class DockerLogGateway:
             if self._container_name(container) == container_name
         ]
         return self._newest_container(exact_matches)
-
-    def resolve_container_by_project_service(
-        self,
-        *,
-        project_name: str,
-        service_name: str,
-    ) -> ResolvedDockerContainer | None:
-        """Return the newest non-one-off Compose service container."""
-
-        containers = self._list_containers(
-            filters={
-                "label": [
-                    f"{COMPOSE_PROJECT_LABEL}={project_name}",
-                    f"{COMPOSE_SERVICE_LABEL}={service_name}",
-                ],
-            }
-        )
-        service_containers = [
-            container for container in containers if not self._is_compose_oneoff(container)
-        ]
-        return self._newest_container(service_containers)
 
     def stream_logs(
         self,
@@ -203,15 +172,3 @@ class DockerLogGateway:
         if created_at.tzinfo is None:
             return created_at.replace(tzinfo=UTC)
         return created_at.astimezone(UTC)
-
-    @staticmethod
-    def _is_compose_oneoff(container: Any) -> bool:
-        """Return whether a Docker SDK object is a Compose one-off container."""
-
-        attrs = getattr(container, "attrs", {})
-        config = attrs.get("Config") if isinstance(attrs, dict) else {}
-        labels = config.get("Labels") if isinstance(config, dict) else {}
-        if not isinstance(labels, dict):
-            return False
-        value = labels.get(COMPOSE_ONEOFF_LABEL)
-        return str(value).strip().lower() in {"1", "true", "yes"}

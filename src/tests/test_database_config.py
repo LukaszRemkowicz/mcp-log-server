@@ -285,14 +285,12 @@ def test_migration_commands_preserve_explicit_database_env(
 
 
 def test_test_command_runs_compose_test_container(mocker: MockerFixture) -> None:
-    calls: list[tuple[list[str], dict[str, str] | None]] = []
+    calls: list[list[str]] = []
 
     def fake_run(
         args: list[str],
-        *,
-        env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        calls.append((args, env))
+        calls.append(args)
         return subprocess.CompletedProcess(args, 0)
 
     mocker.patch("cli.test.subprocess.run", fake_run)
@@ -301,8 +299,7 @@ def test_test_command_runs_compose_test_container(mocker: MockerFixture) -> None
 
     assert result == 0
     assert len(calls) == 1
-    command, env = calls[0]
-    assert command == [
+    assert calls[0] == [
         "docker",
         "compose",
         "run",
@@ -310,8 +307,6 @@ def test_test_command_runs_compose_test_container(mocker: MockerFixture) -> None
         "--build",
         "test",
     ]
-    assert env is not None
-    assert env["DATABASE_PORT_HOST"] == "0"
 
 
 @pytest.mark.anyio

@@ -6,6 +6,8 @@ from functools import cache
 
 from fastmcp import FastMCP
 from fastmcp.server.auth import AuthProvider
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
 
 from database.lifecycle import database_lifespan
 from middleware.audit import AccessAuditMiddleware
@@ -23,9 +25,11 @@ def register_mcp_components() -> None:
     import tools.collection  # noqa: F401
     import tools.container_inspection  # noqa: F401
     import tools.fail2ban  # noqa: F401
+    import tools.host_paths  # noqa: F401
     import tools.sessions  # noqa: F401
     import tools.snapshots  # noqa: F401
     import tools.system  # noqa: F401
+    import tools.tls  # noqa: F401
     import tools.workflow  # noqa: F401
 
 
@@ -37,6 +41,15 @@ def register_mcp_middleware() -> None:
     mcp.add_middleware(AuthorizedManifestsMiddleware())
 
 
+@cache
+def register_http_routes() -> None:
+    """Attach non-MCP HTTP routes used by runtime infrastructure."""
+
+    @mcp.custom_route("/healthz", methods=["GET"], include_in_schema=False)
+    async def healthz(request: Request) -> Response:  # noqa: ARG001
+        return JSONResponse({"status": "ok"})
+
+
 def create_application(
     auth_provider: AuthProvider | None = None,
 ) -> FastMCP:
@@ -45,6 +58,7 @@ def create_application(
     app = mcp
     app.auth = auth_provider
 
+    register_http_routes()
     register_mcp_middleware()
     register_mcp_components()
 

@@ -72,7 +72,7 @@ are reviewed and approved.
 
   The Docker Compose `test` service overrides this to
   `mcp_log_server_test`, so DB tests do not flush or mutate the local app
-  database.
+  database name.
 
 - `DATABASE_USER`
   PostgreSQL application user.
@@ -98,8 +98,9 @@ intentionally mounted into the MCP container.
   Default: `/var/run/fail2ban`
 
 The Compose files run PostgreSQL through the official `postgres:18` image.
-Database files are stored in the named `postgres-data` Docker volume, so data
-persists when containers are recreated.
+Local database files are stored in the named `mcp-local_postgres-data` Docker
+volume, so both the app database and the separate test database persist when
+containers are recreated.
 
 The local Compose file uses a plain local build without an explicit app image
 tag. Production uses the same landingpage-style contract as

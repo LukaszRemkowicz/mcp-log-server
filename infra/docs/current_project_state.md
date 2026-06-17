@@ -121,17 +121,28 @@ Currently implemented tools:
 - `grep_log_snapshot`
 - `create_filtered_view`
 - `group_errors`
+- `inspect_probe_blocking_activity`
 - `build_incident_bundle`
 - `inspect_proxy_activity`
 - `suggest_followup_window`
 - `list_projects`
+- `read_project_manifest`
 - `get_mcp_service_status`
 - `get_mcp_health_check`
+- `inspect_vps_containers`
+- `inspect_vps_volumes`
 - `inspect_containers_health`
 - `inspect_container_detail`
+- `inspect_project_compose_state`
 - `stat_container_path`
 - `read_container_file`
 - `list_container_directory`
+- `stat_project_path`
+- `read_project_file`
+- `list_project_directory`
+- `inspect_live_fail2ban_activity`
+- `inspect_tls_certificate`
+- `analyze_sitemap_bundle`
 
 ### Resources
 
@@ -246,6 +257,12 @@ production Compose, host `/var/log` is mounted at `/host/var/log`, and host
 `/etc/nginx/logs` is mounted at `/host/etc/nginx/logs`. Manifest targets are
 literal paths; MCP does not expand dated filename templates.
 
+`inspect_project_compose_state` uses manifest docker source targets and current
+Docker runtime labels/metadata only. It can report inferred Compose service
+identity, running containers, ports, mounts, volumes, env var names, and
+runtime-shape warnings, but it does not read Compose files or validate desired
+image/port/mount/volume/env configuration.
+
 ## Current Docker Paths
 
 ### Development Compose
@@ -256,14 +273,14 @@ Characteristics:
 
 - bind-mounts `./src`
 - applies committed migrations with `uv run migrate`, then uses `watchfiles`
-- includes `app`, `db`, and `tests` services
+- includes `app`, `db`, and `test` services
 - uses the official `postgres:18` image for the `db` service
-- persists local database data in the named `postgres-data` Docker volume
+- persists local database data in the named `mcp-local_postgres-data` Docker volume
 - binds published service ports to `127.0.0.1` to avoid VPS-wide port exposure
 - uses host port `5437` for local MCP Postgres by default, leaving
   `landingpage`'s local `5436` binding separate
-- runs the `test` service against the separate `mcp_log_server_test` database,
-  not the local app database
+- runs the `test` service against the separate `mcp_log_server_test` database
+  in the Compose `db` service, not the local app database name
 - runs curl-driven HTTP MCP E2E checks through `infra/scripts/run_http_e2e.sh`
   against `mcp_log_server_test`, not the local app database
 

@@ -38,9 +38,7 @@ SECOND_SESSION_ID = "quiet-field-opens-b1c2"
 class FakeDockerLogGateway:
     def __init__(self) -> None:
         self.resolved_by_name: dict[str, ResolvedDockerContainer | None] = {}
-        self.resolved_by_project_service: dict[tuple[str, str], ResolvedDockerContainer | None] = {}
         self.name_calls: list[str] = []
-        self.project_service_calls: list[tuple[str, str]] = []
         self.stream_calls: list[tuple[str, dict[str, int | str | datetime]]] = []
         self.stream_exception: DockerLogGatewayError | None = None
         self.resolve_exception: DockerLogGatewayError | None = None
@@ -50,17 +48,6 @@ class FakeDockerLogGateway:
             raise self.resolve_exception
         self.name_calls.append(container_name)
         return self.resolved_by_name.get(container_name)
-
-    def resolve_container_by_project_service(
-        self,
-        *,
-        project_name: str,
-        service_name: str,
-    ) -> ResolvedDockerContainer | None:
-        if self.resolve_exception is not None:
-            raise self.resolve_exception
-        self.project_service_calls.append((project_name, service_name))
-        return self.resolved_by_project_service.get((project_name, service_name))
 
     def stream_logs(
         self,
@@ -785,58 +772,19 @@ def test_collect_source_uses_injected_docker_log_gateway_for_explicit_target(
     assert result["line_count"] == 2
     assert output_file.read_text(encoding="utf-8") == "log line 1\nlog line 2\n"
     assert gateway.name_calls == ["backend-container"]
-    assert gateway.project_service_calls == []
     assert gateway.stream_calls == [("backend-container", {})]
-
-
-def test_collect_source_resolves_compose_project_service_target(
-    tmp_path: Path,
-) -> None:
-    gateway = FakeDockerLogGateway()
-    gateway.resolved_by_project_service[("portfolio-stage", "be")] = ResolvedDockerContainer(
-        name="portfolio-stage-be-1",
-        created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
-    )
-    definition = SourceDefinition(
-        source_key="backend",
-        source_type="docker",
-        target="configured-container",
-        compose_project="portfolio-stage",
-        compose_service="be",
-        description="Backend logs.",
-        required=True,
-        parser_type="plain_text",
-        normalization_profile="backend",
-        retention_class="short",
-        default_noise_profile="noise",
-        stream="stdout",
-    )
-
-    result = LogCollectionService(docker_log_gateway=gateway).collect_source(
-        definition,
-        output_file=tmp_path / "backend.log",
-        time_filters=DockerTimeFilters(since=None, until=None),
-    )
-
-    assert result["target"] == "configured-container"
-    assert result["line_count"] == 2
-    assert gateway.name_calls == []
-    assert gateway.project_service_calls == [("portfolio-stage", "be")]
-    assert gateway.stream_calls == [("portfolio-stage-be-1", {})]
 
 
 def test_resolve_docker_log_container_returns_stream_target_name() -> None:
     gateway = FakeDockerLogGateway()
-    gateway.resolved_by_project_service[("portfolio-stage", "be")] = ResolvedDockerContainer(
-        name="portfolio-stage-be-1",
+    gateway.resolved_by_name["configured-container"] = ResolvedDockerContainer(
+        name="configured-container",
         created_at=datetime(2026, 6, 8, 10, 30, tzinfo=UTC),
     )
     definition = SourceDefinition(
         source_key="backend",
         source_type="docker",
         target="configured-container",
-        compose_project="portfolio-stage",
-        compose_service="be",
         description="Backend logs.",
         required=True,
         parser_type="plain_text",
@@ -850,7 +798,7 @@ def test_resolve_docker_log_container_returns_stream_target_name() -> None:
 
     resolved_target = service._resolve_docker_log_container(definition)
 
-    assert resolved_target == "portfolio-stage-be-1"
+    assert resolved_target == "configured-container"
 
 
 def test_collect_source_streams_persisted_file_logs_to_output_file(tmp_path) -> None:

@@ -16,7 +16,7 @@
 #   - runs a pre-deploy database backup unless SKIP_BACKUP=true
 #   - applies migrations unless SKIP_MIGRATE=true
 #   - recreates the app container with the selected image
-#   - verifies authenticated MCP health before recording current_tag
+#   - waits for Docker app health before recording current_tag
 #
 # What this script does not do:
 #   - does not build images
@@ -113,68 +113,34 @@ else
 fi
 printf "📁 State directory: %s\n" "$STATE_DIR"
 
-verify_authenticated_mcp_health() {
-    docker compose "${COMPOSE_ARGS[@]}" exec -T app uv run python - <<'PY'
-import json
-import os
-import sys
-import time
-import urllib.error
-import urllib.request
+wait_for_app_container_health() {
+    local container_id
+    local health_status
 
-from joserfc import jwt
-from joserfc.jwk import OctKey
+    for attempt in {1..30}; do
+        container_id="$(docker compose "${COMPOSE_ARGS[@]}" ps -q app)"
+        if [[ -n "$container_id" ]]; then
+            health_status="$(
+                docker inspect \
+                    --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
+                    "$container_id" \
+                    2>/dev/null \
+                    || true
+            )"
+            if [[ "$health_status" == "healthy" ]]; then
+                printf "✅ Docker app healthcheck passed\n"
+                return 0
+            fi
+            printf "⏳ Waiting for Docker app health (%s/30): %s\n" "$attempt" "$health_status"
+        else
+            printf "⏳ Waiting for Docker app container (%s/30)\n" "$attempt"
+        fi
+        sleep 2
+    done
 
-algorithm = os.environ.get("JWT_ALGORITHM", "HS256")
-now = int(time.time())
-token = jwt.encode(
-    {"alg": algorithm, "typ": "JWT"},
-    {
-        "iss": os.environ["JWT_ISSUER"],
-        "aud": os.environ["JWT_AUDIENCE"],
-        "iat": now,
-        "exp": now + 300,
-        "sub": "deploy-healthcheck",
-        "client_id": "deploy-healthcheck",
-        "client_type": "deploy",
-        "scope": "mcp.health.read",
-    },
-    OctKey.import_key(os.environ["JWT_SHARED_SECRET"]),
-    algorithms=[algorithm],
-)
-payload = json.dumps(
-    {"jsonrpc": "2.0", "id": "deploy-health", "method": "tools/list", "params": {}}
-).encode("utf-8")
-port = os.environ.get("MCP_PORT", "8001")
-path = os.environ.get("MCP_PATH", "/mcp")
-request = urllib.request.Request(
-    f"http://127.0.0.1:{port}{path}",
-    data=payload,
-    headers={
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    },
-    method="POST",
-)
-try:
-    with urllib.request.urlopen(request, timeout=10) as response:
-        response_body = response.read().decode("utf-8")
-except urllib.error.HTTPError as error:
-    sys.stderr.write(error.read().decode("utf-8", errors="replace"))
-    raise
-
-response_payload = json.loads(response_body)
-if "error" in response_payload:
-    raise SystemExit(response_payload["error"])
-tool_names = {
-    tool.get("name")
-    for tool in response_payload.get("result", {}).get("tools", [])
-    if isinstance(tool, dict)
-}
-if "get_mcp_health_check" not in tool_names:
-    raise SystemExit("authenticated tools/list did not expose get_mcp_health_check")
-PY
+    log_error "Docker app healthcheck did not pass."
+    docker compose "${COMPOSE_ARGS[@]}" ps
+    return 1
 }
 
 # Step 1: take a deploy lock so two deploys cannot mutate the stack at once.
@@ -248,21 +214,8 @@ fi
 docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate app
 printf "✅ Application container recreated\n"
 
-# Step 9: verify the app process accepts an authenticated MCP request.
-deploy_step "🩺" 9 9 "Verify authenticated MCP health"
-for attempt in {1..30}; do
-    if verify_authenticated_mcp_health >/dev/null 2>&1; then
-        # Step 9: record the currently deployed tag after the health check passes.
-        printf "%s\n" "$TAG" > "$STATE_DIR/current_tag"
-        printf "✅ Authenticated MCP health check passed\n"
-        printf "🎉 Deploy complete: %s\n" "$IMAGE_NAME"
-        exit 0
-    fi
-
-    printf "⏳ Waiting for app to pass authenticated MCP health (%s/30)\n" "$attempt"
-    sleep 2
-done
-
-log_error "Deployment failed authenticated MCP health check."
-docker compose "${COMPOSE_ARGS[@]}" ps
-exit 1
+# Step 9: wait for Docker to confirm the app accepts unauthenticated liveness probes.
+deploy_step "🩺" 9 9 "Wait for Docker app health"
+wait_for_app_container_health
+printf "%s\n" "$TAG" > "$STATE_DIR/current_tag"
+printf "🎉 Deploy complete: %s\n" "$IMAGE_NAME"

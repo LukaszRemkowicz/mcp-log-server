@@ -20,16 +20,22 @@ from auth.scopes import (
     WORKFLOW_BOOTSTRAP_SCOPE,
     WORKFLOW_SKILLS_READ_SCOPE,
 )
+from core.types import LogWorkspace
+from database.models import McpCaller
 from services.docker_service import (
     ContainerDetail,
+    ContainerDetailEnvVar,
     ContainerDetailMount,
     ContainerDetailNetwork,
     ContainerDetailPort,
     ContainerHealth,
     ContainerPathStat,
     ContainerRestartPolicy,
+    VpsContainerInventory,
+    VpsVolumeInventory,
 )
 from services.fail2ban_service import Fail2banActivity, Fail2banJailStatus, Fail2banServiceStatus
+from services.tls_certificate_service import TlsCertificateInspection
 from tests.conftest import (
     CustomJwtToken,
     FileBackedProjectContext,
@@ -63,6 +69,10 @@ SNAPSHOT_TOOL_CALLS: tuple[ToolCall, ...] = (
 )
 CONTAINER_TOOL_CALLS: tuple[ToolCall, ...] = (
     (
+        "inspect_project_compose_state",
+        {"project_name": "dockerpage"},
+    ),
+    (
         "inspect_containers_health",
         {"project_name": "dockerpage"},
     ),
@@ -83,8 +93,17 @@ CONTAINER_TOOL_CALLS: tuple[ToolCall, ...] = (
         {"project_name": "dockerpage", "source_key": "backend", "path": "/app"},
     ),
 )
+HOST_PATH_TOOL_CALLS: tuple[ToolCall, ...] = (
+    ("stat_project_path", {"project_name": "landingpage", "source_key": "app_file"}),
+    ("read_project_file", {"project_name": "landingpage", "source_key": "app_file"}),
+    ("list_project_directory", {"project_name": "landingpage", "source_key": "app_file"}),
+)
 FAIL2BAN_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("inspect_live_fail2ban_activity", {"project_name": "landingpage"}),
+)
+TLS_TOOL_CALLS: tuple[ToolCall, ...] = (("inspect_tls_certificate", {}),)
+PROJECT_MANIFEST_TOOL_CALLS: tuple[ToolCall, ...] = (
+    ("read_project_manifest", {"project_name": "landingpage"}),
 )
 ANALYSIS_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("group_errors", {"project_name": "landingpage"}),
@@ -103,9 +122,11 @@ COLLECT_LOGS_TOOL_CALLS: tuple[ToolCall, ...] = (
 )
 PROJECT_PROTECTED_TOOL_CALL_ARGUMENTS: tuple[ToolCall, ...] = (
     COLLECT_LOGS_TOOL_CALLS
+    + PROJECT_MANIFEST_TOOL_CALLS
     + SNAPSHOT_TOOL_CALLS
     + ANALYSIS_TOOL_CALLS
     + CONTAINER_TOOL_CALLS
+    + HOST_PATH_TOOL_CALLS
     + FAIL2BAN_TOOL_CALLS
 )
 CALLER_CONTEXT_LOG_TOOL_NAMES = {
@@ -114,6 +135,13 @@ CALLER_CONTEXT_LOG_TOOL_NAMES = {
 }
 CALLER_CONTEXT_TOOL_CALLS: tuple[CallerContextToolCall, ...] = (
     ("list_projects", {}, [PROJECTS_READ_SCOPE], ["landingpage"], False),
+    (
+        "read_project_manifest",
+        {"project_name": "landingpage"},
+        [PROJECTS_READ_SCOPE],
+        ["landingpage"],
+        False,
+    ),
     (
         "collect_logs",
         {"project_names": ["landingpage"], "source_keys": ["app_file"]},
@@ -192,9 +220,34 @@ CALLER_CONTEXT_TOOL_CALLS: tuple[CallerContextToolCall, ...] = (
         ["dockerpage"],
         False,
     ),
+    (
+        "stat_project_path",
+        {"project_name": "landingpage", "source_key": "app_file"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["landingpage"],
+        False,
+    ),
+    (
+        "read_project_file",
+        {"project_name": "landingpage", "source_key": "app_file"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["landingpage"],
+        False,
+    ),
+    (
+        "list_project_directory",
+        {"project_name": "landingpage", "source_key": "app_file"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["landingpage"],
+        False,
+    ),
 )
 PROJECT_PROTECTED_LOG_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [LOGS_COLLECT_SCOPE]) for tool_name, arguments in COLLECT_LOGS_TOOL_CALLS
+)
+PROJECT_PROTECTED_MANIFEST_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
+    (tool_name, arguments, [PROJECTS_READ_SCOPE])
+    for tool_name, arguments in PROJECT_MANIFEST_TOOL_CALLS
 )
 PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [LOGS_COLLECT_SCOPE]) for tool_name, arguments in SNAPSHOT_TOOL_CALLS
@@ -203,19 +256,21 @@ PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
 )
 PROJECT_PROTECTED_CONTAINER_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [CONTAINER_FILES_READ_SCOPE])
-    for tool_name, arguments in CONTAINER_TOOL_CALLS
+    for tool_name, arguments in CONTAINER_TOOL_CALLS + HOST_PATH_TOOL_CALLS
 )
 PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [MCP_STATUS_READ_SCOPE]) for tool_name, arguments in FAIL2BAN_TOOL_CALLS
 )
 PROJECT_PROTECTED_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
     PROJECT_PROTECTED_LOG_TOOL_CALLS
+    + PROJECT_PROTECTED_MANIFEST_TOOL_CALLS
     + PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS
     + PROJECT_PROTECTED_CONTAINER_TOOL_CALLS
     + PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS
 )
 PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
-    PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS
+    PROJECT_PROTECTED_MANIFEST_TOOL_CALLS
+    + PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS
     + PROJECT_PROTECTED_CONTAINER_TOOL_CALLS
     + PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS
 )
@@ -246,16 +301,24 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "create_filtered_view",
                 "inspect_proxy_activity",
                 "suggest_followup_window",
+                "inspect_tls_certificate",
                 "list_projects",
+                "read_project_manifest",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
             },
             {
                 "inspect_containers_health",
+                "inspect_project_compose_state",
+                "inspect_vps_containers",
+                "inspect_vps_volumes",
                 "inspect_container_detail",
                 "stat_container_path",
                 "read_container_file",
                 "list_container_directory",
+                "stat_project_path",
+                "read_project_file",
+                "list_project_directory",
                 "close_agent_session",
             },
         ),
@@ -280,12 +343,20 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "create_filtered_view",
                 "inspect_proxy_activity",
                 "suggest_followup_window",
+                "inspect_tls_certificate",
                 "list_projects",
+                "read_project_manifest",
                 "inspect_containers_health",
+                "inspect_project_compose_state",
+                "inspect_vps_containers",
+                "inspect_vps_volumes",
                 "inspect_container_detail",
                 "stat_container_path",
                 "read_container_file",
                 "list_container_directory",
+                "stat_project_path",
+                "read_project_file",
+                "list_project_directory",
                 "close_agent_session",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
@@ -333,6 +404,7 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     workflow_token: str = custom_jwt_token(
         "workflow-agent",
         [
+            CONTAINER_FILES_READ_SCOPE,
             LOGS_COLLECT_SCOPE,
             PROJECTS_READ_SCOPE,
             WORKFLOW_BOOTSTRAP_SCOPE,
@@ -399,6 +471,19 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert any(item["tool_name"] == "inspect_proxy_activity" for item in payload["tools"])
     assert any(item["tool_name"] == "suggest_followup_window" for item in payload["tools"])
     assert any(item["tool_name"] == "list_projects" for item in payload["tools"])
+    assert any(item["tool_name"] == "read_project_manifest" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_tls_certificate" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_vps_containers" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_vps_volumes" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_project_compose_state" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_containers_health" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_container_detail" for item in payload["tools"])
+    assert any(item["tool_name"] == "stat_container_path" for item in payload["tools"])
+    assert any(item["tool_name"] == "read_container_file" for item in payload["tools"])
+    assert any(item["tool_name"] == "list_container_directory" for item in payload["tools"])
+    assert any(item["tool_name"] == "stat_project_path" for item in payload["tools"])
+    assert any(item["tool_name"] == "read_project_file" for item in payload["tools"])
+    assert any(item["tool_name"] == "list_project_directory" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_service_status" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_health_check" for item in payload["tools"])
     collect_logs_tool = next(
@@ -493,7 +578,7 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
             "tools.container_inspection.docker_service.inspect_container_health",
             return_value=ContainerHealth(
                 container_id="abc123def456",
-                container_name="app-container",
+                container_name="backend-container",
                 image="portfolio/backend:2026-05-16",
                 docker_status="running",
                 health_status="healthy",
@@ -561,6 +646,44 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
                 ],
                 False,
             ),
+        )
+    if tool_name == "inspect_project_compose_state":
+        mocker.patch(
+            "tools.container_inspection.docker_service.inspect_vps_containers",
+            return_value=[
+                VpsContainerInventory(
+                    container_id="abc123def4567890",
+                    short_container_id="abc123def456",
+                    container_name="app-container",
+                    image="portfolio/backend:2026-05-16",
+                    command=[],
+                    command_preview="",
+                    created_at=None,
+                    docker_status="running",
+                    state="running",
+                    health_status="healthy",
+                    running=True,
+                    restarting=False,
+                    paused=False,
+                    dead=False,
+                    exit_code=0,
+                    error="",
+                    restart_count=0,
+                    started_at=None,
+                    finished_at=None,
+                    compose_labels={
+                        "com.docker.compose.project": "dockerpage",
+                        "com.docker.compose.service": "backend",
+                    },
+                    restart_policy=ContainerRestartPolicy(
+                        name="unless-stopped",
+                        maximum_retry_count=0,
+                    ),
+                    ports=[],
+                    network_names=[],
+                    triage_notes=[],
+                )
+            ],
         )
 
     request_data = {
@@ -1123,6 +1246,12 @@ async def test_inspect_proxy_activity_api_groups_proxy_status_signals(
     assert payload["parsed_proxy_line_count"] == 8
     assert payload["http_status_line_count"] == 6
     assert payload["upstream_error_count"] == 1
+    assert payload["truncated"] is False
+    assert payload["returned_route_group_count"] == 5
+    assert payload["distinct_route_group_count"] == 5
+    assert payload["distinct_route_group_count_is_exact"] is True
+    assert payload["omitted_route_group_count"] == 0
+    assert payload["route_groups_omitted"] is False
     assert payload["status_class_counts"] == [
         {"status_class": "2xx", "count": 1},
         {"status_class": "3xx", "count": 2},
@@ -1158,7 +1287,7 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
                 request_id="collect-vps-security-fixture",
                 project_names=["vps-security"],
                 source_keys=["all"],
-                since="30d",
+                since="2026-05-18T00:00:00Z",
             ),
         )
         grep_response = await jsonrpc.post(
@@ -1276,7 +1405,7 @@ async def test_inspect_probe_blocking_activity_api_correlates_probe_and_fail2ban
                 request_id="collect-vps-security-probe-blocking",
                 project_names=["vps-security"],
                 source_keys=["all"],
-                since="30d",
+                since="2026-05-18T00:00:00Z",
             ),
         )
         response = await jsonrpc.post(
@@ -1748,6 +1877,189 @@ async def test_list_projects_api_returns_manifest_backed_projects(
     assert "backend" in landingpage["source_keys"]
 
 
+async def test_read_project_manifest_api_returns_authorized_manifest_contract(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify read_project_manifest returns detailed persisted manifest metadata."""
+
+    token: str = custom_jwt_token(
+        "workflow-agent",
+        [PROJECTS_READ_SCOPE],
+        "workflow-agent",
+        {"projects_access": "all"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "read-project-manifest",
+            "method": "tools/call",
+            "params": {
+                "name": "read_project_manifest",
+                "arguments": {"project_name": "landingpage"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "read_project_manifest"
+    assert payload["project_name"] == "landingpage"
+    assert payload["project_summary"] == "Landingpage project for analysis tests."
+    assert payload["source_keys"] == [
+        "backend",
+        "nginx",
+        "app_file",
+        "app_first",
+        "app_second",
+        "snapshot_text",
+        "traefik",
+    ]
+    assert payload["static_asset_paths"] == ["/favicon.ico", "/robots.txt", "/sitemap.xml"]
+    assert payload["static_asset_extensions"]
+    backend_source = payload["sources"][0]
+    assert backend_source["source_key"] == "backend"
+    assert backend_source["source_type"] == "file"
+    assert backend_source["target"].endswith("/src/tests/fixtures/logs/landingpage/backend.log")
+    assert backend_source["description"] == "Backend logs."
+    assert backend_source["required"] is True
+    assert backend_source["parser_type"] == "json_lines"
+    assert backend_source["normalization_profile"] == "app_logs"
+    assert backend_source["retention_class"] == "short"
+    assert backend_source["default_noise_profile"] == "backend_noise"
+    assert backend_source["stream"] is None
+    assert backend_source["inspect_path_prefixes"] == []
+    assert "id" not in payload
+    assert "created_at" not in payload
+    assert "updated_at" not in payload
+
+
+async def test_read_project_manifest_api_allows_session_caller_without_session_id(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify manifest inspection is project-scoped and does not require session_id."""
+
+    await McpCaller.objects.filter(
+        client_id="codex-agent",
+        client_type="codex",
+        workspace=LogWorkspace.WORKFLOW,
+    ).delete()
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [PROJECTS_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "read-project-manifest-session-caller",
+            "method": "tools/call",
+            "params": {
+                "name": "read_project_manifest",
+                "arguments": {"project_name": "landingpage"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "read_project_manifest"
+    assert payload["project_name"] == "landingpage"
+
+
+async def test_read_project_manifest_api_filters_to_one_source(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify read_project_manifest can return one source definition."""
+
+    token: str = custom_jwt_token(
+        "workflow-agent",
+        [PROJECTS_READ_SCOPE],
+        "workflow-agent",
+        {"projects_access": "all"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "read-project-manifest-source",
+            "method": "tools/call",
+            "params": {
+                "name": "read_project_manifest",
+                "arguments": {"project_name": "landingpage", "source_key": "traefik"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["requested_source_key"] == "traefik"
+    assert payload["source_keys"] == ["traefik"]
+    assert [source["source_key"] for source in payload["sources"]] == ["traefik"]
+    assert payload["sources"][0]["normalization_profile"] == "proxy_access"
+
+
+async def test_read_project_manifest_api_returns_unknown_source_error(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify read_project_manifest gives structured guidance for unknown sources."""
+
+    token: str = custom_jwt_token(
+        "workflow-agent",
+        [PROJECTS_READ_SCOPE],
+        "workflow-agent",
+        {"projects_access": "all"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "read-project-manifest-missing-source",
+            "method": "tools/call",
+            "params": {
+                "name": "read_project_manifest",
+                "arguments": {"project_name": "landingpage", "source_key": "missing"},
+            },
+        },
+    )
+
+    result = response.json()["result"]
+    payload = result["structuredContent"]
+
+    assert response.status_code == 200
+    assert result["isError"] is True
+    assert payload["error_code"] == "unknown_source_key"
+    assert payload["details"] == {
+        "project_name": "landingpage",
+        "source_key": "missing",
+        "available_source_keys": [
+            "backend",
+            "nginx",
+            "app_file",
+            "app_first",
+            "app_second",
+            "snapshot_text",
+            "traefik",
+        ],
+    }
+
+
 async def test_read_container_file_api_returns_file_contents(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
@@ -1869,6 +2181,290 @@ async def test_inspect_containers_health_api_returns_container_status(
     assert backend_payload["image"] == "portfolio/backend:2026-05-16"
 
 
+async def test_inspect_vps_containers_api_returns_docker_ps_inventory(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify inspect_vps_containers returns bounded VPS-wide container facts."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["all"]},
+    )
+
+    mocker.patch(
+        "tools.container_inspection.docker_service.inspect_vps_containers",
+        return_value=[
+            VpsContainerInventory(
+                container_id="abc123def4567890",
+                short_container_id="abc123def456",
+                container_name="backend-container",
+                image="portfolio/backend:2026-05-16",
+                command=["gunicorn", "app.wsgi:application"],
+                command_preview="gunicorn app.wsgi:application",
+                created_at="2026-05-16T09:55:00.000000000Z",
+                docker_status="running",
+                state="running",
+                health_status="unhealthy",
+                running=True,
+                restarting=False,
+                paused=False,
+                dead=False,
+                exit_code=0,
+                error="",
+                restart_count=8,
+                started_at="2026-05-16T10:00:00.000000000Z",
+                finished_at=None,
+                compose_labels={
+                    "com.docker.compose.project": "portfolio",
+                    "com.docker.compose.service": "backend",
+                },
+                restart_policy=ContainerRestartPolicy(
+                    name="unless-stopped",
+                    maximum_retry_count=0,
+                ),
+                ports=[
+                    ContainerDetailPort(
+                        private_port="8000/tcp",
+                        host_ip="127.0.0.1",
+                        host_port="18080",
+                    )
+                ],
+                network_names=["web"],
+                triage_notes=["health_status=unhealthy", "restart_count=8"],
+            )
+        ],
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-vps-containers",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_vps_containers",
+                "arguments": {},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_vps_containers"
+    assert payload["container_count"] == 1
+    assert payload["truncated"] is False
+    assert payload["containers"][0]["container_name"] == "backend-container"
+    assert payload["containers"][0]["command_preview"] == "gunicorn app.wsgi:application"
+    assert payload["containers"][0]["compose_labels"] == {
+        "com.docker.compose.project": "portfolio",
+        "com.docker.compose.service": "backend",
+    }
+    assert payload["containers"][0]["restart_policy"] == {
+        "name": "unless-stopped",
+        "maximum_retry_count": 0,
+    }
+    assert payload["containers"][0]["ports"] == [
+        {"private_port": "8000/tcp", "host_ip": "127.0.0.1", "host_port": "18080"}
+    ]
+    assert payload["containers"][0]["network_names"] == ["web"]
+    assert payload["containers"][0]["triage_notes"] == [
+        "health_status=unhealthy",
+        "restart_count=8",
+    ]
+    assert "secret" not in json.dumps(payload).lower()
+
+
+async def test_inspect_vps_volumes_api_returns_volume_inventory(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify inspect_vps_volumes returns redacted VPS-wide volume facts."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+
+    mocker.patch(
+        "tools.container_inspection.docker_service.inspect_vps_volumes",
+        return_value=[
+            VpsVolumeInventory(
+                volume_name="dockerpage_db_data",
+                driver="local",
+                scope="local",
+                created_at="2026-05-16T09:55:00Z",
+                compose_labels={
+                    "com.docker.compose.project": "dockerpage",
+                    "com.docker.compose.volume": "db_data",
+                },
+                option_keys=["type"],
+                mountpoint_available=True,
+                mountpoint_redacted=True,
+                usage_ref_count=2,
+                usage_size_bytes=4096,
+            )
+        ],
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-vps-volumes",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_vps_volumes",
+                "arguments": {},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_vps_volumes"
+    assert payload["volume_count"] == 1
+    assert payload["truncated"] is False
+    assert payload["volumes"] == [
+        {
+            "volume_name": "dockerpage_db_data",
+            "driver": "local",
+            "scope": "local",
+            "created_at": "2026-05-16T09:55:00Z",
+            "compose_labels": {
+                "com.docker.compose.project": "dockerpage",
+                "com.docker.compose.volume": "db_data",
+            },
+            "option_keys": ["type"],
+            "mountpoint_available": True,
+            "mountpoint_redacted": True,
+            "usage_ref_count": 2,
+            "usage_size_bytes": 4096,
+        }
+    ]
+    assert payload["volumes"][0]["mountpoint_available"] is True
+    assert payload["volumes"][0]["mountpoint_redacted"] is True
+    assert "/var/lib/docker" not in json.dumps(payload)
+
+
+async def test_inspect_vps_volumes_api_forwards_volume_filters(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify inspect_vps_volumes accepts cleanup-oriented inventory filters."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+
+    inspect_mock = mocker.patch(
+        "tools.container_inspection.docker_service.inspect_vps_volumes",
+        return_value=[],
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-vps-volumes-filtered",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_vps_volumes",
+                "arguments": {
+                    "dangling_only": True,
+                    "anonymous_only": True,
+                    "name_prefix": "a",
+                },
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    inspect_mock.assert_called_once_with(
+        dangling_only=True,
+        anonymous_only=True,
+        name_prefix="a",
+    )
+    assert payload["filters"] == {
+        "dangling_only": True,
+        "anonymous_only": True,
+        "name_prefix": "a",
+    }
+
+
+async def test_inspect_tls_certificate_api_returns_site_domain_summary(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify inspect_tls_certificate returns bounded SITE_DOMAIN certificate facts."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [MCP_STATUS_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+    mocker.patch(
+        "tools.tls.tls_certificate_service.inspect_site_certificate",
+        return_value=TlsCertificateInspection(
+            domain_key="site",
+            hostname="example.com",
+            port=443,
+            inspection_status="ok",
+            warning_level="ok",
+            subject_summary="CN=example.com",
+            issuer_summary="CN=Example CA",
+            not_before="2025-12-01T00:00:00+00:00",
+            not_after="2026-04-01T00:00:00+00:00",
+            days_until_expiry=90,
+            hostname_matches=True,
+            matched_names=["example.com"],
+            error_code=None,
+            message="TLS certificate is valid for SITE_DOMAIN.",
+        ),
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-tls-certificate",
+            "method": "tools/call",
+            "params": {"name": "inspect_tls_certificate", "arguments": {}},
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_tls_certificate"
+    assert payload["domain_key"] == "site"
+    assert payload["hostname"] == "example.com"
+    assert payload["port"] == 443
+    assert payload["inspection_status"] == "ok"
+    assert payload["warning_level"] == "ok"
+    assert payload["hostname_matches"] is True
+
+
 async def test_inspect_container_detail_api_returns_curated_container_metadata(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
@@ -1903,7 +2499,45 @@ async def test_inspect_container_detail_api_returns_curated_container_metadata(
                 finished_at=None,
             ),
             created_at="2026-05-16T09:55:00.000000000Z",
-            env_var_names=["SECRET_KEY", "DJANGO_SETTINGS_MODULE"],
+            env_var_names=[
+                "SECRET_KEY",
+                "DJANGO_SETTINGS_MODULE",
+                "DATABASE_URL",
+                "NODE_ENV",
+                "CUSTOM_VALUE",
+            ],
+            env_vars=[
+                ContainerDetailEnvVar(
+                    name="SECRET_KEY",
+                    value=None,
+                    value_redacted=True,
+                    secret=True,
+                ),
+                ContainerDetailEnvVar(
+                    name="DJANGO_SETTINGS_MODULE",
+                    value="app.settings",
+                    value_redacted=False,
+                    secret=False,
+                ),
+                ContainerDetailEnvVar(
+                    name="DATABASE_URL",
+                    value=None,
+                    value_redacted=True,
+                    secret=True,
+                ),
+                ContainerDetailEnvVar(
+                    name="NODE_ENV",
+                    value="production",
+                    value_redacted=False,
+                    secret=False,
+                ),
+                ContainerDetailEnvVar(
+                    name="CUSTOM_VALUE",
+                    value=None,
+                    value_redacted=True,
+                    secret=False,
+                ),
+            ],
             label_keys=["com.docker.compose.service"],
             compose_labels={"com.docker.compose.service": "backend"},
             restart_policy=ContainerRestartPolicy(
@@ -1972,7 +2606,33 @@ async def test_inspect_container_detail_api_returns_curated_container_metadata(
     assert payload["source_key"] == "backend"
     assert payload["container"]["container_name"] == "app-container"
     assert payload["created_at"] == "2026-05-16T09:55:00.000000000Z"
-    assert payload["env_var_names"] == ["SECRET_KEY", "DJANGO_SETTINGS_MODULE"]
+    assert payload["env_var_names"] == [
+        "SECRET_KEY",
+        "DJANGO_SETTINGS_MODULE",
+        "DATABASE_URL",
+        "NODE_ENV",
+        "CUSTOM_VALUE",
+    ]
+    assert payload["env_vars"] == [
+        {"name": "SECRET_KEY", "value": None, "value_redacted": True, "secret": True},
+        {
+            "name": "DJANGO_SETTINGS_MODULE",
+            "value": "app.settings",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {"name": "DATABASE_URL", "value": None, "value_redacted": True, "secret": True},
+        {
+            "name": "NODE_ENV",
+            "value": "production",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {"name": "CUSTOM_VALUE", "value": None, "value_redacted": True, "secret": False},
+    ]
+    assert "hidden" not in json.dumps(payload)
+    assert "postgres://user:pass@db/app" not in json.dumps(payload)
+    assert "should-not-leak" not in json.dumps(payload)
     assert payload["label_keys"] == ["com.docker.compose.service"]
     assert payload["compose_labels"] == {"com.docker.compose.service": "backend"}
     assert payload["restart_policy"] == {
@@ -2047,6 +2707,144 @@ async def test_stat_container_path_api_returns_file_metadata(
     assert payload["file"]["size"] == 12
 
 
+async def test_inspect_project_compose_state_api_returns_comparison(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify compose-state inspection returns runtime-derived Compose state."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+    mocker.patch(
+        "tools.container_inspection.docker_service.inspect_vps_containers",
+        return_value=[
+            VpsContainerInventory(
+                container_id="abc123def4567890",
+                short_container_id="abc123def456",
+                container_name="app-container",
+                image="portfolio/backend:2026-05-17",
+                command=[],
+                command_preview="",
+                created_at=None,
+                docker_status="running",
+                state="running",
+                health_status="healthy",
+                running=True,
+                restarting=False,
+                paused=False,
+                dead=False,
+                exit_code=0,
+                error="",
+                restart_count=0,
+                started_at=None,
+                finished_at=None,
+                compose_labels={
+                    "com.docker.compose.project": "dockerpage",
+                    "com.docker.compose.service": "backend",
+                },
+                restart_policy=ContainerRestartPolicy(
+                    name="unless-stopped",
+                    maximum_retry_count=0,
+                ),
+                ports=[
+                    ContainerDetailPort(
+                        private_port="8000/tcp",
+                        host_ip="127.0.0.1",
+                        host_port="18080",
+                    )
+                ],
+                network_names=[],
+                triage_notes=[],
+                env_var_names=["SECRET_KEY"],
+                mounts=[
+                    ContainerDetailMount(
+                        type="volume",
+                        destination="/app",
+                        mode="rw",
+                        rw=True,
+                        name="dockerpage_static",
+                    )
+                ],
+            )
+        ],
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-project-compose-state",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_project_compose_state",
+                "arguments": {"project_name": "dockerpage"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_project_compose_state"
+    assert payload["project_name"] == "dockerpage"
+    assert payload["compose_project"] == "dockerpage"
+    assert payload["expected_services"][0] == {
+        "source_key": "backend",
+        "compose_project": "dockerpage",
+        "service_name": "backend",
+    }
+    assert payload["running_containers"][0]["mounts"][0]["source_redacted"] is True
+    assert payload["running_containers"][0]["volume_names"] == ["dockerpage_static"]
+    assert payload["warnings"] == []
+    assert "hidden" not in json.dumps(payload)
+
+
+async def test_inspect_project_compose_state_api_requires_expected_state(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify compose-state inspection requires labelled target containers."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+    mocker.patch(
+        "tools.container_inspection.docker_service.inspect_vps_containers",
+        return_value=[],
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-project-compose-state-unavailable",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_project_compose_state",
+                "arguments": {"project_name": "dockerpage"},
+            },
+        },
+    )
+
+    result = response.json()["result"]
+    payload = result["structuredContent"]
+
+    assert response.status_code == 200
+    assert result["isError"] is True
+    assert payload["action"] == "inspect_project_compose_state"
+    assert payload["error_code"] == "compose_expected_state_unavailable"
+
+
 @pytest.mark.parametrize(
     ("arguments", "expected_path"),
     [
@@ -2108,6 +2906,203 @@ async def test_list_container_directory_api_returns_entries(
     assert payload["path"] == expected_path
     assert payload["entries"][0]["name"] == "VERSION"
     list_directory.assert_called_once_with("app-container", expected_path)
+
+
+async def test_stat_project_path_api_returns_file_metadata(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify stat_project_path returns metadata for a manifest file source."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "stat-project-path",
+            "method": "tools/call",
+            "params": {
+                "name": "stat_project_path",
+                "arguments": {"project_name": "landingpage", "source_key": "app_file"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "stat_project_path"
+    assert payload["project_name"] == "landingpage"
+    assert payload["source_key"] == "app_file"
+    assert payload["path"].endswith("/src/tests/fixtures/logs/landingpage/app_file.log")
+    assert payload["file"]["exists"] is True
+    assert payload["file"]["is_file"] is True
+    assert payload["file"]["readable"] is True
+
+
+async def test_stat_project_path_api_allows_session_caller_without_session_id(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify host path tools are project-scoped and do not require session_id."""
+
+    await McpCaller.objects.filter(
+        client_id="codex-agent",
+        client_type="codex",
+        workspace=LogWorkspace.WORKFLOW,
+    ).delete()
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "stat-project-path-session-caller",
+            "method": "tools/call",
+            "params": {
+                "name": "stat_project_path",
+                "arguments": {"project_name": "landingpage", "source_key": "app_file"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "stat_project_path"
+    assert payload["project_name"] == "landingpage"
+    assert payload["source_key"] == "app_file"
+
+
+async def test_read_project_file_api_returns_bounded_file_contents(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify read_project_file returns a bounded text preview."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "read-project-file",
+            "method": "tools/call",
+            "params": {
+                "name": "read_project_file",
+                "arguments": {
+                    "project_name": "landingpage",
+                    "source_key": "app_file",
+                    "max_bytes": 12,
+                },
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "read_project_file"
+    assert payload["max_bytes"] == 12
+    assert payload["truncated"] is True
+    assert len(payload["content"].encode("utf-8")) <= 12
+    assert payload["file"]["is_file"] is True
+
+
+async def test_list_project_directory_api_returns_parent_entries(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify list_project_directory lists the approved source parent directory."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "list-project-directory",
+            "method": "tools/call",
+            "params": {
+                "name": "list_project_directory",
+                "arguments": {"project_name": "landingpage", "source_key": "app_file"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+    entry_names = [entry["name"] for entry in payload["entries"]]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "list_project_directory"
+    assert payload["path"].endswith("/src/tests/fixtures/logs/landingpage")
+    assert "app_file.log" in entry_names
+    assert payload["truncated"] is False
+
+
+async def test_stat_project_path_api_rejects_parent_traversal(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify host path inspection rejects traversal syntax before filesystem access."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "stat-project-path-traversal",
+            "method": "tools/call",
+            "params": {
+                "name": "stat_project_path",
+                "arguments": {
+                    "project_name": "landingpage",
+                    "source_key": "app_file",
+                    "path": "../secret.txt",
+                },
+            },
+        },
+    )
+
+    result = response.json()["result"]
+    payload = result["structuredContent"]
+
+    assert response.status_code == 200
+    assert result["isError"] is True
+    assert payload["action"] == "stat_project_path"
+    assert payload["error_code"] == "project_path_parent_traversal"
+    assert payload["details"] == {"path": "../secret.txt"}
 
 
 async def test_list_projects_api_returns_multiple_manifest_backed_projects(

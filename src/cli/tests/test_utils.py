@@ -21,18 +21,29 @@ def test_state_dir_resolver_uses_configured_state_dir(tmp_path: Path) -> None:
     assert state_dir == configured_state_dir
 
 
-def test_state_dir_resolver_falls_back_to_project_state(
+def test_state_dir_resolver_uses_fixed_prod_state_root(
     mocker: MockerFixture,
     tmp_path: Path,
 ) -> None:
-    mocker.patch("cli.utils._can_use_preferred_state_dir", return_value=False)
+    mocker.patch("utils.state_dir._can_use_preferred_state_dir", return_value=False)
 
     state_dir = utils.get_state_dir("prod", project_dir=tmp_path, env={})
 
-    assert state_dir == tmp_path / ".agent" / "state" / "prod"
+    assert state_dir == utils.DEFAULT_STATE_ROOT / "prod"
 
 
-def test_resolve_prod_tag_ignores_tag_env_and_uses_current_tag_file(tmp_path: Path) -> None:
+def test_state_dir_resolver_falls_back_to_project_state_for_local(
+    mocker: MockerFixture,
+    tmp_path: Path,
+) -> None:
+    mocker.patch("utils.state_dir._can_use_preferred_state_dir", return_value=False)
+
+    resolved_state_dir = utils.get_state_dir("local", project_dir=tmp_path, env={})
+
+    assert resolved_state_dir == tmp_path / ".agent" / "state" / "local"
+
+
+def test_resolve_prod_tag_prefers_explicit_tag_env(tmp_path: Path) -> None:
     state_dir = tmp_path / "prod"
     state_dir.mkdir()
     (state_dir / "current_tag").write_text("v0.1.2\n", encoding="utf-8")
@@ -42,7 +53,7 @@ def test_resolve_prod_tag_ignores_tag_env_and_uses_current_tag_file(tmp_path: Pa
         env={"TAG": "v0.1.3", "STATE_DIR": str(state_dir)},
     )
 
-    assert tag == "v0.1.2"
+    assert tag == "v0.1.3"
 
 
 def test_resolve_prod_tag_uses_current_tag_file(tmp_path: Path) -> None:
@@ -117,6 +128,33 @@ def test_build_compose_command_runs_prod_app_service_command(
         "command",
         "upload-project-manifest",
         "--all",
+    ]
+
+
+def test_build_compose_command_uses_explicit_prod_tag(monkeypatch) -> None:
+    monkeypatch.setenv("TAG", "v0.1.4")
+
+    command = utils.build_compose_command(
+        "prod",
+        ["python", "-m", "cli.main", "generate-dev-jwt", "--exp-time", "576"],
+    )
+
+    assert command == [
+        "env",
+        "TAG=v0.1.4",
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.prod.yml",
+        "run",
+        "--rm",
+        "app",
+        "python",
+        "-m",
+        "cli.main",
+        "generate-dev-jwt",
+        "--exp-time",
+        "576",
     ]
 
 

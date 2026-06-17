@@ -22,6 +22,9 @@ def test_settings_expose_uppercase_fields() -> None:
     assert runtime_settings.FAIL2BAN_CLIENT_COMMAND == "fail2ban-client"
     assert runtime_settings.FAIL2BAN_JAILS == ["portfolio-nginx-probes", "portfolio-traefik-probes"]
     assert runtime_settings.FAIL2BAN_COMMAND_TIMEOUT_SECONDS == 5
+    assert runtime_settings.SITE_DOMAIN == settings_module.SITE_DOMAIN
+    assert runtime_settings.TLS_CERTIFICATE_TIMEOUT_SECONDS == 5
+    assert runtime_settings.TLS_CERTIFICATE_EXPIRY_WARNING_DAYS == 30
     assert runtime_settings.MCP_PATH == "/mcp"
     assert runtime_settings.MCP_JSON_RESPONSE is True
     assert runtime_settings.CALLER_AUTH == "database.models.McpCaller"
@@ -39,6 +42,20 @@ def test_settings_can_load_injected_source() -> None:
 
     assert runtime_settings.LOG_LEVEL == "DEBUG"
     assert runtime_settings.LOG_FORMAT == "json"
+
+
+def test_settings_can_override_tls_certificate_defaults() -> None:
+    runtime_settings = Settings(
+        {
+            "SITE_DOMAIN": "example.com",
+            "TLS_CERTIFICATE_TIMEOUT_SECONDS": 3,
+            "TLS_CERTIFICATE_EXPIRY_WARNING_DAYS": 10,
+        }
+    )
+
+    assert runtime_settings.SITE_DOMAIN == "example.com"
+    assert runtime_settings.TLS_CERTIFICATE_TIMEOUT_SECONDS == 3
+    assert runtime_settings.TLS_CERTIFICATE_EXPIRY_WARNING_DAYS == 10
 
 
 @pytest.mark.parametrize(
