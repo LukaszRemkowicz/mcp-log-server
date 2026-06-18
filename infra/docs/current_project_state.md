@@ -240,8 +240,11 @@ Current implemented shape:
 - the concrete caller model is resolved from `MCP_CALLER_MODEL`, currently
   `database.models.McpCaller`
 - local development uses example JWTs signed with the local shared secret
+- production can verify Keycloak-issued JWTs with `JWT_JWKS_URI`,
+  `JWT_ISSUER`, and `JWT_AUDIENCE`
 
-This is a development-ready JWT flow, not a final Keycloak production rollout.
+Keycloak owns caller token issuance; MCP still owns project authorization
+through `mcp_callers.allowed_projects`.
 
 ## Current Manifest Model
 
