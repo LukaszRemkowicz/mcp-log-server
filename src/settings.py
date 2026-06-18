@@ -35,11 +35,22 @@ PROJECT_MANIFESTS_PATH = Path(
 DEFAULT_LOG_WINDOW = "24h"
 WORKFLOW_ARCHIVE_RETENTION = "14d"
 LOG_SNAPSHOT_RETENTION = "7d"
-FAIL2BAN_SOCKET_APP_SOCKET_PATH = Path(env.str("FAIL2BAN_SOCKET_APP_SOCKET_PATH"))
+FAIL2BAN_SOCKET_APP_SOCKET_PATH = Path(
+    env.str("FAIL2BAN_SOCKET_APP_SOCKET_PATH", default="/run/fail2ban-socket-app/gateway.sock")
+)
 FAIL2BAN_SOCKET_APP_TIMEOUT_SECONDS = 5
-DOCKER_SOCKET_APP_SOCKET_PATH = Path(env.str("DOCKER_SOCKET_APP_SOCKET_PATH"))
+DOCKER_SOCKET_APP_SOCKET_PATH = Path(
+    env.str("DOCKER_SOCKET_APP_SOCKET_PATH", default="/run/docker-socket-app/gateway.sock")
+)
 DOCKER_SOCKET_APP_TIMEOUT_SECONDS = 15
-FAIL2BAN_JAILS = ["portfolio-nginx-probes", "portfolio-traefik-probes", "portfolio-keycloak-token"]
+FAIL2BAN_JAILS = env.list(
+    "FAIL2BAN_JAILS",
+    default=[
+        "portfolio-nginx-probes",
+        "portfolio-traefik-probes",
+        "portfolio-keycloak-token",
+    ],
+)
 SITE_DOMAIN = env.str("SITE_DOMAIN", default="localhost").strip()
 TLS_CERTIFICATE_SUBDOMAINS = env.list(
     "TLS_CERTIFICATE_SUBDOMAINS",

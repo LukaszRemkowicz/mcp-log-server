@@ -250,6 +250,24 @@ def test_application_registers_expected_mcp_components(
             tool for tool in tools if tool.name == "inspect_vps_containers"
         )
         assert app_vps_containers_tool.description == INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION
+        read_only_tool_names = [
+            "inspect_vps_containers",
+            "inspect_vps_volumes",
+            "inspect_project_compose_state",
+            "stat_project_path",
+            "read_project_file",
+            "list_project_directory",
+            "list_container_directory",
+            "stat_container_path",
+            "read_container_file",
+            "inspect_probe_blocking_activity",
+            "suggest_followup_window",
+        ]
+        for tool_name in read_only_tool_names:
+            annotations = next(tool for tool in tools if tool.name == tool_name).annotations
+            assert annotations is not None
+            assert annotations.readOnlyHint is True
+            assert annotations.destructiveHint is False
         app_container_detail_tool = next(
             tool for tool in tools if tool.name == "inspect_container_detail"
         )

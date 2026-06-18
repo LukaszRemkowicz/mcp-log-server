@@ -9,7 +9,7 @@ from typing import cast
 
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
-from mcp.types import TextContent
+from mcp.types import TextContent, ToolAnnotations
 
 from auth.mcp_authorized_manifests import AuthorizedProjectManifests
 from auth.scopes import CONTAINER_FILES_READ_SCOPE
@@ -39,6 +39,11 @@ from utils.types import JSONObject
 
 logger: logging.Logger = get_logger("tools.host_paths")
 host_path_service = HostPathService()
+READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +216,7 @@ def _project_path_payload(metadata: HostPathMetadata) -> ProjectPathMetadataPayl
 @workflow_discoverable_tool(
     CONTAINER_FILES_READ_SCOPE,
     mcp_description=STAT_PROJECT_PATH_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
 )
 @project_authorized_tool
 async def stat_project_path(
@@ -264,6 +270,7 @@ async def stat_project_path(
 @workflow_discoverable_tool(
     CONTAINER_FILES_READ_SCOPE,
     mcp_description=READ_PROJECT_FILE_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
 )
 @project_authorized_tool
 async def read_project_file(
@@ -336,6 +343,7 @@ async def read_project_file(
 @workflow_discoverable_tool(
     CONTAINER_FILES_READ_SCOPE,
     mcp_description=LIST_PROJECT_DIRECTORY_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
 )
 @project_authorized_tool
 async def list_project_directory(

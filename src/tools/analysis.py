@@ -11,6 +11,7 @@ from fastmcp.dependencies import CurrentAccessToken
 from fastmcp.server.auth import AccessToken
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
+from mcp.types import ToolAnnotations
 
 from auth.mcp_authorized_manifests import AuthorizedProjectManifests
 from auth.mcp_caller_context import get_request_mcp_caller
@@ -56,6 +57,11 @@ logger: logging.Logger = get_logger("tools.analysis")
 analysis_service = LogAnalysisService()
 filtering_service = LogFilteringService()
 snapshot_service = LogSnapshotService()
+READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+)
 
 DEFAULT_MAX_ERROR_GROUPS = 50
 DEFAULT_MAX_PROXY_GROUPS = 50
@@ -479,6 +485,7 @@ async def group_errors(
 @workflow_discoverable_tool(
     LOGS_COLLECT_SCOPE,
     mcp_description=INSPECT_PROBE_BLOCKING_ACTIVITY_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
 )
 @project_authorized_tool
 async def inspect_probe_blocking_activity(
@@ -863,6 +870,7 @@ async def create_filtered_view(
 @workflow_discoverable_tool(
     LOGS_COLLECT_SCOPE,
     mcp_description=SUGGEST_FOLLOWUP_WINDOW_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
 )
 def suggest_followup_window(
     first_timestamp: str,
