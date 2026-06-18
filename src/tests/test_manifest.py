@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from manifests.loader import load_manifest
-from manifests.models import Manifest, SourceDefinition
+from manifests.models import Manifest, ProjectDeploymentMetadata, SourceDefinition
 from services.project_manifest import ProjectManifestService
 from tests.conftest import TEST_MANIFESTS_DIR
 
@@ -100,6 +100,37 @@ def test_source_definition_accepts_optional_producer_metadata() -> None:
 
     assert source.expected_producer_type == "cron"
     assert source.scheduler_patterns == ["agent-monitoring", "sitemap-analysis"]
+
+
+def test_manifest_accepts_optional_deployment_metadata(tmp_path: Path) -> None:
+    """Verify projects can declare bounded deployment provenance inputs."""
+
+    tag_file = tmp_path / "current_tag"
+    manifest = Manifest(
+        project_key="mcp",
+        project_summary="MCP test project.",
+        deployment=ProjectDeploymentMetadata(
+            compose_files=["/opt/mcp/docker-compose.prod.yml"],
+            current_tag_path=str(tag_file),
+            expected_image_repositories={"app": "prod-mcp-log-server"},
+        ),
+        sources=[
+            SourceDefinition(
+                source_key="app",
+                source_type="docker",
+                target="mcp-app-1",
+                description="MCP app.",
+                parser_type="plain_text",
+                normalization_profile="app_logs",
+                retention_class="short",
+            )
+        ],
+    )
+
+    assert manifest.deployment is not None
+    assert manifest.deployment.compose_files == ["/opt/mcp/docker-compose.prod.yml"]
+    assert manifest.deployment.current_tag_path == str(tag_file)
+    assert manifest.deployment.expected_image_repositories == {"app": "prod-mcp-log-server"}
 
 
 def test_manifest_loads_absolute_file_source_target(tmp_path: Path) -> None:

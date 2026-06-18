@@ -235,6 +235,16 @@ INSPECT_PROJECT_RUNTIME_TOOL_DESCRIPTION = (
     "mount source paths, or mutation operations."
 )
 
+INSPECT_PROJECT_DEPLOYMENT_TOOL_DESCRIPTION = (
+    "Inspect read-only deployment and image provenance for one authorized "
+    "project. Compares configured deployment metadata, such as Compose file "
+    "paths, current tag file, and expected image repositories, with the "
+    "Compose-labelled containers currently running. Returns image names, tags, "
+    "ids, creation/start timestamps, deployment labels, and mismatch warnings "
+    "without pulling, building, deploying, restarting, or exposing registry "
+    "credentials."
+)
+
 LOG_ANALYSIS_CAUTIONS = [
     "Use grouped findings for triage, not as the final incident conclusion.",
     (

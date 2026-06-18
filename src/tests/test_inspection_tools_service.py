@@ -19,6 +19,7 @@ from services.inspection_tools_service import (
     VpsContainerInventory,
     VpsVolumeInventory,
 )
+from services.project_deployment_service import ProjectDeploymentService
 from services.project_runtime_service import ProjectRuntimeService
 from tests.conftest import FakeDockerClient
 
@@ -1252,6 +1253,164 @@ def test_project_runtime_service_returns_sanitized_env_and_database_shape() -> N
     assert result.containers[0].database.name == "app"
     assert result.containers[0].database.user == "app_user"
     assert "hidden" not in result.model_dump_json()
+
+
+def test_project_deployment_service_reports_running_image_tag_mismatch(
+    tmp_path,
+) -> None:
+    """Verify deployment provenance compares expected tag with running images."""
+
+    tag_file = tmp_path / "current_tag"
+    tag_file.write_text("v2.0.0\n", encoding="utf-8")
+    source = SourceDefinition(
+        source_key="app",
+        source_type="docker",
+        target="mcp-app-1",
+        description="MCP app.",
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+    )
+    container = VpsContainerInventory(
+        container_id="abc123def4567890",
+        short_container_id="abc123def456",
+        container_name="mcp-app-1",
+        image="prod-mcp-log-server:v1.9.0",
+        command=[],
+        command_preview="",
+        created_at="2026-05-17T10:00:00Z",
+        docker_status="running",
+        state="running",
+        health_status="healthy",
+        running=True,
+        restarting=False,
+        paused=False,
+        dead=False,
+        exit_code=0,
+        error="",
+        restart_count=0,
+        started_at="2026-05-17T10:01:00Z",
+        finished_at=None,
+        compose_labels={
+            "com.docker.compose.project": "mcp-prod",
+            "com.docker.compose.service": "app",
+        },
+        restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
+        ports=[],
+        network_names=["mcp-prod_default"],
+        triage_notes=[],
+        env_var_names=[],
+        mounts=[],
+    )
+
+    result = ProjectDeploymentService().inspect(
+        project_name="mcp",
+        sources=[source],
+        compose_files=["/opt/mcp/docker-compose.prod.yml"],
+        current_tag_path=str(tag_file),
+        expected_image_repositories={"app": "prod-mcp-log-server"},
+        running_containers=[container],
+    )
+
+    assert not isinstance(result, ComposeStateUnavailable)
+    assert result.current_tag.value == "v2.0.0"
+    assert result.current_tag.path == str(tag_file)
+    assert result.expected_services[0].service_name == "app"
+    assert result.running_containers[0].image_repository == "prod-mcp-log-server"
+    assert result.running_containers[0].image_tag == "v1.9.0"
+    assert [warning.warning_code for warning in result.warnings] == ["image_tag_mismatch"]
+    assert result.warnings[0].expected == "v2.0.0"
+    assert result.warnings[0].actual == "v1.9.0"
+
+
+def test_project_deployment_service_reports_matching_deployment(tmp_path) -> None:
+    """Verify matching deployment facts are returned without mismatch warnings."""
+
+    tag_file = tmp_path / "current_tag"
+    tag_file.write_text("v2.0.0\n", encoding="utf-8")
+    source = SourceDefinition(
+        source_key="app",
+        source_type="docker",
+        target="mcp-app-1",
+        description="MCP app.",
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+    )
+    container = VpsContainerInventory(
+        container_id="abc123def4567890",
+        short_container_id="abc123def456",
+        container_name="mcp-app-1",
+        image="prod-mcp-log-server:v2.0.0@sha256:abc",
+        command=[],
+        command_preview="",
+        created_at="2026-05-17T10:00:00Z",
+        docker_status="running",
+        state="running",
+        health_status="healthy",
+        running=True,
+        restarting=False,
+        paused=False,
+        dead=False,
+        exit_code=0,
+        error="",
+        restart_count=0,
+        started_at="2026-05-17T10:01:00Z",
+        finished_at=None,
+        compose_labels={
+            "com.docker.compose.project": "mcp-prod",
+            "com.docker.compose.service": "app",
+        },
+        restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
+        ports=[],
+        network_names=["mcp-prod_default"],
+        triage_notes=[],
+        env_var_names=[],
+        mounts=[],
+    )
+
+    result = ProjectDeploymentService().inspect(
+        project_name="mcp",
+        sources=[source],
+        compose_files=["/opt/mcp/docker-compose.prod.yml"],
+        current_tag_path=str(tag_file),
+        expected_image_repositories={"app": "prod-mcp-log-server"},
+        running_containers=[container],
+    )
+
+    assert not isinstance(result, ComposeStateUnavailable)
+    assert result.current_tag.status == "ok"
+    assert result.running_containers[0].image_digest == "sha256:abc"
+    assert result.warnings == []
+
+
+def test_project_deployment_service_reports_missing_tag_and_running_service() -> None:
+    """Verify missing configured tag files and absent services are explicit."""
+
+    source = SourceDefinition(
+        source_key="app",
+        source_type="docker",
+        target="mcp-app-1",
+        description="MCP app.",
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+    )
+
+    result = ProjectDeploymentService().inspect(
+        project_name="mcp",
+        sources=[source],
+        compose_files=["/opt/mcp/docker-compose.prod.yml"],
+        current_tag_path="/tmp/mcp-log-server-test-missing-tag",
+        expected_image_repositories={"app": "prod-mcp-log-server"},
+        running_containers=[],
+    )
+
+    assert not isinstance(result, ComposeStateUnavailable)
+    assert [warning.warning_code for warning in result.warnings] == [
+        "expected_service_not_running",
+        "current_tag_missing",
+    ]
 
 
 @pytest.mark.skip(reason="Fixed Docker operations now live in socket app.")

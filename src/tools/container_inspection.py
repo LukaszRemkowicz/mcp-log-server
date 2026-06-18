@@ -20,6 +20,7 @@ It exposes only deterministic, read-only inspection primitives:
 - `inspect_containers_health`
 - `inspect_container_detail`
 - `inspect_project_runtime`
+- `inspect_project_deployment`
 """
 
 from __future__ import annotations
@@ -60,12 +61,14 @@ from services.inspection_tools_service import (
     VpsContainerInventory,
     VpsVolumeInventory,
 )
+from services.project_deployment_service import ProjectDeploymentService
 from services.project_manifest import ProjectManifestError, ProjectManifestService
 from services.project_runtime_service import ProjectRuntimeService
 from tools.agent_hints import (
     INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
     INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
     INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION,
+    INSPECT_PROJECT_DEPLOYMENT_TOOL_DESCRIPTION,
     INSPECT_PROJECT_RUNTIME_TOOL_DESCRIPTION,
     INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
     INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
@@ -102,6 +105,7 @@ logger: logging.Logger = get_logger("tools.container_inspection")
 manifest_service = ProjectManifestService()
 inspection_tools_service = InspectionToolsService()
 compose_state_service = ComposeStateService()
+project_deployment_service = ProjectDeploymentService(compose_state_service)
 project_runtime_service = ProjectRuntimeService(compose_state_service)
 READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
     readOnlyHint=True,
@@ -860,6 +864,80 @@ async def inspect_project_runtime(
             "project_name": payload["project_name"],
             "compose_project": payload["compose_project"],
             "container_count": len(payload["containers"]),
+            "warning_count": len(payload["warnings"]),
+        },
+    )
+    return ToolResult(content=[], structured_content=payload)
+
+
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=INSPECT_PROJECT_DEPLOYMENT_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
+)
+@project_authorized_tool
+async def inspect_project_deployment(
+    project_name: str | None = None,
+) -> ToolResult:
+    """Inspect expected-vs-running deployment image provenance."""
+
+    assert project_name is not None
+    manifest = _get_authorized_manifest(project_name)
+    if manifest is None:
+        manifest_error = _build_unknown_project_manifest_error(project_name)
+        return build_container_inspection_error_result(
+            action="inspect_project_deployment",
+            message=manifest_error.message,
+            requested_project_name=project_name,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    containers = inspection_tools_service.inspect_vps_containers()
+    if isinstance(containers, InspectionToolsServiceError):
+        return build_container_inspection_error_result(
+            action="inspect_project_deployment",
+            message=containers.message,
+            requested_project_name=project_name,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    deployment = manifest.deployment
+    inspection = project_deployment_service.inspect(
+        project_name=manifest.project_key,
+        sources=manifest.sources,
+        compose_files=deployment.compose_files if deployment is not None else [],
+        current_tag_path=deployment.current_tag_path if deployment is not None else None,
+        expected_image_repositories=(
+            deployment.expected_image_repositories if deployment is not None else {}
+        ),
+        running_containers=containers,
+    )
+    if isinstance(inspection, ComposeStateUnavailable):
+        return build_container_inspection_error_result(
+            action="inspect_project_deployment",
+            message=inspection.message,
+            requested_project_name=project_name,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    payload = {
+        "action": "inspect_project_deployment",
+        **inspection.model_dump(mode="json"),
+    }
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_project_deployment",
+            "project_name": payload["project_name"],
+            "compose_project": payload["compose_project"],
+            "running_container_count": len(payload["running_containers"]),
             "warning_count": len(payload["warnings"]),
         },
     )

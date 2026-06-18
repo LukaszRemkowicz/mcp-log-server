@@ -77,6 +77,10 @@ CONTAINER_TOOL_CALLS: tuple[ToolCall, ...] = (
         {"project_name": "dockerpage"},
     ),
     (
+        "inspect_project_deployment",
+        {"project_name": "dockerpage"},
+    ),
+    (
         "inspect_containers_health",
         {"project_name": "dockerpage"},
     ),
@@ -318,6 +322,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "inspect_containers_health",
                 "inspect_project_compose_state",
                 "inspect_project_runtime",
+                "inspect_project_deployment",
                 "inspect_vps_containers",
                 "inspect_vps_volumes",
                 "inspect_container_detail",
@@ -359,6 +364,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "inspect_containers_health",
                 "inspect_project_compose_state",
                 "inspect_project_runtime",
+                "inspect_project_deployment",
                 "inspect_vps_containers",
                 "inspect_vps_volumes",
                 "inspect_container_detail",
@@ -490,6 +496,7 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert any(item["tool_name"] == "inspect_vps_volumes" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_project_compose_state" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_project_runtime" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_project_deployment" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_containers_health" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_container_detail" for item in payload["tools"])
     assert any(item["tool_name"] == "stat_container_path" for item in payload["tools"])
@@ -662,7 +669,11 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
                 False,
             ),
         )
-    if tool_name in {"inspect_project_compose_state", "inspect_project_runtime"}:
+    if tool_name in {
+        "inspect_project_compose_state",
+        "inspect_project_runtime",
+        "inspect_project_deployment",
+    }:
         mocker.patch(
             "tools.container_inspection.inspection_tools_service.inspect_vps_containers",
             return_value=[
@@ -3097,6 +3108,87 @@ async def test_inspect_project_compose_state_api_requires_expected_state(
     assert result["isError"] is True
     assert payload["action"] == "inspect_project_compose_state"
     assert payload["error_code"] == "compose_expected_state_unavailable"
+
+
+async def test_inspect_project_deployment_api_returns_image_provenance(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify deployment inspection returns running image facts."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+    mocker.patch(
+        "tools.container_inspection.inspection_tools_service.inspect_vps_containers",
+        return_value=[
+            VpsContainerInventory(
+                container_id="abc123def4567890",
+                short_container_id="abc123def456",
+                container_name="app-container",
+                image="portfolio/backend:2026-05-17",
+                command=[],
+                command_preview="",
+                created_at="2026-05-17T10:00:00Z",
+                docker_status="running",
+                state="running",
+                health_status="healthy",
+                running=True,
+                restarting=False,
+                paused=False,
+                dead=False,
+                exit_code=0,
+                error="",
+                restart_count=0,
+                started_at="2026-05-17T10:01:00Z",
+                finished_at=None,
+                compose_labels={
+                    "com.docker.compose.project": "dockerpage",
+                    "com.docker.compose.service": "backend",
+                },
+                restart_policy=ContainerRestartPolicy(
+                    name="unless-stopped",
+                    maximum_retry_count=0,
+                ),
+                ports=[],
+                network_names=["dockerpage_default"],
+                triage_notes=[],
+                env_var_names=[],
+                mounts=[],
+            )
+        ],
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-project-deployment",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_project_deployment",
+                "arguments": {"project_name": "dockerpage"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_project_deployment"
+    assert payload["project_name"] == "dockerpage"
+    assert payload["compose_project"] == "dockerpage"
+    assert payload["current_tag"]["status"] == "not_configured"
+    assert payload["running_containers"][0]["image_repository"] == "portfolio/backend"
+    assert payload["running_containers"][0]["image_tag"] == "2026-05-17"
+    assert [warning["warning_code"] for warning in payload["warnings"]] == [
+        "current_tag_not_configured"
+    ]
 
 
 async def test_inspect_project_runtime_api_returns_sanitized_runtime(

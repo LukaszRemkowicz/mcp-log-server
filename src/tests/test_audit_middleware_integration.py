@@ -696,6 +696,9 @@ async def test_audit_middleware_allows_vps_inventory_without_project_access(
         ("inspect_vps_containers", {}),
         ("inspect_vps_volumes", {}),
         ("inspect_containers_health", {"project_name": "dockerpage"}),
+        ("inspect_project_compose_state", {"project_name": "dockerpage"}),
+        ("inspect_project_runtime", {"project_name": "dockerpage"}),
+        ("inspect_project_deployment", {"project_name": "dockerpage"}),
         (
             "inspect_container_detail",
             {"project_name": "dockerpage", "source_key": "backend"},

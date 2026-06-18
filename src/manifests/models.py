@@ -51,6 +51,37 @@ class SourceDefinition(BaseModel):
         return self
 
 
+class ProjectDeploymentMetadata(BaseModel):
+    """Optional project-level deployment provenance inputs."""
+
+    compose_files: list[str] = Field(default_factory=list)
+    current_tag_path: str | None = None
+    expected_image_repositories: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_path_shapes(self) -> ProjectDeploymentMetadata:
+        """Require clean absolute paths for configured deployment files."""
+
+        paths = [*self.compose_files]
+        if self.current_tag_path is not None:
+            paths.append(self.current_tag_path)
+        for path in paths:
+            normalized_path = path.replace("\\", "/")
+            path_parts = normalized_path.split("/")[1:]
+            invalid_path = (
+                not normalized_path
+                or not normalized_path.startswith("/")
+                or normalized_path.startswith("//")
+                or normalized_path.startswith("~")
+                or _PATH_SCHEME_PATTERN.match(normalized_path) is not None
+                or any(ord(character) < 32 for character in normalized_path)
+                or any(part in {"", ".", ".."} for part in path_parts)
+            )
+            if invalid_path:
+                raise ValueError("deployment paths must be clean absolute paths.")
+        return self
+
+
 class Manifest(BaseModel):
     """Describe the core manifest for one project."""
 
@@ -58,4 +89,5 @@ class Manifest(BaseModel):
     project_summary: str
     static_asset_paths: list[str] = Field(default_factory=list)
     static_asset_extensions: list[str] = Field(default_factory=list)
+    deployment: ProjectDeploymentMetadata | None = None
     sources: list[SourceDefinition] = Field(min_length=1)
