@@ -32,7 +32,6 @@ test = "cli.test:test"
 [dependency-groups]
 dev = [
   "black>=26.5.1",
-  "isort>=9.0.0a3",
   "mypy>=1.13.0",
   "pip-audit>=2.9.0",
   "pre-commit>=4.6.0",
@@ -48,11 +47,6 @@ target-version = ["py313"]
 force-exclude = '''
 ^/migrations/
 '''
-
-[tool.isort]
-profile = "black"
-line_length = 100
-known_third_party = ["docker", "requests"]
 
 [tool.mypy]
 python_version = "3.13"

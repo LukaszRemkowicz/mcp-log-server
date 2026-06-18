@@ -10,12 +10,6 @@ repos:
       - id: check-merge-conflict
       - id: debug-statements
 
-  - repo: https://github.com/pycqa/isort
-    rev: 9.0.0a3
-    hooks:
-      - id: isort
-        args: ["--settings-path", "pyproject.toml"]
-
   - repo: https://github.com/psf/black
     rev: 26.5.1
     hooks:

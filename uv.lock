@@ -895,15 +895,6 @@ wheels = [
 ]
 
 [[package]]
-name = "isort"
-version = "9.0.0a3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/37/63/ad6d90b34cc6094fabe5c3dfdef9eb1900b0085a2fc24dceeec55b0269ff/isort-9.0.0a3.tar.gz", hash = "sha256:0a4ee9cb77fb2e9539136c0d74f161aed4513ab307b9a110d98b7d5855293981", size = 627979, upload-time = "2026-04-24T07:48:45.058Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/58/c4/fcb5b11b7e4ff8703deabeebf8d80c6c4119b93902363275e93090ca7156/isort-9.0.0a3-py3-none-any.whl", hash = "sha256:523c9285e8b6b32db26efe865a0d17499c7339e401a363a187987e2b803469dc", size = 97217, upload-time = "2026-04-24T07:48:43.381Z" },
-]
-
-[[package]]
 name = "jaraco-classes"
 version = "3.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1272,7 +1263,6 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "black" },
-    { name = "isort" },
     { name = "mypy" },
     { name = "pip-audit" },
     { name = "pre-commit" },
@@ -1300,7 +1290,6 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "black", specifier = ">=26.5.1" },
-    { name = "isort", specifier = ">=9.0.0a3" },
     { name = "mypy", specifier = ">=1.13.0" },
     { name = "pip-audit", specifier = ">=2.9.0" },
     { name = "pre-commit", specifier = ">=4.6.0" },
