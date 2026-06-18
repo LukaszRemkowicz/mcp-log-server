@@ -30,6 +30,7 @@ from typing import cast
 
 from fastmcp.server.dependencies import get_http_request
 from fastmcp.tools.base import ToolResult
+from mcp.types import ToolAnnotations
 
 from auth.mcp_authorized_manifests import AuthorizedProjectManifests
 from auth.scopes import CONTAINER_FILES_READ_SCOPE
@@ -98,6 +99,11 @@ logger: logging.Logger = get_logger("tools.container_inspection")
 manifest_service = ProjectManifestService()
 inspection_tools_service = InspectionToolsService()
 compose_state_service = ComposeStateService()
+READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+)
 
 
 def _get_authorized_manifest(project_name: str) -> Manifest | None:
@@ -613,6 +619,7 @@ def create_project_compose_state_payload(
 @workflow_discoverable_tool(
     CONTAINER_FILES_READ_SCOPE,
     mcp_description=INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
 )
 async def inspect_vps_containers() -> ToolResult:
     """Return a bounded Docker ps-style inventory for visible VPS containers."""
@@ -649,6 +656,7 @@ async def inspect_vps_containers() -> ToolResult:
 @workflow_discoverable_tool(
     CONTAINER_FILES_READ_SCOPE,
     mcp_description=INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
 )
 async def inspect_vps_volumes(
     dangling_only: bool = False,
@@ -698,6 +706,7 @@ async def inspect_vps_volumes(
 @workflow_discoverable_tool(
     CONTAINER_FILES_READ_SCOPE,
     mcp_description=INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
 )
 @project_authorized_tool
 async def inspect_project_compose_state(
@@ -762,6 +771,7 @@ async def inspect_project_compose_state(
 @workflow_discoverable_tool(
     CONTAINER_FILES_READ_SCOPE,
     mcp_description=INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
 )
 @project_authorized_tool
 async def inspect_containers_health(
@@ -823,6 +833,7 @@ async def inspect_containers_health(
 @workflow_discoverable_tool(
     CONTAINER_FILES_READ_SCOPE,
     mcp_description=INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
 )
 @project_authorized_tool
 async def inspect_container_detail(
@@ -872,6 +883,7 @@ async def inspect_container_detail(
 @workflow_discoverable_tool(
     CONTAINER_FILES_READ_SCOPE,
     mcp_description=STAT_CONTAINER_PATH_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
 )
 @project_authorized_tool
 async def stat_container_path(
@@ -933,6 +945,7 @@ async def stat_container_path(
 @workflow_discoverable_tool(
     CONTAINER_FILES_READ_SCOPE,
     mcp_description=READ_CONTAINER_FILE_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
 )
 @project_authorized_tool
 async def read_container_file(
@@ -1027,6 +1040,7 @@ async def read_container_file(
 @workflow_discoverable_tool(
     CONTAINER_FILES_READ_SCOPE,
     mcp_description=LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
 )
 @project_authorized_tool
 async def list_container_directory(

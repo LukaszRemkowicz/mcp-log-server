@@ -35,7 +35,7 @@ INSERT INTO mcp_callers (
     allowed_projects
 )
 VALUES (
-    'codex-local',
+    'codex-agent',
     'codex',
     'session',
     '["landingpage"]'::jsonb
@@ -266,7 +266,7 @@ Manifests and logs are intentionally separate:
 
 - `DOCKER_SOCKET_APP_SOCKET_PATH`
   Unix socket file used by the MCP app for Docker-backed reads.
-  Required when the MCP settings module is loaded.
+  Default: `/run/docker-socket-app/gateway.sock`
 
   Compose sets this to:
 
@@ -351,6 +351,18 @@ Then verify that the fail2ban socket app container is running:
 ```bash
 docker compose -f docker-compose.prod.yml ps fail2ban-socket-app
 ```
+
+`inspect_live_fail2ban_activity` checks only the configured `FAIL2BAN_JAILS`
+allowlist. By default MCP inspects:
+
+- `portfolio-nginx-probes`
+- `portfolio-traefik-probes`
+- `portfolio-keycloak-token`
+
+The host fail2ban configuration must define all configured jails. If
+`portfolio-keycloak-token` or another configured jail is not deployed and
+reloaded on the host, the live diagnostics payload reports a jail-status error
+for that missing jail.
 
 Production compose differences:
 
