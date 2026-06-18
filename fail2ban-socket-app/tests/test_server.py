@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import pytest
 
@@ -17,7 +17,17 @@ class FakeFail2banBackend:
 
 @pytest.mark.asyncio
 async def test_unix_socket_server_handles_one_json_line_request() -> None:
-    socket_path = Path("/tmp") / f"fail2ban-socket-app-{uuid4().hex}.sock"
+    base_dir = Path("/private/tmp") if Path("/private/tmp").exists() else None
+    with tempfile.TemporaryDirectory(prefix="f2b-", dir=base_dir) as tmp_dir:
+        socket_path = Path(tmp_dir) / "app.sock"
+        raw_response = await _request_jail_status(socket_path)
+
+    assert raw_response == (
+        b'{"ok":true,"result":{"jail_name":"portfolio-nginx-probes","currently_banned":1}}\n'
+    )
+
+
+async def _request_jail_status(socket_path: Path) -> bytes:
     service = Fail2banSocketService(backend=FakeFail2banBackend())
     server = Fail2banSocketServer(socket_path=socket_path, service=service)
 
@@ -32,6 +42,4 @@ async def test_unix_socket_server_handles_one_json_line_request() -> None:
         writer.close()
         await writer.wait_closed()
 
-    assert raw_response == (
-        b'{"ok":true,"result":{"jail_name":"portfolio-nginx-probes","currently_banned":1}}\n'
-    )
+    return raw_response

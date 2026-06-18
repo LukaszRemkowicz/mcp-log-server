@@ -337,32 +337,22 @@ Docker volume. The release scripts do not require a host data directory or
 `POSTGRES_DATA_DIR` override. Keep database backups current before Docker volume
 cleanup or host maintenance.
 
-The production deploy script includes the fail2ban socket override by default,
-so the normal VPS path is:
+The production deploy script starts the fail2ban Unix-socket app by default, so
+the normal VPS path is:
 
 ```bash
 doppler run -- TAG=v1.2.3 infra/scripts/release/deploy.sh
 ```
 
-If the VPS should deploy without live fail2ban socket access, disable the
-override explicitly:
+Then verify that the fail2ban socket app container is running:
 
 ```bash
-doppler run -- ENABLE_FAIL2BAN_SOCKET=false TAG=v1.2.3 infra/scripts/release/deploy.sh
-```
-
-Then verify from inside the app container:
-
-```bash
-docker compose \
-  -f docker-compose.prod.yml \
-  -f docker-compose.fail2ban.yml \
-  exec app fail2ban-client -s /var/run/fail2ban/fail2ban.sock status
+docker compose -f docker-compose.prod.yml ps fail2ban-socket-app
 ```
 
 Production compose differences:
 
-- runs the `app` and `db` services
+- runs the `app`, `db`, `docker-socket-app`, and `fail2ban-socket-app` services
 - does not mount the local source tree
 - does not use `watchfiles`
 - stores Postgres data in the Compose-managed `postgres-data` Docker volume

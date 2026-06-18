@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import subprocess
+import socket
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
-from urllib.parse import quote
-from urllib.request import Request, urlopen
+from typing import Any, Literal, Protocol
 
 from conf import settings
 
@@ -54,49 +53,122 @@ class Fail2banActivity:
 
 
 @dataclass(frozen=True, slots=True)
-class Fail2banCommandResult:
-    """Small command result shape shared by subprocess and proxy responses."""
+class Fail2banSocketAppError(Exception):
+    """Expected failure returned by the fail2ban socket app boundary."""
 
-    returncode: int
-    stdout: str
-    stderr: str
+    message: str
+    error_code: str = "fail2ban_socket_app_error"
 
 
-class Fail2banService:
-    """Run and parse fixed fail2ban-client status commands."""
+class Fail2banSocketAppClient:
+    """Call fixed fail2ban operations through the local Unix socket app."""
 
     def __init__(
         self,
         *,
-        socket_path: str | Path | None = None,
-        client_command: str | None = None,
-        proxy_url: str | None = None,
-        jails: list[str] | None = None,
-        command_timeout_seconds: int | None = None,
+        socket_path: Path | None = None,
+        timeout_seconds: int | None = None,
     ) -> None:
-        """Create a service that talks to the configured fail2ban socket."""
+        """Create a client for the configured fail2ban socket app."""
 
-        self.socket_path = Path(socket_path or settings.FAIL2BAN_SOCKET_PATH)
-        self.client_command = client_command or settings.FAIL2BAN_CLIENT_COMMAND
-        self.proxy_url = proxy_url if proxy_url is not None else settings.FAIL2BAN_PROXY_URL
-        self.jails = jails or settings.FAIL2BAN_JAILS
-        self.command_timeout_seconds = (
-            command_timeout_seconds or settings.FAIL2BAN_COMMAND_TIMEOUT_SECONDS
+        self.socket_path = socket_path or settings.FAIL2BAN_SOCKET_APP_SOCKET_PATH
+        self.timeout_seconds = timeout_seconds or settings.FAIL2BAN_SOCKET_APP_TIMEOUT_SECONDS
+
+    def request(self, operation: str, params: Mapping[str, object]) -> dict[str, Any]:
+        """Return one JSON result from the fail2ban socket app."""
+
+        request = (
+            json.dumps(
+                {"operation": operation, "params": params},
+                separators=(",", ":"),
+            ).encode("utf-8")
+            + b"\n"
         )
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                client.settimeout(self.timeout_seconds)
+                client.connect(str(self.socket_path))
+                client.sendall(request)
+                response = self._read_response(client)
+        except TimeoutError as error:
+            raise Fail2banSocketAppError(
+                message="Timed out waiting for fail2ban socket app.",
+                error_code="fail2ban_socket_app_timeout",
+            ) from error
+        except OSError as error:
+            raise Fail2banSocketAppError(
+                message="Fail2ban socket app is not available in the current runtime.",
+                error_code="fail2ban_socket_app_unavailable",
+            ) from error
+
+        try:
+            decoded = json.loads(response.decode("utf-8"))
+        except json.JSONDecodeError as error:
+            raise Fail2banSocketAppError(
+                message="Fail2ban socket app returned invalid JSON."
+            ) from error
+        if not isinstance(decoded, dict):
+            raise Fail2banSocketAppError(
+                message="Fail2ban socket app returned an invalid response."
+            )
+        if decoded.get("ok") is True and isinstance(decoded.get("result"), dict):
+            return decoded["result"]
+        error_payload = decoded.get("error")
+        message = (
+            str(error_payload.get("message"))
+            if isinstance(error_payload, dict) and error_payload.get("message")
+            else "Fail2ban socket app operation failed."
+        )
+        raise Fail2banSocketAppError(message=message)
+
+    @staticmethod
+    def _read_response(client: socket.socket) -> bytes:
+        chunks: list[bytes] = []
+        while True:
+            chunk = client.recv(65536)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if b"\n" in chunk:
+                break
+        return b"".join(chunks).split(b"\n", 1)[0]
+
+
+class Fail2banSocketClientProtocol(Protocol):
+    """Minimal client contract used by `Fail2banService`."""
+
+    def request(self, operation: str, params: Mapping[str, object]) -> dict[str, Any]:
+        """Return one result from the fail2ban socket app."""
+
+
+class Fail2banService:
+    """Inspect fail2ban activity through the fixed Unix-socket app."""
+
+    def __init__(
+        self,
+        *,
+        socket_client: Fail2banSocketClientProtocol | None = None,
+        jails: list[str] | None = None,
+    ) -> None:
+        """Create a service that talks to the fail2ban socket app."""
+
+        self.socket_client = socket_client or Fail2banSocketAppClient()
+        self.jails = jails or settings.FAIL2BAN_JAILS
 
     def inspect_activity(self) -> Fail2banActivity:
-        """Return live fail2ban service and jail status using allowlisted commands."""
+        """Return live fail2ban service and jail status using fixed socket operations."""
 
-        service_result = self._run_status_command(self._build_status_command())
+        service_result = self._list_jails()
         if service_result.inspection_status == "unavailable":
             return Fail2banActivity(
                 inspection_status="unavailable",
                 service=service_result,
                 jails=[],
-                error_code="fail2ban_client_unavailable",
-                message="fail2ban-client is not available to the MCP runtime.",
+                error_code="fail2ban_socket_app_unavailable",
+                message="Fail2ban socket app is not available to the MCP runtime.",
                 retry_tips=[
-                    "Install fail2ban-client in the MCP image and mount the host fail2ban socket.",
+                    "Start the fail2ban socket app container.",
+                    "Check that MCP can access the fail2ban socket app Unix socket.",
                     "Use collected fail2ban log sources if live status is not available.",
                 ],
             )
@@ -118,174 +190,62 @@ class Fail2banService:
                 []
                 if status == "ok"
                 else [
-                    "Check that the host fail2ban socket is mounted into the MCP container.",
-                    "Check fail2ban socket permissions and jail names.",
+                    "Check that the host fail2ban socket is mounted into the socket app.",
+                    "Check fail2ban socket app permissions and jail names.",
                 ]
             ),
         )
 
-    def _build_status_command(self) -> list[str]:
-        """Return the allowlisted service-status command for the configured socket."""
-
-        return [self.client_command, "-s", str(self.socket_path), "status"]
-
-    def _run_status_command(self, command: list[str]) -> Fail2banServiceStatus:
-        """Run one fixed service-status command."""
-
+    def _list_jails(self) -> Fail2banServiceStatus:
+        """Return the configured fail2ban service status from the socket app."""
         try:
-            completed = self._run_command(command)
-        except FileNotFoundError:
-            return Fail2banServiceStatus(
-                inspection_status="unavailable",
-                error="fail2ban-client executable was not found.",
-            )
-        except (subprocess.SubprocessError, OSError) as error:
-            return Fail2banServiceStatus(
-                inspection_status="error",
-                error=str(error),
-            )
-
-        if completed.returncode != 0:
+            payload = self.socket_client.request("list_jails", {})
+        except Fail2banSocketAppError as error:
+            if error.error_code == "fail2ban_socket_app_unavailable":
+                return Fail2banServiceStatus(
+                    inspection_status="unavailable",
+                    error=error.message,
+                )
             return Fail2banServiceStatus(
                 inspection_status="error",
-                raw_output=completed.stdout,
-                error=completed.stderr.strip() or f"Command exited with {completed.returncode}.",
+                error=error.message,
             )
-        return self._parse_service_status(completed.stdout)
-
-    def _run_jail_command(self, jail: str) -> Fail2banJailStatus:
-        """Run one fixed jail-status command."""
-
-        try:
-            completed = self._run_command([*self._build_status_command(), jail])
-        except FileNotFoundError:
-            return Fail2banJailStatus(
-                jail=jail,
-                inspection_status="unavailable",
-                error="fail2ban-client executable was not found.",
-            )
-        except (subprocess.SubprocessError, OSError) as error:
-            return Fail2banJailStatus(
-                jail=jail,
-                inspection_status="error",
-                error=str(error),
-            )
-
-        if completed.returncode != 0:
-            return Fail2banJailStatus(
-                jail=jail,
-                inspection_status="error",
-                raw_output=completed.stdout,
-                error=completed.stderr.strip() or f"Command exited with {completed.returncode}.",
-            )
-        return self._parse_jail_status(jail=jail, output=completed.stdout)
-
-    def _run_command(
-        self,
-        command: list[str],
-    ) -> subprocess.CompletedProcess[str] | Fail2banCommandResult:
-        """Run one allowlisted command without shell expansion."""
-
-        if self.proxy_url:
-            return self._run_proxy_command(command)
-
-        return subprocess.run(
-            command,
-            capture_output=True,
-            check=False,
-            text=True,
-            timeout=self.command_timeout_seconds,
-        )
-
-    def _run_proxy_command(self, command: list[str]) -> Fail2banCommandResult:
-        """Run one fixed fail2ban status command through the root proxy service."""
-
-        status_command = self._build_status_command()
-        if command == status_command:
-            endpoint = "/status"
-        elif (
-            len(command) == len(status_command) + 1
-            and command[: len(status_command)] == status_command
-        ):
-            jail = command[-1]
-            if jail not in self.jails:
-                raise ValueError(f"Fail2ban jail is not allowlisted: {jail}")
-            endpoint = f"/status/{quote(jail, safe='')}"
-        else:
-            raise ValueError("Fail2ban proxy rejected a non-allowlisted command shape.")
-
-        request = Request(
-            f"{self.proxy_url}{endpoint}",
-            headers={"Accept": "application/json"},
-            method="GET",
-        )
-        with urlopen(request, timeout=self.command_timeout_seconds) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-
-        return Fail2banCommandResult(
-            returncode=int(payload.get("returncode", 1)),
-            stdout=str(payload.get("stdout", "")),
-            stderr=str(payload.get("stderr", "")),
-        )
-
-    @staticmethod
-    def _parse_service_status(output: str) -> Fail2banServiceStatus:
-        """Parse the global fail2ban service status output."""
-
-        values = _parse_fail2ban_key_values(output)
-        jails = _parse_csv_or_space_list(values.get("jail list"))
         return Fail2banServiceStatus(
             inspection_status="ok",
-            jail_count=_parse_int(values.get("number of jail")),
-            jails=jails,
-            raw_output=output,
+            jail_count=_payload_int(payload.get("jail_count")),
+            jails=_payload_str_list(payload.get("jails")),
         )
 
-    @staticmethod
-    def _parse_jail_status(*, jail: str, output: str) -> Fail2banJailStatus:
-        """Parse one allowlisted fail2ban jail status output."""
+    def _run_jail_command(self, jail: str) -> Fail2banJailStatus:
+        """Return one configured fail2ban jail status from the socket app."""
 
-        values = _parse_fail2ban_key_values(output)
+        try:
+            payload = self.socket_client.request("get_jail_bans", {"jail_name": jail})
+        except Fail2banSocketAppError as error:
+            return Fail2banJailStatus(
+                jail=jail,
+                inspection_status="error",
+                error=error.message,
+            )
         return Fail2banJailStatus(
             jail=jail,
             inspection_status="ok",
-            currently_failed=_parse_int(values.get("currently failed")),
-            total_failed=_parse_int(values.get("total failed")),
-            currently_banned=_parse_int(values.get("currently banned")),
-            total_banned=_parse_int(values.get("total banned")),
-            banned_ips=_parse_csv_or_space_list(values.get("banned ip list")),
-            raw_output=output,
+            currently_banned=_payload_int(payload.get("currently_banned")),
+            banned_ips=_payload_str_list(payload.get("banned_ips")),
         )
 
 
-def _parse_fail2ban_key_values(output: str) -> dict[str, str]:
-    """Extract loose key/value lines from fail2ban-client output."""
+def _payload_int(value: object) -> int | None:
+    """Return an integer field from a socket-app payload."""
 
-    values: dict[str, str] = {}
-    for raw_line in output.splitlines():
-        line = raw_line.strip(" |`-")
-        if ":" not in line:
-            continue
-        key, value = line.split(":", 1)
-        values[key.strip().lower()] = value.strip()
-    return values
-
-
-def _parse_int(value: str | None) -> int | None:
-    """Parse an optional integer status value."""
-
-    if value is None or not value:
+    if not isinstance(value, int):
         return None
-    try:
-        return int(value)
-    except ValueError:
-        return None
+    return value
 
 
-def _parse_csv_or_space_list(value: str | None) -> list[str]:
-    """Parse fail2ban lists that may be comma-separated or whitespace-separated."""
+def _payload_str_list(value: object) -> list[str]:
+    """Return a string list field from a socket-app payload."""
 
-    if value is None:
+    if not isinstance(value, list):
         return []
-    normalized = value.replace(",", " ")
-    return [item for item in normalized.split() if item]
+    return [item for item in value if isinstance(item, str)]

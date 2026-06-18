@@ -33,9 +33,12 @@ services:
         condition: service_healthy
       docker-socket-app:
         condition: service_started
+      fail2ban-socket-app:
+        condition: service_started
     environment:
       ENVIRONMENT: prod
       DOCKER_SOCKET_APP_SOCKET_PATH: /run/docker-socket-app/gateway.sock
+      FAIL2BAN_SOCKET_APP_SOCKET_PATH: /run/fail2ban-socket-app/gateway.sock
       MCP_HOST: 0.0.0.0
       MCP_PORT: ${MCP_PORT:-8001}
       PYTHONPATH: /app/src
@@ -49,10 +52,10 @@ services:
       JWT_AUDIENCE: ${JWT_AUDIENCE}
       SITE_DOMAIN: ${SITE_DOMAIN}
       TLS_CERTIFICATE_SUBDOMAINS: ${TLS_CERTIFICATE_SUBDOMAINS:-admin,stage,mcp}
-      FAIL2BAN_SOCKET_PATH: ${FAIL2BAN_SOCKET_PATH:-/var/run/fail2ban/fail2ban.sock}
       PROJECT_MANIFESTS_PATH: ${PROJECT_MANIFESTS_PATH:-/app/project-manifests}
     volumes:
       - docker-socket-app-run:/run/docker-socket-app
+      - fail2ban-socket-app-run:/run/fail2ban-socket-app
       - /var/log:/host/var/log:ro
       - /etc/nginx/logs:/host/etc/nginx/logs:ro
       - type: bind
@@ -104,9 +107,28 @@ services:
     group_add:
       - "${DOCKER_SOCKET_GID:-0}"
 
+  fail2ban-socket-app:
+    image: prod-mcp-fail2ban-socket-app:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: docker/fail2ban-socket-app/Dockerfile
+      target: production
+    restart: unless-stopped
+    environment:
+      FAIL2BAN_SOCKET_APP_SOCKET_PATH: /run/fail2ban-socket-app/gateway.sock
+      FAIL2BAN_SOCKET_PATH: ${FAIL2BAN_SOCKET_PATH:-/var/run/fail2ban/fail2ban.sock}
+    volumes:
+      - fail2ban-socket-app-run:/run/fail2ban-socket-app
+      - type: bind
+        source: ${FAIL2BAN_SOCKET_DIR_HOST:-/var/run/fail2ban}
+        target: ${FAIL2BAN_SOCKET_DIR:-/var/run/fail2ban}
+        bind:
+          create_host_path: false
+
 volumes:
   postgres-data:
   docker-socket-app-run:
+  fail2ban-socket-app-run:
 
 networks:
   traefik_proxy:

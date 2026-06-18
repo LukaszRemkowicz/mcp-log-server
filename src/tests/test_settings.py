@@ -18,10 +18,8 @@ def test_settings_expose_uppercase_fields() -> None:
     assert runtime_settings.DEFAULT_LOG_WINDOW == "24h"
     assert runtime_settings.WORKFLOW_ARCHIVE_RETENTION == "14d"
     assert runtime_settings.LOG_SNAPSHOT_RETENTION == "7d"
-    assert runtime_settings.FAIL2BAN_SOCKET_PATH.as_posix() == "/var/run/fail2ban/fail2ban.sock"
-    assert runtime_settings.FAIL2BAN_CLIENT_COMMAND == "fail2ban-client"
+    assert runtime_settings.FAIL2BAN_SOCKET_APP_SOCKET_PATH.as_posix()
     assert runtime_settings.FAIL2BAN_JAILS == ["portfolio-nginx-probes", "portfolio-traefik-probes"]
-    assert runtime_settings.FAIL2BAN_COMMAND_TIMEOUT_SECONDS == 5
     assert runtime_settings.SITE_DOMAIN == settings_module.SITE_DOMAIN
     assert runtime_settings.TLS_CERTIFICATE_SUBDOMAINS == ["admin", "stage", "mcp"]
     assert runtime_settings.TLS_CERTIFICATE_TIMEOUT_SECONDS == 5

@@ -14,9 +14,10 @@
 #   - prevents concurrent deploys with a lock
 #   - verifies the tagged app image exists locally
 #   - verifies the tagged Docker socket app image exists locally
+#   - verifies the tagged fail2ban socket app image exists locally
 #   - runs a pre-deploy database backup unless SKIP_BACKUP=true
 #   - applies migrations unless SKIP_MIGRATE=true
-#   - recreates the Docker socket app and app containers with the selected tag
+#   - recreates the socket app and MCP app containers with the selected tag
 #   - waits for Docker app health before recording current_tag
 #
 # What this script does not do:
@@ -39,17 +40,16 @@ TAG="${TAG:-$(git -C "$PROJECT_DIR" describe --tags --exact-match 2>/dev/null ||
 validate_tag "$TAG"
 
 COMPOSE_FILE="${COMPOSE_FILE:-$(get_compose_file "$PROJECT_DIR" "$ENVIRONMENT")}"
-FAIL2BAN_COMPOSE_FILE="${FAIL2BAN_COMPOSE_FILE:-$PROJECT_DIR/docker-compose.fail2ban.yml}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(get_compose_project_name "$ENVIRONMENT")}"
 IMAGE_NAME="${ENVIRONMENT}-mcp-log-server:${TAG}"
 DOCKER_SOCKET_APP_IMAGE_NAME="${ENVIRONMENT}-mcp-docker-socket-app:${TAG}"
+FAIL2BAN_SOCKET_APP_IMAGE_NAME="${ENVIRONMENT}-mcp-fail2ban-socket-app:${TAG}"
 STATE_DIR="$(get_state_dir "$ENVIRONMENT")"
 LOCK_DIR="$STATE_DIR/deploy.lock"
 
 SKIP_BACKUP="${SKIP_BACKUP:-false}"
 SKIP_MIGRATE="${SKIP_MIGRATE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
-ENABLE_FAIL2BAN_SOCKET="${ENABLE_FAIL2BAN_SOCKET:-true}"
 DATABASE_NAME="${DATABASE_NAME:-mcp_log_server}"
 DATABASE_USER="${DATABASE_USER:-mcp_log_server}"
 DATABASE_PASSWORD="${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}"
@@ -100,20 +100,11 @@ printf "🏷️  Release tag: %s\n" "$TAG"
 printf "📦 Compose project: %s\n" "$COMPOSE_PROJECT_NAME"
 printf "🧾 Compose file: %s\n" "$COMPOSE_FILE"
 printf "🐳 Docker socket app image: %s\n" "$DOCKER_SOCKET_APP_IMAGE_NAME"
+printf "🐳 Fail2ban socket app image: %s\n" "$FAIL2BAN_SOCKET_APP_IMAGE_NAME"
 printf "🐳 Docker socket GID: %s\n" "$DOCKER_SOCKET_GID"
 printf "🧾 Fail2ban log GID: %s\n" "$FAIL2BAN_LOG_GID"
 printf "📁 Project manifests host path: %s\n" "$PROJECT_MANIFESTS_HOST_PATH"
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
-if [[ "$ENABLE_FAIL2BAN_SOCKET" == "true" ]]; then
-    if [[ ! -f "$FAIL2BAN_COMPOSE_FILE" ]]; then
-        log_error "Fail2ban Compose override not found: $FAIL2BAN_COMPOSE_FILE"
-        exit 1
-    fi
-    COMPOSE_ARGS+=(-f "$FAIL2BAN_COMPOSE_FILE")
-    printf "🧾 Fail2ban socket override: %s\n" "$FAIL2BAN_COMPOSE_FILE"
-else
-    log_warn "Fail2ban socket override disabled because ENABLE_FAIL2BAN_SOCKET=false"
-fi
 printf "📁 State directory: %s\n" "$STATE_DIR"
 
 wait_for_app_container_health() {
@@ -176,8 +167,14 @@ if ! docker image inspect "$DOCKER_SOCKET_APP_IMAGE_NAME" >/dev/null 2>&1; then
     log_info "Build it first with TAG=$TAG infra/scripts/release/build.sh"
     exit 1
 fi
+if ! docker image inspect "$FAIL2BAN_SOCKET_APP_IMAGE_NAME" >/dev/null 2>&1; then
+    log_error "Image not found locally: $FAIL2BAN_SOCKET_APP_IMAGE_NAME"
+    log_info "Build it first with TAG=$TAG infra/scripts/release/build.sh"
+    exit 1
+fi
 printf "✅ Release image found: %s\n" "$IMAGE_NAME"
 printf "✅ Release image found: %s\n" "$DOCKER_SOCKET_APP_IMAGE_NAME"
+printf "✅ Release image found: %s\n" "$FAIL2BAN_SOCKET_APP_IMAGE_NAME"
 
 deploy_step "⚠️" 4 9 "Confirm deploy"
 confirm_continue "Type yes to deploy $IMAGE_NAME to $ENVIRONMENT."
@@ -216,12 +213,10 @@ fi
 
 # Step 8: start or update the Docker-backed application containers with the selected tag.
 deploy_step "🚀" 8 9 "Start application containers"
-if [[ "$ENABLE_FAIL2BAN_SOCKET" == "true" ]]; then
-    docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate fail2ban-proxy
-    printf "✅ Fail2ban proxy container recreated\n"
-fi
 docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate docker-socket-app
 printf "✅ Docker socket app container recreated\n"
+docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate fail2ban-socket-app
+printf "✅ Fail2ban socket app container recreated\n"
 docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate app
 printf "✅ Application container recreated\n"
 

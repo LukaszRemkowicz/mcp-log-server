@@ -42,6 +42,8 @@ services:
         condition: service_healthy
       docker-socket-app:
         condition: service_started
+      fail2ban-socket-app:
+        condition: service_started
     volumes:
       - ./src:/app/src
       - ./migrations:/app/migrations
@@ -57,6 +59,7 @@ services:
         target: /host/var/log/agent-monitoring
         read_only: true
       - docker-socket-app-run:/run/docker-socket-app
+      - fail2ban-socket-app-run:/run/fail2ban-socket-app
     environment:
       LOGS_DIR: ${LOGS_DIR:-/app/logs}
       DOCKER_SOCKET_APP_SOCKET_PATH: /run/docker-socket-app/gateway.sock
@@ -65,7 +68,7 @@ services:
       DATABASE_NAME: ${DATABASE_NAME:-mcp_log_server}
       DATABASE_USER: ${DATABASE_USER:-mcp_log_server}
       DATABASE_PASSWORD: ${DATABASE_PASSWORD:-mcp-log-server-local-password}
-      FAIL2BAN_SOCKET_PATH: ${FAIL2BAN_SOCKET_PATH:-/var/run/fail2ban/fail2ban.sock}
+      FAIL2BAN_SOCKET_APP_SOCKET_PATH: /run/fail2ban-socket-app/gateway.sock
       MCP_HOST: 0.0.0.0
       MCP_PORT: ${MCP_PORT:-8001}
       PROJECT_MANIFESTS_PATH: /app/project-manifests
@@ -107,6 +110,23 @@ services:
     group_add:
       - "${DOCKER_SOCKET_GID:-0}"
 
+  fail2ban-socket-app:
+    build:
+      context: .
+      dockerfile: docker/fail2ban-socket-app/Dockerfile
+      target: production
+    restart: unless-stopped
+    environment:
+      FAIL2BAN_SOCKET_APP_SOCKET_PATH: /run/fail2ban-socket-app/gateway.sock
+      FAIL2BAN_SOCKET_PATH: ${FAIL2BAN_SOCKET_PATH:-/var/run/fail2ban/fail2ban.sock}
+    volumes:
+      - fail2ban-socket-app-run:/run/fail2ban-socket-app
+      - type: bind
+        source: ${FAIL2BAN_SOCKET_DIR_HOST:-/var/run/fail2ban}
+        target: ${FAIL2BAN_SOCKET_DIR:-/var/run/fail2ban}
+        bind:
+          create_host_path: false
+
   test:
     env_file:
       - path: .env
@@ -128,6 +148,7 @@ services:
     environment:
       LOGS_DIR: /app/logs
       DOCKER_SOCKET_APP_SOCKET_PATH: /tmp/docker-socket-app-test.sock
+      FAIL2BAN_SOCKET_APP_SOCKET_PATH: /tmp/fail2ban-socket-app-test.sock
       DATABASE_HOST: db
       DATABASE_PORT: 5432
       DATABASE_NAME: mcp_log_server_test
@@ -149,3 +170,4 @@ volumes:
   postgres-data:
     name: mcp-local_postgres-data
   docker-socket-app-run:
+  fail2ban-socket-app-run:
