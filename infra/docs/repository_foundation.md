@@ -12,6 +12,7 @@ This repository currently includes:
 - repository structure for the FastMCP service
 - local developer bootstrap
 - settings/config approach
+- Keycloak/JWKS JWT verification mode for production
 - automated HTTP integration tests
 - in-memory FastMCP client tests
 - architecture docs for cross-repo ownership
@@ -21,7 +22,6 @@ This repository currently includes:
 This repository does not yet include:
 
 - shared platform decisions for Keycloak and reverse proxy ownership
-- final Keycloak/JWT auth integration
 - finalized `landingpage` production auth flow
 - collector parity tools
 

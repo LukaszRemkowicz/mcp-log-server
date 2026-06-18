@@ -35,28 +35,39 @@ INSERT INTO mcp_callers (
     allowed_projects
 )
 VALUES (
-    'codex-agent',
+    'codex-local',
     'codex',
     'session',
     '["landingpage"]'::jsonb
 );
 ```
 
-The local JWT signing algorithm is fixed in [src/settings.py](../../src/settings.py)
-as `HS256`.
+JWT verification has two supported modes:
+
+- local development shared-secret mode when `JWT_JWKS_URI` is empty
+- production Keycloak/JWKS mode when `JWT_JWKS_URI` is set
 
 - `JWT_SHARED_SECRET`
-  Shared secret used to sign and verify local example JWTs.
+  Shared secret used to sign and verify local example JWTs when
+  `JWT_JWKS_URI` is empty.
   Default: `change-me-local-dev-secret`
 
+- `JWT_JWKS_URI`
+  JWKS endpoint used to verify production Keycloak tokens. When this is set,
+  the server verifies tokens with Keycloak public keys instead of
+  `JWT_SHARED_SECRET`.
+  Production value:
+  `https://auth.lukaszremkowicz.com/realms/mcp/protocol/openid-connect/certs`
+
 - `JWT_ISSUER`
-  Required `iss` claim for local example JWTs. This is not a secret; it is a
-  public token issuer identifier that the server validates.
+  Required `iss` claim. This is not a secret; it is a public token issuer
+  identifier that the server validates.
   Default: `mcp-log-server-dev`
+  Production value: `https://auth.lukaszremkowicz.com/realms/mcp`
 
 - `JWT_AUDIENCE`
-  Required `aud` claim for local example JWTs. This is not a secret; it is the
-  public audience identifier expected by the server.
+  Required `aud` claim. This is not a secret; it is the public audience
+  identifier expected by the server.
   Default: `mcp-log-server`
 
 The local example JWT lifetime is fixed in [src/settings.py](../../src/settings.py)
@@ -88,15 +99,6 @@ uv run command generate-dev-jwt --output-file .agent/DEV_JWT_TOKENS.json
 When `--output-file` is provided, the command writes the token JSON to that
 path instead of printing tokens to the console. Parent directories are created
 automatically. Without `--output-file`, the JSON is printed to stdout.
-
-The command also accepts explicit identity claim overrides when you need
-tokens for a different local caller:
-
-```bash
-uv run command generate-dev-jwt \
-  --codex-client-id local-codex \
-  --codex-client-type codex
-```
 
 Then export the values you want to use with `curl`:
 
@@ -167,8 +169,8 @@ Important:
 - tools are registered once in code
 - tool visibility is filtered per request from the presented bearer token
 - local development now uses real JWT-shaped bearer tokens
-- this is still a dev-only shared-secret setup; later real JWT auth can replace
-  the signing/verification source without changing the tool contracts
+- production can use Keycloak-issued JWTs through `JWT_JWKS_URI` without
+  changing the tool contracts
 
 ## Logging Configuration
 

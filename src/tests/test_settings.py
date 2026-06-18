@@ -19,7 +19,12 @@ def test_settings_expose_uppercase_fields() -> None:
     assert runtime_settings.WORKFLOW_ARCHIVE_RETENTION == "14d"
     assert runtime_settings.LOG_SNAPSHOT_RETENTION == "7d"
     assert runtime_settings.FAIL2BAN_SOCKET_APP_SOCKET_PATH.as_posix()
-    assert runtime_settings.FAIL2BAN_JAILS == ["portfolio-nginx-probes", "portfolio-traefik-probes"]
+    assert runtime_settings.FAIL2BAN_JAILS == [
+        "portfolio-nginx-probes",
+        "portfolio-traefik-probes",
+        "portfolio-keycloak-token",
+    ]
+    assert runtime_settings.JWT_JWKS_URI == ""
     assert runtime_settings.SITE_DOMAIN == settings_module.SITE_DOMAIN
     assert runtime_settings.TLS_CERTIFICATE_SUBDOMAINS == ["admin", "stage", "mcp"]
     assert runtime_settings.TLS_CERTIFICATE_TIMEOUT_SECONDS == 5
@@ -113,6 +118,55 @@ def test_validate_runtime_settings_rejects_production_insecure_defaults(
         {
             "ENVIRONMENT": "prod",
             "JWT_SHARED_SECRET": "prod-secret",
+            "JWT_JWKS_URI": "",
+            "DATABASE_PASSWORD": "prod-db-secret",
+        },
+        **settings_overrides,
+    )
+
+    with pytest.raises(RuntimeError, match=expected_message):
+        validate_runtime_settings(runtime_settings)
+
+
+def test_validate_runtime_settings_allows_production_jwks_without_shared_secret() -> None:
+    runtime_settings = Settings(
+        {
+            "ENVIRONMENT": "prod",
+            "JWT_SHARED_SECRET": "change-me-local-dev-secret",
+            "JWT_JWKS_URI": "https://auth.example.com/realms/mcp/protocol/openid-connect/certs",
+            "JWT_ISSUER": "https://auth.example.com/realms/mcp",
+            "JWT_AUDIENCE": "mcp-log-server",
+            "DATABASE_PASSWORD": "prod-db-secret",
+        }
+    )
+
+    validate_runtime_settings(runtime_settings)
+
+
+@pytest.mark.parametrize(
+    ("settings_overrides", "expected_message"),
+    [
+        (
+            {"JWT_ISSUER": "mcp-log-server-dev"},
+            "JWT_ISSUER must be set to the production token issuer",
+        ),
+        (
+            {"JWT_AUDIENCE": ""},
+            "JWT_AUDIENCE must be set for production token validation",
+        ),
+    ],
+)
+def test_validate_runtime_settings_rejects_incomplete_production_jwks_config(
+    settings_overrides: dict[str, Any],
+    expected_message: str,
+) -> None:
+    runtime_settings = Settings(
+        {
+            "ENVIRONMENT": "prod",
+            "JWT_SHARED_SECRET": "change-me-local-dev-secret",
+            "JWT_JWKS_URI": "https://auth.example.com/realms/mcp/protocol/openid-connect/certs",
+            "JWT_ISSUER": "https://auth.example.com/realms/mcp",
+            "JWT_AUDIENCE": "mcp-log-server",
             "DATABASE_PASSWORD": "prod-db-secret",
         },
         **settings_overrides,

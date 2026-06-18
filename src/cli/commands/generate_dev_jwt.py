@@ -35,23 +35,20 @@ TOKEN_WORKSPACES = {
 
 @dataclass(frozen=True, slots=True)
 class TokenCaller:
-    """Caller claims used for one generated token."""
+    """Caller identity claims used for one generated token."""
 
     client_id: str
     client_type: str
-    allowed_projects: list[str]
 
 
 DEFAULT_TOKEN_CALLERS = {
     "workflow_agent": TokenCaller(
         client_id="workflow-agent",
         client_type="workflow_agent",
-        allowed_projects=["all"],
     ),
     "codex_agent": TokenCaller(
         client_id="codex-agent",
         client_type="codex",
-        allowed_projects=["all"],
     ),
 }
 
@@ -72,7 +69,6 @@ async def _get_token_caller(token_name: str, workspace: LogWorkspace) -> TokenCa
     return TokenCaller(
         client_id=caller.client_id,
         client_type=caller.client_type,
-        allowed_projects=caller.allowed_projects,
     )
 
 
@@ -112,7 +108,6 @@ def build_example_token_payloads(
             "sub": workflow_caller.client_id,
             "client_id": workflow_caller.client_id,
             "client_type": workflow_caller.client_type,
-            "allowed_projects": workflow_caller.allowed_projects,
             "scope": " ".join(
                 (
                     CONTAINER_FILES_READ_SCOPE,
@@ -130,7 +125,6 @@ def build_example_token_payloads(
             "sub": codex_caller.client_id,
             "client_id": codex_caller.client_id,
             "client_type": codex_caller.client_type,
-            "allowed_projects": codex_caller.allowed_projects,
             "scope": " ".join(
                 (
                     CONTAINER_FILES_READ_SCOPE,
@@ -203,8 +197,9 @@ async def generate_dev_jwt(
     plus created_at and updated_at timestamps, or write the same JSON to
     --output-file when provided. Use these tokens for local MCP HTTP calls, curl
     examples, and E2E checks against the configured shared secret. The
-    client_id, client_type, and allowed_projects claims come from McpCaller
-    database rows when present, or built-in defaults when missing.
+    client_id and client_type claims come from McpCaller database rows when
+    present, or built-in defaults when missing. Project access intentionally
+    stays in McpCaller.allowed_projects and is attached by request middleware.
     """
 
     try:

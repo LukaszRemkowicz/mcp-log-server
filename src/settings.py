@@ -21,6 +21,7 @@ LOG_LEVEL = env.str("LOG_LEVEL", default="INFO")
 LOG_FORMAT = "json"
 JWT_ALGORITHM = "HS256"
 JWT_SHARED_SECRET = env.str("JWT_SHARED_SECRET", default="change-me-local-dev-secret")
+JWT_JWKS_URI = env.str("JWT_JWKS_URI", default="")
 JWT_ISSUER = env.str("JWT_ISSUER", default="mcp-log-server-dev")
 JWT_AUDIENCE = env.str("JWT_AUDIENCE", default="mcp-log-server")
 JWT_EXPIRATION_SECONDS = 86400
@@ -38,7 +39,7 @@ FAIL2BAN_SOCKET_APP_SOCKET_PATH = Path(env.str("FAIL2BAN_SOCKET_APP_SOCKET_PATH"
 FAIL2BAN_SOCKET_APP_TIMEOUT_SECONDS = 5
 DOCKER_SOCKET_APP_SOCKET_PATH = Path(env.str("DOCKER_SOCKET_APP_SOCKET_PATH"))
 DOCKER_SOCKET_APP_TIMEOUT_SECONDS = 15
-FAIL2BAN_JAILS = ["portfolio-nginx-probes", "portfolio-traefik-probes"]
+FAIL2BAN_JAILS = ["portfolio-nginx-probes", "portfolio-traefik-probes", "portfolio-keycloak-token"]
 SITE_DOMAIN = env.str("SITE_DOMAIN", default="localhost").strip()
 TLS_CERTIFICATE_SUBDOMAINS = env.list(
     "TLS_CERTIFICATE_SUBDOMAINS",

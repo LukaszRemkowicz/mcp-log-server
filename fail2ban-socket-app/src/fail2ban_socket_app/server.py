@@ -33,7 +33,7 @@ class Fail2banSocketServer:
             self._handle_client,
             path=str(self.socket_path),
         )
-        os.chmod(self.socket_path, 0o660)
+        os.chmod(self.socket_path, 0o666)
 
     async def stop(self) -> None:
         """Stop listening and remove the socket file."""

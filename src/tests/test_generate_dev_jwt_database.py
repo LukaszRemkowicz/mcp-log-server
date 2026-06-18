@@ -21,7 +21,9 @@ def _decode_jwt_payload(token: str) -> dict[str, Any]:
 
 
 @pytest.mark.anyio
-async def test_generate_dev_jwt_uses_database_callers_for_claims(db: None) -> None:  # noqa: ARG001
+async def test_generate_dev_jwt_uses_database_callers_for_identity_claims(
+    db: None,
+) -> None:  # noqa: ARG001
     await McpCaller.all().delete()
     await McpCallerFactory.save_to_db(
         client_id="workflow-prod",
@@ -43,12 +45,12 @@ async def test_generate_dev_jwt_uses_database_callers_for_claims(db: None) -> No
     assert workflow_claims["sub"] == "workflow-prod"
     assert workflow_claims["client_id"] == "workflow-prod"
     assert workflow_claims["client_type"] == "workflow_agent_prod"
-    assert workflow_claims["allowed_projects"] == ["landingpage", "shop"]
+    assert "allowed_projects" not in workflow_claims
     assert "container.files.read" in workflow_claims["scope"].split()
     assert codex_claims["sub"] == "codex-prod"
     assert codex_claims["client_id"] == "codex-prod"
     assert codex_claims["client_type"] == "codex_prod"
-    assert codex_claims["allowed_projects"] == ["all"]
+    assert "allowed_projects" not in codex_claims
 
 
 @pytest.mark.anyio
@@ -87,9 +89,9 @@ async def test_generate_dev_jwt_uses_default_claims_without_creating_callers_whe
 
     assert workflow_claims["client_id"] == "workflow-agent"
     assert workflow_claims["client_type"] == "workflow_agent"
-    assert workflow_claims["allowed_projects"] == ["all"]
+    assert "allowed_projects" not in workflow_claims
     assert codex_claims["client_id"] == "codex-agent"
     assert codex_claims["client_type"] == "codex"
-    assert codex_claims["allowed_projects"] == ["all"]
+    assert "allowed_projects" not in codex_claims
     assert await McpCaller.objects.filter(workspace=LogWorkspace.WORKFLOW).count() == 0
     assert await McpCaller.objects.filter(workspace=LogWorkspace.SESSION).count() == 0

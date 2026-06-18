@@ -27,6 +27,20 @@ async def test_unix_socket_server_handles_one_json_line_request() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_unix_socket_server_allows_mcp_app_connection_when_running_as_root() -> None:
+    base_dir = Path("/private/tmp") if Path("/private/tmp").exists() else None
+    with tempfile.TemporaryDirectory(prefix="f2b-", dir=base_dir) as tmp_dir:
+        socket_path = Path(tmp_dir) / "app.sock"
+        service = Fail2banSocketService(backend=FakeFail2banBackend())
+        server = Fail2banSocketServer(socket_path=socket_path, service=service)
+
+        async with server.running():
+            socket_mode = socket_path.stat().st_mode & 0o777
+
+    assert socket_mode == 0o666
+
+
 async def _request_jail_status(socket_path: Path) -> bytes:
     service = Fail2banSocketService(backend=FakeFail2banBackend())
     server = Fail2banSocketServer(socket_path=socket_path, service=service)

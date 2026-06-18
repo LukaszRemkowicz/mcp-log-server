@@ -124,10 +124,23 @@ def validate_runtime_settings(runtime_settings: Settings) -> None:
     if environment not in PRODUCTION_ENVIRONMENTS:
         return
 
-    required_production_secrets = {
-        "JWT_SHARED_SECRET": runtime_settings.JWT_SHARED_SECRET,
-        "DATABASE_PASSWORD": runtime_settings.DATABASE_PASSWORD,
-    }
+    jwks_uri = runtime_settings.JWT_JWKS_URI
+    if jwks_uri:
+        issuer = runtime_settings.JWT_ISSUER
+        audience = runtime_settings.JWT_AUDIENCE
+        if issuer in {"", "mcp-log-server-dev"}:
+            raise RuntimeError("JWT_ISSUER must be set to the production token issuer.")
+        if not audience:
+            raise RuntimeError("JWT_AUDIENCE must be set for production token validation.")
+        required_production_secrets = {
+            "DATABASE_PASSWORD": runtime_settings.DATABASE_PASSWORD,
+        }
+    else:
+        required_production_secrets = {
+            "JWT_SHARED_SECRET": runtime_settings.JWT_SHARED_SECRET,
+            "DATABASE_PASSWORD": runtime_settings.DATABASE_PASSWORD,
+        }
+
     for name, value in required_production_secrets.items():
         normalized_value = str(value).strip()
         if normalized_value in INSECURE_PRODUCTION_VALUES:

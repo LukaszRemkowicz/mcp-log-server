@@ -53,7 +53,7 @@ DRY_RUN="${DRY_RUN:-false}"
 DATABASE_NAME="${DATABASE_NAME:-mcp_log_server}"
 DATABASE_USER="${DATABASE_USER:-mcp_log_server}"
 DATABASE_PASSWORD="${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}"
-JWT_SHARED_SECRET="${JWT_SHARED_SECRET:?JWT_SHARED_SECRET is required}"
+JWT_JWKS_URI="${JWT_JWKS_URI:?JWT_JWKS_URI is required}"
 JWT_ISSUER="${JWT_ISSUER:?JWT_ISSUER is required}"
 JWT_AUDIENCE="${JWT_AUDIENCE:?JWT_AUDIENCE is required}"
 SITE_DOMAIN="${SITE_DOMAIN:?SITE_DOMAIN is required for Traefik MCP routing}"
@@ -69,7 +69,7 @@ export \
     DATABASE_NAME \
     DATABASE_USER \
     DATABASE_PASSWORD \
-    JWT_SHARED_SECRET \
+    JWT_JWKS_URI \
     JWT_ISSUER \
     JWT_AUDIENCE \
     SITE_DOMAIN \
@@ -213,11 +213,11 @@ fi
 
 # Step 8: start or update the Docker-backed application containers with the selected tag.
 deploy_step "🚀" 8 9 "Start application containers"
-docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate docker-socket-app
+docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans docker-socket-app
 printf "✅ Docker socket app container recreated\n"
-docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate fail2ban-socket-app
+docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans fail2ban-socket-app
 printf "✅ Fail2ban socket app container recreated\n"
-docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate app
+docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans app
 printf "✅ Application container recreated\n"
 
 # Step 9: wait for Docker to confirm the app accepts unauthenticated liveness probes.
