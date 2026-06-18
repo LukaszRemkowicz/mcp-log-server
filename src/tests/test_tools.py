@@ -27,6 +27,7 @@ from tools.agent_hints import (
     INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
     INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION,
     INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION,
+    INSPECT_PROJECT_SCHEDULED_JOBS_TOOL_DESCRIPTION,
     INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
     INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION,
     INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
@@ -85,6 +86,7 @@ def test_application_registers_expected_mcp_components(
         assert "stat_project_path" in tool_names
         assert "read_project_file" in tool_names
         assert "list_project_directory" in tool_names
+        assert "inspect_project_scheduled_jobs" in tool_names
         assert "close_agent_session" in tool_names
         assert "inspect_live_fail2ban_activity" in tool_names
         assert "inspect_tls_certificate" in tool_names
@@ -207,6 +209,10 @@ def test_application_registers_expected_mcp_components(
         assert any(
             item["tool_name"] == "list_project_directory" for item in bootstrap_text["tools"]
         )
+        assert any(
+            item["tool_name"] == "inspect_project_scheduled_jobs"
+            for item in bootstrap_text["tools"]
+        )
         collect_logs_tool = next(
             item for item in bootstrap_text["tools"] if item["tool_name"] == "collect_logs"
         )
@@ -257,6 +263,7 @@ def test_application_registers_expected_mcp_components(
             "stat_project_path",
             "read_project_file",
             "list_project_directory",
+            "inspect_project_scheduled_jobs",
             "list_container_directory",
             "stat_container_path",
             "read_container_file",
@@ -296,6 +303,14 @@ def test_application_registers_expected_mcp_components(
         )
         assert app_list_project_tool.description == LIST_PROJECT_DIRECTORY_TOOL_DESCRIPTION
         assert "path" not in app_list_project_tool.parameters["required"]
+        app_scheduled_jobs_tool = next(
+            tool for tool in tools if tool.name == "inspect_project_scheduled_jobs"
+        )
+        assert (
+            app_scheduled_jobs_tool.description == INSPECT_PROJECT_SCHEDULED_JOBS_TOOL_DESCRIPTION
+        )
+        assert "project_name" in app_scheduled_jobs_tool.parameters["properties"]
+        assert "patterns" not in app_scheduled_jobs_tool.parameters.get("required", [])
         app_fail2ban_tool = next(
             tool for tool in tools if tool.name == "inspect_live_fail2ban_activity"
         )
@@ -345,6 +360,7 @@ def test_application_registers_expected_mcp_components(
             "stat_project_path",
             "read_project_file",
             "list_project_directory",
+            "inspect_project_scheduled_jobs",
         }
         tools_by_name = {tool.name: tool for tool in tools}
         for tool_name in request_caller_tool_names:

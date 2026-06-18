@@ -58,6 +58,19 @@ TLS_CERTIFICATE_SUBDOMAINS = env.list(
 )
 TLS_CERTIFICATE_TIMEOUT_SECONDS = env.int("TLS_CERTIFICATE_TIMEOUT_SECONDS", default=5)
 TLS_CERTIFICATE_EXPIRY_WARNING_DAYS = env.int("TLS_CERTIFICATE_EXPIRY_WARNING_DAYS", default=30)
+SCHEDULER_INSPECTION_ROOTS = [
+    Path(path)
+    for path in env.list(
+        "SCHEDULER_INSPECTION_ROOTS",
+        default=[
+            "/host/etc/cron.d",
+            "/host/etc/cron.daily",
+            "/host/etc/cron.weekly",
+            "/host/var/spool/cron",
+            "/host/etc/systemd/system",
+        ],
+    )
+]
 MCP_PATH = "/mcp"
 MCP_STATELESS_HTTP = True
 MCP_JSON_RESPONSE = True

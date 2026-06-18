@@ -225,6 +225,11 @@ Manifests and logs are intentionally separate:
   `/host/etc/nginx/logs`
 - manifest file targets are literal paths; dated filename templates are not
   expanded by MCP
+- production Compose mounts scheduler provenance roots read-only under `/host`:
+  `/host/etc/cron.d`, `/host/etc/cron.daily`, `/host/etc/cron.weekly`,
+  `/host/var/spool/cron`, and `/host/etc/systemd/system`
+- `SCHEDULER_INSPECTION_ROOTS` controls which container-visible scheduler roots
+  `inspect_project_scheduled_jobs` scans
 
 - `MCP_HOST`
   Host address the FastMCP service binds inside the running process.

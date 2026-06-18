@@ -80,6 +80,7 @@ documentation categories, not auth scopes.
 | Snapshot analysis and derived views | `create_filtered_view`, `group_errors`, `build_incident_bundle`, `inspect_proxy_activity`, `suggest_followup_window` | Build deterministic cleaned views, grouped summaries, proxy diagnostics, incident bundles, and recollection windows. |
 | Container inspection | `inspect_containers_health`, `inspect_container_detail`, `inspect_project_compose_state`, `stat_container_path`, `read_container_file`, `list_container_directory` | Inspect approved manifest-bounded containers, runtime Compose-labelled state, and paths without mutating container state. |
 | Host path inspection | `stat_project_path`, `read_project_file`, `list_project_directory` | Inspect approved manifest-bounded host file sources without arbitrary filesystem access or mutation. |
+| Scheduler provenance | `inspect_project_scheduled_jobs` | Inspect configured read-only cron/systemd roots for project scheduler evidence without running or editing jobs. |
 | VPS and edge diagnostics | `inspect_tls_certificate` | Inspect the configured `SITE_DOMAIN` TLS certificate without accepting arbitrary hostnames or ports. |
 | MCP service diagnostics | `get_mcp_service_status`, `get_mcp_health_check` | Check MCP server/runtime health during development and operations. |
 
@@ -278,6 +279,13 @@ log like `/var/log/app/app.jsonl` should be configured as
 absolute paths; date templates are not expanded. For dated log files, use a
 stable current path, a host-side symlink/logrotate convention, or update the
 manifest from the owning ops repository.
+
+Production scheduler provenance is read-only and bounded. The app mounts the
+host scheduler roots used by `inspect_project_scheduled_jobs` under `/host`,
+including `/host/etc/cron.d`, `/host/etc/cron.daily`,
+`/host/etc/cron.weekly`, `/host/var/spool/cron`, and
+`/host/etc/systemd/system`. Override `SCHEDULER_INSPECTION_ROOTS` only when the
+container-visible paths differ.
 
 The production MCP app keeps Docker access behind `docker-socket-app`, using
 the same Unix socket shape described above. On Linux hosts where the real Docker

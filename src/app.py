@@ -26,6 +26,7 @@ def register_mcp_components() -> None:
     import tools.container_inspection  # noqa: F401
     import tools.fail2ban  # noqa: F401
     import tools.host_paths  # noqa: F401
+    import tools.scheduled_jobs  # noqa: F401
     import tools.sessions  # noqa: F401
     import tools.snapshots  # noqa: F401
     import tools.system  # noqa: F401

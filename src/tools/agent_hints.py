@@ -199,6 +199,15 @@ LIST_PROJECT_DIRECTORY_TOOL_DESCRIPTION = (
     "prevent traversal and symlink escapes."
 )
 
+INSPECT_PROJECT_SCHEDULED_JOBS_TOOL_DESCRIPTION = (
+    "Inspect bounded host scheduler files for one authorized project. "
+    "Searches only configured read-only cron and systemd roots visible to MCP, "
+    "using literal project-scoped patterns. Returns matching scheduler file paths, "
+    "line numbers, schedule or unit context, command text, detected output "
+    "redirection paths, and visibility warnings. This tool does not run jobs, "
+    "edit scheduler files, or expose arbitrary host grep."
+)
+
 INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION = (
     "Inspect Docker Compose runtime state for one authorized project by matching "
     "manifest docker source targets to current Docker Compose labels. Returns "

@@ -97,6 +97,7 @@ HOST_PATH_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("stat_project_path", {"project_name": "landingpage", "source_key": "app_file"}),
     ("read_project_file", {"project_name": "landingpage", "source_key": "app_file"}),
     ("list_project_directory", {"project_name": "landingpage", "source_key": "app_file"}),
+    ("inspect_project_scheduled_jobs", {"project_name": "landingpage"}),
 )
 FAIL2BAN_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("inspect_live_fail2ban_activity", {"project_name": "landingpage"}),
@@ -319,6 +320,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "stat_project_path",
                 "read_project_file",
                 "list_project_directory",
+                "inspect_project_scheduled_jobs",
                 "close_agent_session",
             },
         ),
@@ -357,6 +359,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "stat_project_path",
                 "read_project_file",
                 "list_project_directory",
+                "inspect_project_scheduled_jobs",
                 "close_agent_session",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
@@ -484,6 +487,7 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert any(item["tool_name"] == "stat_project_path" for item in payload["tools"])
     assert any(item["tool_name"] == "read_project_file" for item in payload["tools"])
     assert any(item["tool_name"] == "list_project_directory" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_project_scheduled_jobs" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_service_status" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_health_check" for item in payload["tools"])
     collect_logs_tool = next(
@@ -3125,6 +3129,112 @@ async def test_stat_project_path_api_rejects_parent_traversal(
     assert payload["action"] == "stat_project_path"
     assert payload["error_code"] == "project_path_parent_traversal"
     assert payload["details"] == {"path": "../secret.txt"}
+
+
+async def test_inspect_project_scheduled_jobs_api_returns_scheduler_evidence(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    tmp_path: Path,
+) -> None:
+    """Verify scheduler provenance returns bounded cron/systemd evidence."""
+
+    cron_d = tmp_path / "etc" / "cron.d"
+    systemd = tmp_path / "etc" / "systemd" / "system"
+    cron_d.mkdir(parents=True)
+    systemd.mkdir(parents=True)
+    (cron_d / "agent-monitoring").write_text(
+        (
+            "15 2 * * * root /opt/agent-monitoring/sitemap-analysis "
+            ">> /var/log/devops/cron/agent-monitoring/sitemap-analysis.log 2>&1\n"
+        ),
+        encoding="utf-8",
+    )
+    (systemd / "agent-monitoring-sitemap.service").write_text(
+        "[Service]\nExecStart=/opt/agent-monitoring/sitemap-analysis --once\n",
+        encoding="utf-8",
+    )
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    with override_settings(SCHEDULER_INSPECTION_ROOTS=[cron_d, systemd]):
+        response = await jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "inspect-scheduled-jobs",
+                "method": "tools/call",
+                "params": {
+                    "name": "inspect_project_scheduled_jobs",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "patterns": ["agent-monitoring", "sitemap-analysis"],
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+    scheduler_types = {match["scheduler_type"] for match in payload["matches"]}
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_project_scheduled_jobs"
+    assert payload["project_name"] == "landingpage"
+    assert payload["patterns"] == ["agent-monitoring", "sitemap-analysis"]
+    assert payload["scheduler_roots"] == [cron_d.as_posix(), systemd.as_posix()]
+    assert scheduler_types == {"cron_d", "systemd"}
+    assert any(
+        "/var/log/devops/cron/agent-monitoring/sitemap-analysis.log" in match["output_paths"]
+        for match in payload["matches"]
+    )
+    assert payload["warnings"] == []
+
+
+async def test_inspect_project_scheduled_jobs_api_reports_missing_root_warning(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    tmp_path: Path,
+) -> None:
+    """Verify missing scheduler roots are warnings, not arbitrary filesystem access."""
+
+    missing_root = tmp_path / "missing-cron.d"
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    with override_settings(SCHEDULER_INSPECTION_ROOTS=[missing_root]):
+        response = await jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "inspect-scheduled-jobs-missing-root",
+                "method": "tools/call",
+                "params": {
+                    "name": "inspect_project_scheduled_jobs",
+                    "arguments": {"project_name": "landingpage"},
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["matches"] == []
+    assert payload["warnings"] == [
+        {
+            "path": missing_root.as_posix(),
+            "warning_code": "scheduler_root_missing",
+            "message": "Configured scheduler inspection root was not found.",
+        }
+    ]
 
 
 async def test_list_projects_api_returns_multiple_manifest_backed_projects(

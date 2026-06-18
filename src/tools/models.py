@@ -1075,3 +1075,52 @@ class ListProjectDirectoryPayload(BaseModel):
     path: str
     truncated: bool
     entries: list[ProjectPathMetadataPayload]
+
+
+class ScheduledJobMatchPayload(BaseModel):
+    """Describe one matched cron/systemd scheduler evidence item."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scheduler_type: Literal["cron_d", "cron_daily", "cron_weekly", "crontab", "systemd", "unknown"]
+    path: str
+    line_number: int | None
+    schedule_context: str | None
+    command_text: str
+    output_paths: list[str]
+    matched_patterns: list[str]
+    visibility_warnings: list[str]
+
+
+class ScheduledJobWarningPayload(BaseModel):
+    """Describe a skipped or degraded scheduler inspection path."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str | None
+    warning_code: Literal[
+        "scheduler_root_not_absolute",
+        "scheduler_root_missing",
+        "scheduler_root_not_directory",
+        "scheduler_root_unreadable",
+        "scheduler_file_unreadable",
+        "scheduler_file_too_large",
+        "scheduler_scan_truncated",
+        "scheduler_pattern_ignored",
+    ]
+    message: str
+
+
+class InspectProjectScheduledJobsPayload(BaseModel):
+    """Structured success payload returned by `inspect_project_scheduled_jobs`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_project_scheduled_jobs"]
+    requested_project_name: str | None
+    project_name: str
+    patterns: list[str]
+    scheduler_roots: list[str]
+    truncated: bool
+    matches: list[ScheduledJobMatchPayload]
+    warnings: list[ScheduledJobWarningPayload]
