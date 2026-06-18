@@ -78,7 +78,7 @@ documentation categories, not auth scopes.
 | Log collection and session lifecycle | `collect_logs`, `close_agent_session` | Collect raw logs into workflow or session artifacts and close interactive session audit metadata. |
 | Snapshot inventory and raw inspection | `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot` | List, read, and search persisted raw snapshot files. |
 | Snapshot analysis and derived views | `create_filtered_view`, `group_errors`, `build_incident_bundle`, `inspect_proxy_activity`, `suggest_followup_window` | Build deterministic cleaned views, grouped summaries, proxy diagnostics, incident bundles, and recollection windows. |
-| Container inspection | `inspect_containers_health`, `inspect_container_detail`, `inspect_project_compose_state`, `stat_container_path`, `read_container_file`, `list_container_directory` | Inspect approved manifest-bounded containers, runtime Compose-labelled state, and paths without mutating container state. |
+| Container inspection | `inspect_containers_health`, `inspect_container_detail`, `inspect_project_compose_state`, `inspect_project_runtime`, `stat_container_path`, `read_container_file`, `list_container_directory` | Inspect approved manifest-bounded containers, runtime Compose-labelled state, sanitized runtime env shape, and paths without mutating container state. |
 | Host path inspection | `stat_project_path`, `read_project_file`, `list_project_directory` | Inspect approved manifest-bounded host file sources without arbitrary filesystem access or mutation. |
 | Scheduler provenance | `inspect_project_scheduled_jobs` | Inspect configured read-only cron/systemd roots for project scheduler evidence without running or editing jobs. |
 | VPS and edge diagnostics | `inspect_tls_certificate` | Inspect the configured `SITE_DOMAIN` TLS certificate without accepting arbitrary hostnames or ports. |
@@ -270,6 +270,12 @@ normal production usage does not need `--path`.
 `inspect_project_compose_state` uses only manifest docker source targets and
 current Docker runtime labels/metadata. It does not read Compose files or
 validate desired image, port, mount, volume, or environment configuration.
+
+`inspect_project_runtime` builds on that same read-only Docker path and returns
+sanitized runtime configuration for the Compose-labelled project containers. It
+exposes selected non-secret environment values and database host/port/name/user
+shape when present, while reporting secret environment key presence without
+returning secret values or raw environment dumps.
 
 In production, file source paths must be written as paths visible inside the
 MCP container. `docker-compose.prod.yml` mounts host `/var/log` as

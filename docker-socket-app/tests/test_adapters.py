@@ -48,3 +48,69 @@ def test_container_logs_converts_json_timestamp_strings_for_docker_sdk() -> None
     assert container.log_kwargs["since"] == datetime(2026, 6, 17, 20, 0, tzinfo=UTC)
     assert container.log_kwargs["until"] == datetime(2026, 6, 17, 21, 0, tzinfo=UTC)
     assert container.log_kwargs["tail"] == 10
+
+
+def test_extract_env_vars_exposes_db_shape_without_secret_values() -> None:
+    result = DockerSdkAdapter._extract_env_vars(
+        [
+            "DATABASE_HOST=db",
+            "DATABASE_PORT=5432",
+            "DATABASE_NAME=app",
+            "DATABASE_USER=app_user",
+            "DATABASE_PASSWORD=hidden",
+            "DATABASE_URL=postgres://user:password@db/app",
+            "NODE_ENV=production",
+            "CUSTOM_VALUE=not-safe",
+        ]
+    )
+
+    assert result == [
+        {
+            "name": "DATABASE_HOST",
+            "value": "db",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {
+            "name": "DATABASE_PORT",
+            "value": "5432",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {
+            "name": "DATABASE_NAME",
+            "value": "app",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {
+            "name": "DATABASE_USER",
+            "value": "app_user",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {
+            "name": "DATABASE_PASSWORD",
+            "value": None,
+            "value_redacted": True,
+            "secret": True,
+        },
+        {
+            "name": "DATABASE_URL",
+            "value": None,
+            "value_redacted": True,
+            "secret": True,
+        },
+        {
+            "name": "NODE_ENV",
+            "value": "production",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {
+            "name": "CUSTOM_VALUE",
+            "value": None,
+            "value_redacted": True,
+            "secret": False,
+        },
+    ]

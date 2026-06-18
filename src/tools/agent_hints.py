@@ -225,6 +225,16 @@ INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION = (
     "does not parse Compose files, expose env values, or mutate Docker state."
 )
 
+INSPECT_PROJECT_RUNTIME_TOOL_DESCRIPTION = (
+    "Inspect sanitized runtime configuration for one authorized project by using "
+    "Docker Compose labels to group running containers. Returns Compose project "
+    "and service names, container status, image and restart facts, safe selected "
+    "environment values, secret environment key presence with values redacted, "
+    "database host/port/name/user shape when present, ports, networks, and "
+    "mount destinations without exposing raw env dumps, secret values, host "
+    "mount source paths, or mutation operations."
+)
+
 LOG_ANALYSIS_CAUTIONS = [
     "Use grouped findings for triage, not as the final incident conclusion.",
     (

@@ -28,6 +28,7 @@ from tools.agent_hints import (
     INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
     INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION,
     INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION,
+    INSPECT_PROJECT_RUNTIME_TOOL_DESCRIPTION,
     INSPECT_PROJECT_SCHEDULED_JOBS_TOOL_DESCRIPTION,
     INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
     INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION,
@@ -80,6 +81,7 @@ def test_application_registers_expected_mcp_components(
         assert "inspect_vps_containers" in tool_names
         assert "inspect_vps_volumes" in tool_names
         assert "inspect_project_compose_state" in tool_names
+        assert "inspect_project_runtime" in tool_names
         assert "inspect_containers_health" in tool_names
         assert "inspect_container_detail" in tool_names
         assert "stat_container_path" in tool_names
@@ -195,6 +197,9 @@ def test_application_registers_expected_mcp_components(
             item["tool_name"] == "inspect_project_compose_state" for item in bootstrap_text["tools"]
         )
         assert any(
+            item["tool_name"] == "inspect_project_runtime" for item in bootstrap_text["tools"]
+        )
+        assert any(
             item["tool_name"] == "inspect_vps_containers" for item in bootstrap_text["tools"]
         )
         assert any(item["tool_name"] == "inspect_vps_volumes" for item in bootstrap_text["tools"])
@@ -265,6 +270,7 @@ def test_application_registers_expected_mcp_components(
             "inspect_vps_containers",
             "inspect_vps_volumes",
             "inspect_project_compose_state",
+            "inspect_project_runtime",
             "stat_project_path",
             "read_project_file",
             "list_project_directory",
@@ -332,6 +338,8 @@ def test_application_registers_expected_mcp_components(
             tool for tool in tools if tool.name == "inspect_project_compose_state"
         )
         assert app_compose_state_tool.description == INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION
+        app_runtime_tool = next(tool for tool in tools if tool.name == "inspect_project_runtime")
+        assert app_runtime_tool.description == INSPECT_PROJECT_RUNTIME_TOOL_DESCRIPTION
         workflow_followup_tool = next(
             item
             for item in bootstrap_text["tools"]
@@ -363,6 +371,7 @@ def test_application_registers_expected_mcp_components(
             "inspect_vps_containers",
             "inspect_vps_volumes",
             "inspect_project_compose_state",
+            "inspect_project_runtime",
             "inspect_containers_health",
             "stat_container_path",
             "read_container_file",

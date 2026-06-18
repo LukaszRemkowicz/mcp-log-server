@@ -126,6 +126,7 @@ Current example JWT capabilities:
   - `inspect_vps_containers`
   - `inspect_vps_volumes`
   - `inspect_project_compose_state`
+  - `inspect_project_runtime`
   - `inspect_project_scheduled_jobs`
   - `inspect_containers_health`
   - `inspect_container_detail`
@@ -157,6 +158,7 @@ Current example JWT capabilities:
   - `inspect_vps_containers`
   - `inspect_vps_volumes`
   - `inspect_project_compose_state`
+  - `inspect_project_runtime`
   - `inspect_project_scheduled_jobs`
   - `inspect_containers_health`
   - `inspect_container_detail`

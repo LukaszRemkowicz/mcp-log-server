@@ -19,6 +19,7 @@ from services.inspection_tools_service import (
     VpsContainerInventory,
     VpsVolumeInventory,
 )
+from services.project_runtime_service import ProjectRuntimeService
 from tests.conftest import FakeDockerClient
 
 
@@ -1075,6 +1076,182 @@ def test_compose_state_service_returns_unavailable_without_expected_state() -> N
 
     assert isinstance(result, ComposeStateUnavailable)
     assert "matched a Compose-labelled container" in result.message
+
+
+def test_project_runtime_service_returns_sanitized_env_and_database_shape() -> None:
+    """Verify project runtime inspection exposes DB shape without secret values."""
+
+    source = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="backend-container",
+        description="Backend container.",
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+    )
+    container = VpsContainerInventory(
+        container_id="abc123def4567890",
+        short_container_id="abc123def456",
+        container_name="backend-container",
+        image="portfolio/backend:2026-05-17",
+        command=[],
+        command_preview="",
+        created_at="2026-05-17T10:00:00Z",
+        docker_status="running",
+        state="running",
+        health_status="healthy",
+        running=True,
+        restarting=False,
+        paused=False,
+        dead=False,
+        exit_code=0,
+        error="",
+        restart_count=1,
+        started_at="2026-05-17T10:01:00Z",
+        finished_at=None,
+        compose_labels={
+            "com.docker.compose.project": "portfolio",
+            "com.docker.compose.service": "backend",
+        },
+        restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
+        ports=[],
+        network_names=["portfolio_default"],
+        triage_notes=[],
+        env_var_names=[
+            "DATABASE_HOST",
+            "DATABASE_PORT",
+            "DATABASE_NAME",
+            "DATABASE_USER",
+            "DATABASE_PASSWORD",
+            "NODE_ENV",
+            "CUSTOM_VALUE",
+        ],
+        mounts=[],
+    )
+    detail = ContainerDetail(
+        health=ContainerHealth(
+            container_id=container.container_id,
+            container_name=container.container_name,
+            image=container.image,
+            docker_status=container.docker_status,
+            health_status=container.health_status,
+            running=True,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=1,
+            started_at=container.started_at,
+            finished_at=None,
+        ),
+        created_at=container.created_at,
+        env_var_names=container.env_var_names,
+        env_vars=[
+            ContainerDetailEnvVar(
+                name="DATABASE_HOST",
+                value="db",
+                value_redacted=False,
+                secret=False,
+            ),
+            ContainerDetailEnvVar(
+                name="DATABASE_PORT",
+                value="5432",
+                value_redacted=False,
+                secret=False,
+            ),
+            ContainerDetailEnvVar(
+                name="DATABASE_NAME",
+                value="app",
+                value_redacted=False,
+                secret=False,
+            ),
+            ContainerDetailEnvVar(
+                name="DATABASE_USER",
+                value="app_user",
+                value_redacted=False,
+                secret=False,
+            ),
+            ContainerDetailEnvVar(
+                name="DATABASE_PASSWORD",
+                value=None,
+                value_redacted=True,
+                secret=True,
+            ),
+            ContainerDetailEnvVar(
+                name="NODE_ENV",
+                value="production",
+                value_redacted=False,
+                secret=False,
+            ),
+            ContainerDetailEnvVar(
+                name="CUSTOM_VALUE",
+                value=None,
+                value_redacted=True,
+                secret=False,
+            ),
+        ],
+        label_keys=[],
+        compose_labels=container.compose_labels,
+        restart_policy=container.restart_policy,
+        command=[],
+        entrypoint=[],
+        working_dir=None,
+        user=None,
+        ports=[],
+        mounts=[],
+        networks=[],
+        health_log=[],
+    )
+
+    result = ProjectRuntimeService().inspect(
+        project_name="landingpage",
+        sources=[source],
+        running_containers=[container],
+        container_details={"backend-container": detail},
+    )
+
+    assert not isinstance(result, ComposeStateUnavailable)
+    assert result.compose_project == "portfolio"
+    assert result.containers[0].selected_env == [
+        ContainerDetailEnvVar(
+            name="DATABASE_HOST",
+            value="db",
+            value_redacted=False,
+            secret=False,
+        ),
+        ContainerDetailEnvVar(
+            name="DATABASE_NAME",
+            value="app",
+            value_redacted=False,
+            secret=False,
+        ),
+        ContainerDetailEnvVar(
+            name="DATABASE_PORT",
+            value="5432",
+            value_redacted=False,
+            secret=False,
+        ),
+        ContainerDetailEnvVar(
+            name="DATABASE_USER",
+            value="app_user",
+            value_redacted=False,
+            secret=False,
+        ),
+        ContainerDetailEnvVar(
+            name="NODE_ENV",
+            value="production",
+            value_redacted=False,
+            secret=False,
+        ),
+    ]
+    assert result.containers[0].secret_env_names == ["DATABASE_PASSWORD"]
+    assert result.containers[0].database.host == "db"
+    assert result.containers[0].database.port == "5432"
+    assert result.containers[0].database.name == "app"
+    assert result.containers[0].database.user == "app_user"
+    assert "hidden" not in result.model_dump_json()
 
 
 @pytest.mark.skip(reason="Fixed Docker operations now live in socket app.")

@@ -29,6 +29,46 @@ SAFE_COMPOSE_LABEL_KEYS = frozenset(
         "com.docker.compose.volume",
     }
 )
+SAFE_ENV_VALUE_NAMES = frozenset(
+    {
+        "APP_ENV",
+        "DATABASE_HOST",
+        "DATABASE_NAME",
+        "DATABASE_PORT",
+        "DATABASE_USER",
+        "DB_HOST",
+        "DB_NAME",
+        "DB_PORT",
+        "DB_USER",
+        "ENV",
+        "ENVIRONMENT",
+        "LOG_LEVEL",
+        "NODE_ENV",
+        "PORT",
+        "POSTGRES_DB",
+        "POSTGRES_HOST",
+        "POSTGRES_PORT",
+        "POSTGRES_USER",
+    }
+)
+SECRET_ENV_NAME_PARTS = frozenset(
+    {
+        "ACCESS_KEY",
+        "API_KEY",
+        "AUTH",
+        "BROKER_URL",
+        "CREDENTIAL",
+        "DATABASE_URL",
+        "DB_URL",
+        "DSN",
+        "KEY_FILE",
+        "PASSWORD",
+        "PRIVATE_KEY",
+        "REDIS_URL",
+        "SECRET",
+        "TOKEN",
+    }
+)
 
 
 class DockerBackendError(RuntimeError):
@@ -464,21 +504,19 @@ class DockerSdkAdapter(DockerBackend):
     def _extract_env_vars(value: object) -> list[dict[str, Any]]:
         if not isinstance(value, list):
             return []
-        safe_value_names = {"APP_ENV", "ENV", "ENVIRONMENT", "LOG_LEVEL", "NODE_ENV", "PORT"}
         results = []
         for item in value:
             if not isinstance(item, str) or "=" not in item:
                 continue
             name, raw_value = item.split("=", 1)
-            expose_value = name in safe_value_names
+            secret = any(part in name.upper() for part in SECRET_ENV_NAME_PARTS)
+            expose_value = not secret and name in SAFE_ENV_VALUE_NAMES
             results.append(
                 {
                     "name": name,
                     "value": raw_value if expose_value else None,
                     "value_redacted": not expose_value,
-                    "secret": any(
-                        part in name.upper() for part in ("SECRET", "TOKEN", "PASSWORD", "KEY")
-                    ),
+                    "secret": secret,
                 }
             )
         return results

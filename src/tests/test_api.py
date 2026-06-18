@@ -73,6 +73,10 @@ CONTAINER_TOOL_CALLS: tuple[ToolCall, ...] = (
         {"project_name": "dockerpage"},
     ),
     (
+        "inspect_project_runtime",
+        {"project_name": "dockerpage"},
+    ),
+    (
         "inspect_containers_health",
         {"project_name": "dockerpage"},
     ),
@@ -313,6 +317,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
             {
                 "inspect_containers_health",
                 "inspect_project_compose_state",
+                "inspect_project_runtime",
                 "inspect_vps_containers",
                 "inspect_vps_volumes",
                 "inspect_container_detail",
@@ -353,6 +358,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "explain_project_source",
                 "inspect_containers_health",
                 "inspect_project_compose_state",
+                "inspect_project_runtime",
                 "inspect_vps_containers",
                 "inspect_vps_volumes",
                 "inspect_container_detail",
@@ -483,6 +489,7 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert any(item["tool_name"] == "inspect_vps_containers" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_vps_volumes" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_project_compose_state" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_project_runtime" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_containers_health" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_container_detail" for item in payload["tools"])
     assert any(item["tool_name"] == "stat_container_path" for item in payload["tools"])
@@ -655,7 +662,7 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
                 False,
             ),
         )
-    if tool_name == "inspect_project_compose_state":
+    if tool_name in {"inspect_project_compose_state", "inspect_project_runtime"}:
         mocker.patch(
             "tools.container_inspection.inspection_tools_service.inspect_vps_containers",
             return_value=[
@@ -692,6 +699,58 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
                     triage_notes=[],
                 )
             ],
+        )
+    if tool_name == "inspect_project_runtime":
+        mocker.patch(
+            "tools.container_inspection.inspection_tools_service.inspect_container_detail",
+            return_value=ContainerDetail(
+                health=ContainerHealth(
+                    container_id="abc123def456",
+                    container_name="app-container",
+                    image="portfolio/backend:2026-05-16",
+                    docker_status="running",
+                    health_status="healthy",
+                    running=True,
+                    restarting=False,
+                    paused=False,
+                    dead=False,
+                    exit_code=0,
+                    error="",
+                    restart_count=0,
+                    started_at=None,
+                    finished_at=None,
+                ),
+                created_at=None,
+                env_var_names=["DATABASE_HOST", "DATABASE_PASSWORD"],
+                env_vars=[
+                    ContainerDetailEnvVar(
+                        name="DATABASE_HOST",
+                        value="db",
+                        value_redacted=False,
+                        secret=False,
+                    ),
+                    ContainerDetailEnvVar(
+                        name="DATABASE_PASSWORD",
+                        value=None,
+                        value_redacted=True,
+                        secret=True,
+                    ),
+                ],
+                label_keys=[],
+                compose_labels={},
+                restart_policy=ContainerRestartPolicy(
+                    name="unless-stopped",
+                    maximum_retry_count=0,
+                ),
+                command=[],
+                entrypoint=[],
+                working_dir=None,
+                user=None,
+                ports=[],
+                mounts=[],
+                networks=[],
+                health_log=[],
+            ),
         )
 
     request_data = {
@@ -3038,6 +3097,218 @@ async def test_inspect_project_compose_state_api_requires_expected_state(
     assert result["isError"] is True
     assert payload["action"] == "inspect_project_compose_state"
     assert payload["error_code"] == "compose_expected_state_unavailable"
+
+
+async def test_inspect_project_runtime_api_returns_sanitized_runtime(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify project runtime inspection returns sanitized env and DB shape."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+    mocker.patch(
+        "tools.container_inspection.inspection_tools_service.inspect_vps_containers",
+        return_value=[
+            VpsContainerInventory(
+                container_id="abc123def4567890",
+                short_container_id="abc123def456",
+                container_name="app-container",
+                image="portfolio/backend:2026-05-17",
+                command=[],
+                command_preview="",
+                created_at="2026-05-17T10:00:00Z",
+                docker_status="running",
+                state="running",
+                health_status="healthy",
+                running=True,
+                restarting=False,
+                paused=False,
+                dead=False,
+                exit_code=0,
+                error="",
+                restart_count=0,
+                started_at="2026-05-17T10:01:00Z",
+                finished_at=None,
+                compose_labels={
+                    "com.docker.compose.project": "dockerpage",
+                    "com.docker.compose.service": "backend",
+                },
+                restart_policy=ContainerRestartPolicy(
+                    name="unless-stopped",
+                    maximum_retry_count=0,
+                ),
+                ports=[],
+                network_names=["dockerpage_default"],
+                triage_notes=[],
+                env_var_names=[
+                    "DATABASE_HOST",
+                    "DATABASE_PORT",
+                    "DATABASE_NAME",
+                    "DATABASE_USER",
+                    "DATABASE_PASSWORD",
+                    "NODE_ENV",
+                    "CUSTOM_VALUE",
+                ],
+                mounts=[],
+            )
+        ],
+    )
+    mocker.patch(
+        "tools.container_inspection.inspection_tools_service.inspect_container_detail",
+        return_value=ContainerDetail(
+            health=ContainerHealth(
+                container_id="abc123def4567890",
+                container_name="app-container",
+                image="portfolio/backend:2026-05-17",
+                docker_status="running",
+                health_status="healthy",
+                running=True,
+                restarting=False,
+                paused=False,
+                dead=False,
+                exit_code=0,
+                error="",
+                restart_count=0,
+                started_at="2026-05-17T10:01:00Z",
+                finished_at=None,
+            ),
+            created_at="2026-05-17T10:00:00Z",
+            env_var_names=[
+                "DATABASE_HOST",
+                "DATABASE_PORT",
+                "DATABASE_NAME",
+                "DATABASE_USER",
+                "DATABASE_PASSWORD",
+                "NODE_ENV",
+                "CUSTOM_VALUE",
+            ],
+            env_vars=[
+                ContainerDetailEnvVar(
+                    name="DATABASE_HOST",
+                    value="db",
+                    value_redacted=False,
+                    secret=False,
+                ),
+                ContainerDetailEnvVar(
+                    name="DATABASE_PORT",
+                    value="5432",
+                    value_redacted=False,
+                    secret=False,
+                ),
+                ContainerDetailEnvVar(
+                    name="DATABASE_NAME",
+                    value="app",
+                    value_redacted=False,
+                    secret=False,
+                ),
+                ContainerDetailEnvVar(
+                    name="DATABASE_USER",
+                    value="app_user",
+                    value_redacted=False,
+                    secret=False,
+                ),
+                ContainerDetailEnvVar(
+                    name="DATABASE_PASSWORD",
+                    value=None,
+                    value_redacted=True,
+                    secret=True,
+                ),
+                ContainerDetailEnvVar(
+                    name="NODE_ENV",
+                    value="production",
+                    value_redacted=False,
+                    secret=False,
+                ),
+                ContainerDetailEnvVar(
+                    name="CUSTOM_VALUE",
+                    value=None,
+                    value_redacted=True,
+                    secret=False,
+                ),
+            ],
+            label_keys=[],
+            compose_labels={},
+            restart_policy=ContainerRestartPolicy(
+                name="unless-stopped",
+                maximum_retry_count=0,
+            ),
+            command=[],
+            entrypoint=[],
+            working_dir=None,
+            user=None,
+            ports=[],
+            mounts=[],
+            networks=[],
+            health_log=[],
+        ),
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-project-runtime",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_project_runtime",
+                "arguments": {"project_name": "dockerpage"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_project_runtime"
+    assert payload["compose_project"] == "dockerpage"
+    assert payload["containers"][0]["database"] == {
+        "host": "db",
+        "port": "5432",
+        "name": "app",
+        "user": "app_user",
+        "missing_keys": [],
+    }
+    assert payload["containers"][0]["secret_env_names"] == ["DATABASE_PASSWORD"]
+    assert payload["containers"][0]["selected_env"] == [
+        {
+            "name": "DATABASE_HOST",
+            "value": "db",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {
+            "name": "DATABASE_NAME",
+            "value": "app",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {
+            "name": "DATABASE_PORT",
+            "value": "5432",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {
+            "name": "DATABASE_USER",
+            "value": "app_user",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {
+            "name": "NODE_ENV",
+            "value": "production",
+            "value_redacted": False,
+            "secret": False,
+        },
+    ]
+    assert "hidden" not in json.dumps(payload)
 
 
 @pytest.mark.parametrize(
