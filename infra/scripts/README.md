@@ -113,7 +113,8 @@ Build behavior:
 - builds only prod-style tagged images:
   `prod-mcp-log-server:<TAG>`, `prod-mcp-docker-socket-app:<TAG>`, and
   `prod-mcp-fail2ban-socket-app:<TAG>`
-- refuses to build with uncommitted changes unless `EMERGENCY=true`
+- refuses to build with uncommitted changes unless `EMERGENCY=true` or
+  `--emergency` is passed
 - supports `NO_CACHE=true` when a full rebuild is required
 - records the last built tag under the script state directory
 - prunes older local images, keeping only the built tag
@@ -137,6 +138,12 @@ For non-interactive automation, pass approval explicitly:
 
 ```bash
 AUTO_APPROVE=true TAG=v1.2.3 infra/scripts/release/release.sh
+```
+
+For an emergency release from a dirty working tree, pass the emergency flag:
+
+```bash
+TAG=v1.2.3 infra/scripts/release/release.sh --emergency
 ```
 
 Release behavior:
@@ -179,8 +186,9 @@ Deploy behavior:
 - applies committed migrations with `uv run migrate` unless `SKIP_MIGRATE=true`
   using the production image's `UV_NO_DEV`, `UV_FROZEN`, and `UV_NO_SYNC`
   settings so the already-built no-dev environment is reused
-- starts the socket app services and MCP app service with `--force-recreate` so
-  the selected images are rerun
+- starts the socket app services and MCP app service with `--force-recreate`
+  and `--remove-orphans` so the selected images are rerun and removed Compose
+  services are cleaned up
 - waits for Docker to mark the app service healthy through the unauthenticated
   `/healthz` liveness endpoint
 - records the deployed tag under `/var/lib/mcp-log-server/prod/current_tag`

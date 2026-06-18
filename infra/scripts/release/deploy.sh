@@ -213,11 +213,11 @@ fi
 
 # Step 8: start or update the Docker-backed application containers with the selected tag.
 deploy_step "🚀" 8 9 "Start application containers"
-docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate docker-socket-app
+docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans docker-socket-app
 printf "✅ Docker socket app container recreated\n"
-docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate fail2ban-socket-app
+docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans fail2ban-socket-app
 printf "✅ Fail2ban socket app container recreated\n"
-docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate app
+docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans app
 printf "✅ Application container recreated\n"
 
 # Step 9: wait for Docker to confirm the app accepts unauthenticated liveness probes.

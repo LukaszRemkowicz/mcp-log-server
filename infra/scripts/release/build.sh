@@ -9,6 +9,7 @@
 # Typical usage:
 #   TAG=v0.1.0 doppler run -- infra/scripts/release/build.sh
 #   NO_CACHE=true TAG=v0.1.0 doppler run -- infra/scripts/release/build.sh
+#   TAG=v0.1.0 doppler run -- infra/scripts/release/build.sh --emergency
 #
 # What this script does:
 #   - validates the release environment and SemVer-like tag
@@ -30,6 +31,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../utils.sh
 source "$SCRIPT_DIR/../utils.sh"
+
+while (($#)); do
+    case "$1" in
+        --emergency)
+            EMERGENCY=true
+            ;;
+        *)
+            log_error "Unknown build argument: $1"
+            exit 1
+            ;;
+    esac
+    shift
+done
 
 PROJECT_DIR="$(get_project_dir)"
 ENVIRONMENT="$(normalize_environment "${ENVIRONMENT:-prod}")"

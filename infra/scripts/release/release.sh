@@ -8,6 +8,7 @@
 # Typical usage:
 #   TAG=v0.1.0 doppler run -- infra/scripts/release/release.sh
 #   AUTO_APPROVE=true TAG=v0.1.0 doppler run -- infra/scripts/release/release.sh
+#   TAG=v0.1.0 doppler run -- infra/scripts/release/release.sh --emergency
 #
 # What this script does:
 #   - validates the release environment and tag
@@ -25,13 +26,26 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../utils.sh
 source "$SCRIPT_DIR/../utils.sh"
 
+while (($#)); do
+    case "$1" in
+        --emergency)
+            EMERGENCY=true
+            ;;
+        *)
+            log_error "Unknown release argument: $1"
+            exit 1
+            ;;
+    esac
+    shift
+done
+
 PROJECT_DIR="$(get_project_dir)"
 ENVIRONMENT="$(normalize_environment "${ENVIRONMENT:-prod}")"
 validate_release_environment "$ENVIRONMENT"
 
 TAG="${TAG:-$(git -C "$PROJECT_DIR" describe --tags --exact-match 2>/dev/null || true)}"
 validate_tag "$TAG"
-export ENVIRONMENT TAG
+export ENVIRONMENT TAG EMERGENCY
 
 log_header "Releasing ${ENVIRONMENT}-mcp-log-server:${TAG}"
 log_info "Environment: $ENVIRONMENT"

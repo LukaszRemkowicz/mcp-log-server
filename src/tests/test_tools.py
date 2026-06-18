@@ -229,6 +229,7 @@ def test_application_registers_expected_mcp_components(
         assert since_argument["default"] == "24h"
         app_collect_tool = next(tool for tool in tools if tool.name == "collect_logs")
         assert app_collect_tool.description == COLLECT_LOGS_TOOL_DESCRIPTION
+        assert "workspace" not in app_collect_tool.parameters["properties"]
         app_incident_bundle_tool = next(
             tool for tool in tools if tool.name == "build_incident_bundle"
         )

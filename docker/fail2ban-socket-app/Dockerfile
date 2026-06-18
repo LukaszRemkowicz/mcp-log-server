@@ -24,6 +24,4 @@ RUN apt-get update \
     && mkdir -p /run/fail2ban-socket-app \
     && chown -R app:app /app /run/fail2ban-socket-app
 
-USER app
-
 CMD ["uv", "run", "python", "-m", "fail2ban_socket_app.main"]

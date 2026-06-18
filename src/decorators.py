@@ -135,7 +135,11 @@ def workflow_discoverable_tool(
                 default_overrides=argument_default_overrides,
             ),
         }
-        exclude_args = ["caller"] if "caller" in signature(func).parameters else None
+        exclude_args = [
+            parameter_name
+            for parameter_name in ("caller", "workspace")
+            if parameter_name in signature(func).parameters
+        ] or None
         return mcp.tool(
             auth=require_scopes(required_scope),
             description=mcp_description,
