@@ -829,6 +829,7 @@ async def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     assert project_payload["retry_tips"] == [
         "Retry with only source_keys returned by the manifest-backed project configuration."
     ]
+    assert project_payload["provenance_diagnostics"] == []
     assert project_payload["snapshot_dir"] == str(
         file_backed_project_context.logs_dir / "workflow" / "landingpage" / "latest"
     )

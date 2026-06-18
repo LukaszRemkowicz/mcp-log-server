@@ -17,7 +17,10 @@ COLLECT_LOGS_TOOL_DESCRIPTION = (
     "Use since/until to collect a narrower incident window. "
     "After session collection, use session_id plus project_name with follow-up tools. "
     "After workflow collection, use project_name for the newest workflow artifact, "
-    "or add archive_name when you need one archived workflow artifact."
+    "or add archive_name when you need one archived workflow artifact. "
+    "When a configured source is unavailable, read provenance_diagnostics and "
+    "call the recommended project-scoped provenance tools before interpreting "
+    "the source as healthy, idle, or empty."
 )
 
 CLOSE_AGENT_SESSION_TOOL_DESCRIPTION = (
@@ -266,6 +269,10 @@ COLLECT_LOGS_NEXT_STEP_TIPS = [
     ),
     "Call list_log_snapshot_files to inspect which persisted source files are available.",
     "Call grep_log_snapshot or group_errors before opening large files in full.",
+    (
+        "If provenance_diagnostics is present, call the recommended tools to explain "
+        "unavailable configured sources before writing the final report."
+    ),
 ]
 
 LIST_SNAPSHOT_NEXT_STEP_TIPS = [

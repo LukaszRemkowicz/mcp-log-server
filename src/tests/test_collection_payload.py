@@ -235,6 +235,24 @@ async def test_build_collect_logs_persists_collection_diagnostics_for_failed_sou
     assert payload["requested_source_keys"] == ["app_file"]
     assert payload["resolved_source_keys"] == []
     assert sources_by_key["app_file"].status == "unavailable"
+    assert [item.model_dump(mode="json") for item in payload.provenance_diagnostics] == [
+        {
+            "source_key": "app_file",
+            "source_type": "file",
+            "status": "unavailable",
+            "summary": (
+                "Configured source was unavailable during collection; use "
+                "project-scoped provenance tools before interpreting this as "
+                "healthy or empty logs."
+            ),
+            "recommended_tools": [
+                "explain_project_source",
+                "stat_project_path",
+                "list_project_directory",
+                "inspect_project_scheduled_jobs",
+            ],
+        }
+    ]
     diagnostics = sources_by_key["__collection_diagnostics"]
     assert diagnostics.status == "collected"
     assert diagnostics.output_file == "workflow/landingpage/latest/collection_diagnostics.json"
@@ -244,6 +262,12 @@ async def test_build_collect_logs_persists_collection_diagnostics_for_failed_sou
     assert diagnostics_payload["failed_source_count"] == 1
     assert diagnostics_payload["failed_sources"][0]["source_key"] == "app_file"
     assert diagnostics_payload["failed_sources"][0]["status"] == "unavailable"
+    assert diagnostics_payload["failed_sources"][0]["provenance"]["recommended_tools"] == [
+        "explain_project_source",
+        "stat_project_path",
+        "list_project_directory",
+        "inspect_project_scheduled_jobs",
+    ]
     assert "File source not found" in diagnostics_payload["failed_sources"][0]["error"]
 
 

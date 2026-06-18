@@ -134,6 +134,11 @@ def test_application_registers_expected_mcp_components(
         assert bootstrap_text["workflow_name"] == "analyze_daily_log_bundle"
         assert isinstance(bootstrap_text["prompt"], str)
         assert bootstrap_text["prompt"]
+        assert "When collect_logs reports unavailable sources" in bootstrap_text["prompt"]
+        assert "explain_project_source" in bootstrap_text["prompt"]
+        assert "inspect_project_scheduled_jobs" in bootstrap_text["prompt"]
+        assert "inspect_project_runtime" in bootstrap_text["prompt"]
+        assert "inspect_project_deployment" in bootstrap_text["prompt"]
         assert any(
             item["skill_name"] == "severity_guide" for item in bootstrap_text["mandatory_skills"]
         )

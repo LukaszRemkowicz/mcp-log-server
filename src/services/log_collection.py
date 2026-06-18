@@ -27,7 +27,12 @@ from database.services.collect_logs import CollectLogsService as CollectLogsDBSe
 from database.services.collect_logs import CollectLogsSourceService as CollectLogsSourceDBService
 from exception import InvalidTimeFilterError, MissingSessionIdError
 from manifests.models import Manifest, SourceDefinition
-from tools.models import CollectedSourcePayload, ProjectCollectLogsPayload, SnapshotWorkspace
+from tools.models import (
+    CollectedSourcePayload,
+    ProjectCollectLogsPayload,
+    SnapshotWorkspace,
+    SourceProvenanceDiagnosticPayload,
+)
 from tools.utils import parse_snapshot_retention
 from utils.log_snapshots import (
     COLLECTION_DIAGNOSTICS_DESCRIPTION,
@@ -505,6 +510,10 @@ class LogCollectionService:
                     "status": result.status,
                     "error": result.error,
                     "retry_tips": result.retry_tips,
+                    "provenance": LogCollectionService._build_source_provenance_diagnostic(
+                        source_key=result.source_key,
+                        source_type=result.source_type,
+                    ).model_dump(mode="json"),
                 }
                 for result in failed_results
             ],
@@ -550,6 +559,44 @@ class LogCollectionService:
             )
 
         return warnings, retry_tips
+
+    @staticmethod
+    def _build_source_provenance_diagnostic(
+        *,
+        source_key: str,
+        source_type: Literal["docker", "file"],
+    ) -> SourceProvenanceDiagnosticPayload:
+        """Return source-type-specific provenance follow-up guidance."""
+
+        recommended_tools = ["explain_project_source"]
+        if source_type == "file":
+            recommended_tools.extend(
+                [
+                    "stat_project_path",
+                    "list_project_directory",
+                    "inspect_project_scheduled_jobs",
+                ]
+            )
+        else:
+            recommended_tools.extend(
+                [
+                    "inspect_containers_health",
+                    "inspect_project_compose_state",
+                    "inspect_project_runtime",
+                    "inspect_project_deployment",
+                ]
+            )
+        return SourceProvenanceDiagnosticPayload(
+            source_key=source_key,
+            source_type=source_type,
+            status="unavailable",
+            summary=(
+                "Configured source was unavailable during collection; use "
+                "project-scoped provenance tools before interpreting this as "
+                "healthy or empty logs."
+            ),
+            recommended_tools=recommended_tools,
+        )
 
     async def save_logs_to_db(
         self,
@@ -1281,6 +1328,14 @@ class LogCollectionService:
             retry_tips=collect_logs.retry_tips,
             unknown_requested_source_keys=collect_logs.unknown_requested_source_keys,
             resolved_source_keys=collect_logs.resolved_source_keys,
+            provenance_diagnostics=[
+                LogCollectionService._build_source_provenance_diagnostic(
+                    source_key=source.source_key,
+                    source_type=source.source_type,
+                )
+                for source in collect_logs.sources
+                if source.status == "unavailable"
+            ],
             collected_at=collect_logs.collected_at.isoformat(),
             sources=[
                 CollectedSourcePayload(**source.model_dump(include=source_payload_fields))

@@ -59,6 +59,18 @@ class CollectedSourcePayload(BaseModel):
         return getattr(self, key)
 
 
+class SourceProvenanceDiagnosticPayload(BaseModel):
+    """Describe provenance follow-up guidance for one unavailable log source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_key: str
+    source_type: Literal["docker", "file"]
+    status: Literal["unavailable"]
+    summary: str
+    recommended_tools: list[str]
+
+
 class LogSnapshotFilePayload(BaseModel):
     """Describe one saved file entry inside a persisted log snapshot.
 
@@ -128,6 +140,7 @@ class ProjectCollectLogsPayload(BaseModel):
     retry_tips: list[str]
     unknown_requested_source_keys: list[str]
     resolved_source_keys: list[str]
+    provenance_diagnostics: list[SourceProvenanceDiagnosticPayload]
     collected_at: str
     sources: list[CollectedSourcePayload]
 

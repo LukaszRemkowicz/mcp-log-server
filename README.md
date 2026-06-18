@@ -284,6 +284,14 @@ running image repositories/tags/digests, lifecycle timestamps, and mismatch
 warnings without pulling, building, deploying, restarting, or exposing registry
 credentials.
 
+When `collect_logs` cannot collect a configured source, the project payload
+includes `provenance_diagnostics` and the persisted
+`collection_diagnostics.json` sidecar includes matching provenance hints. These
+hints tell agents which read-only project tools to call next, such as
+`explain_project_source`, scheduler inspection, file inspection, runtime
+inspection, or deployment inspection, without making those tools prerequisites
+for normal collection.
+
 In production, file source paths must be written as paths visible inside the
 MCP container. `docker-compose.prod.yml` mounts host `/var/log` as
 `/host/var/log` and host `/etc/nginx/logs` as `/host/etc/nginx/logs`, so a host
