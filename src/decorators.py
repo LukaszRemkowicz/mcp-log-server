@@ -11,6 +11,7 @@ from typing import Any, ParamSpec, TypeVar
 
 from fastmcp.server.auth import require_scopes
 from fastmcp.server.dependencies import get_http_request
+from mcp.types import ToolAnnotations
 
 from app import mcp
 from auth.mcp_caller_context import get_request_mcp_caller
@@ -122,6 +123,7 @@ def workflow_discoverable_tool(
     *,
     argument_default_overrides: dict[str, Any] | None = None,
     mcp_description: str | None = None,
+    annotations: ToolAnnotations | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Register one MCP tool and expose it in workflow bootstrap metadata."""
 
@@ -144,6 +146,7 @@ def workflow_discoverable_tool(
             auth=require_scopes(required_scope),
             description=mcp_description,
             exclude_args=exclude_args,
+            annotations=annotations,
         )(func)
 
     return decorator

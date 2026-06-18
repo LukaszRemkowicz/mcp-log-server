@@ -10,10 +10,9 @@ Doppler.
 Reference variables are listed in [.env.example](../../.env.example), but the
 runtime path should be Doppler rather than `env_file`.
 
-Most settings have development defaults in code. The main exception is
-`DOCKER_SOCKET_APP_SOCKET_PATH`, because the MCP app must know where to connect
-for Docker-backed reads. Docker Compose injects this value for normal local and
-production runs.
+Most settings have development defaults in code. The Docker and fail2ban socket
+app paths default to the same Unix socket paths that Docker Compose uses for
+normal local and production runs.
 
 Production startup rejects known local placeholder secrets.
 
@@ -32,7 +31,6 @@ Production-required secrets/config:
 - `DATABASE_NAME`
 - `DATABASE_USER`
 - `DATABASE_PASSWORD`
-- `DOCKER_SOCKET_APP_SOCKET_PATH`
 - `TAG`
 
 Production-recommended runtime config:
@@ -45,8 +43,8 @@ Local development defaults:
 - most of the above have defaults in [src/settings.py](../../src/settings.py)
 - local development through Docker Compose can run without manually setting
   every variable because Compose injects the container-specific values
-- direct host execution must set `DOCKER_SOCKET_APP_SOCKET_PATH` if code imports
-  settings and Docker-backed tools are available
+- direct host execution can import settings without manually setting the socket
+  app paths, because the defaults match the Compose socket paths
 - production should not rely on the built-in JWT defaults, especially
   `JWT_SHARED_SECRET=change-me-local-dev-secret`
 
@@ -96,6 +94,15 @@ are reviewed and approved.
   Path where the fail2ban socket app expects the host fail2ban Unix socket
   inside its own container.
   Default in Compose: `/var/run/fail2ban/fail2ban.sock`
+
+- `FAIL2BAN_JAILS`
+  Comma-separated fail2ban jail names that `inspect_live_fail2ban_activity`
+  should inspect.
+  Default: `portfolio-nginx-probes,portfolio-traefik-probes,portfolio-keycloak-token`
+
+  The host fail2ban configuration must define all configured jails. If
+  `portfolio-keycloak-token` is not installed or fail2ban has not been reloaded,
+  live fail2ban diagnostics correctly report a jail-status error.
 
 Live `inspect_live_fail2ban_activity` diagnostics call fixed operations through
 the fail2ban socket app. The MCP app does not mount the host fail2ban socket or
