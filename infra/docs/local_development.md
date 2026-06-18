@@ -88,19 +88,22 @@ are reviewed and approved.
   PostgreSQL application password.
   Default: `mcp-log-server-local-password`
 
-- `FAIL2BAN_SOCKET_PATH`
-  Path where the MCP app expects the fail2ban Unix socket inside the app
-  container.
-  Default: `/var/run/fail2ban/fail2ban.sock`
+- `FAIL2BAN_SOCKET_APP_SOCKET_PATH`
+  Path where the MCP app connects to the internal fail2ban socket app.
+  Default in Compose: `/run/fail2ban-socket-app/gateway.sock`
 
-Live `inspect_live_fail2ban_activity` diagnostics call
-`fail2ban-client -s "$FAIL2BAN_SOCKET_PATH" ...`. This is separate from
-collected fail2ban logs; the live command only works when the host socket is
-intentionally mounted into the MCP container.
+- `FAIL2BAN_SOCKET_PATH`
+  Path where the fail2ban socket app expects the host fail2ban Unix socket
+  inside its own container.
+  Default in Compose: `/var/run/fail2ban/fail2ban.sock`
+
+Live `inspect_live_fail2ban_activity` diagnostics call fixed operations through
+the fail2ban socket app. The MCP app does not mount the host fail2ban socket or
+run `fail2ban-client` directly.
 
 - `FAIL2BAN_SOCKET_DIR_HOST`
-  Host path to the fail2ban Unix socket directory when using the optional fail2ban Compose
-  override.
+  Host path to the fail2ban Unix socket directory mounted into the fail2ban
+  socket app container.
   Default: `/var/run/fail2ban`
 
 The Compose files run PostgreSQL through the official `postgres:18` image.

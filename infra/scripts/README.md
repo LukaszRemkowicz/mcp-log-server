@@ -110,7 +110,9 @@ working tree.
 
 Build behavior:
 
-- builds only prod-style tagged images: `prod-mcp-log-server:<TAG>`
+- builds only prod-style tagged images:
+  `prod-mcp-log-server:<TAG>`, `prod-mcp-docker-socket-app:<TAG>`, and
+  `prod-mcp-fail2ban-socket-app:<TAG>`
 - refuses to build with uncommitted changes unless `EMERGENCY=true`
 - supports `NO_CACHE=true` when a full rebuild is required
 - records the last built tag under the script state directory
@@ -164,11 +166,12 @@ AUTO_APPROVE=true TAG=v1.2.3 infra/scripts/release/deploy.sh
 
 Deploy behavior:
 
-- verifies the local image `prod-mcp-log-server:<TAG>` exists
+- verifies the local MCP app, Docker socket app, and fail2ban socket app images
+  exist for the selected tag
 - exposes the MCP HTTP endpoint through the existing Traefik stack at
   `https://mcp.${SITE_DOMAIN}/mcp`
-- includes `docker-compose.fail2ban.yml` by default so the internal
-  `fail2ban-proxy` sidecar can talk to the host fail2ban socket on the VPS
+- starts the internal Docker and fail2ban Unix-socket app containers before the
+  MCP app, so MCP does not mount privileged host sockets directly
 - asks for confirmation before mutating the target stack unless
   `AUTO_APPROVE=true`
 - creates a database backup unless `SKIP_BACKUP=true`
@@ -176,7 +179,8 @@ Deploy behavior:
 - applies committed migrations with `uv run migrate` unless `SKIP_MIGRATE=true`
   using the production image's `UV_NO_DEV`, `UV_FROZEN`, and `UV_NO_SYNC`
   settings so the already-built no-dev environment is reused
-- starts the app service with `--force-recreate` so the selected image is rerun
+- starts the socket app services and MCP app service with `--force-recreate` so
+  the selected images are rerun
 - waits for Docker to mark the app service healthy through the unauthenticated
   `/healthz` liveness endpoint
 - records the deployed tag under `/var/lib/mcp-log-server/prod/current_tag`
@@ -196,13 +200,6 @@ Dry run:
 
 ```bash
 TAG=v1.2.3 DRY_RUN=true infra/scripts/release/deploy.sh
-```
-
-If the VPS should deploy without live fail2ban socket access, disable the
-override explicitly:
-
-```bash
-ENABLE_FAIL2BAN_SOCKET=false TAG=v1.2.3 infra/scripts/release/deploy.sh
 ```
 
 ## Production logs
