@@ -262,6 +262,17 @@ Manifests and logs are intentionally separate:
 
   Without that header FastMCP can reject the request as not acceptable.
 
+- `DOCKER_SOCKET_APP_SOCKET_PATH`
+  Unix socket file used by the MCP app for Docker-backed reads.
+  Required when the MCP settings module is loaded.
+
+  Compose sets this to:
+
+  - `/run/docker-socket-app/gateway.sock`
+
+  The same value is passed to `docker-socket-app`, which creates the socket
+  file. The MCP app connects to it.
+
 Run the service through Docker Compose with Doppler:
 
 ```bash
@@ -276,10 +287,23 @@ examples.
 The local Compose stack also starts a `db` service and stores its data in the
 named `postgres-data` volume.
 
-The local `app` service mounts `/var/run/docker.sock` so MCP collection and
-inspection tools can read approved Docker metadata and logs. The app process
-still runs as the non-root `app` user (`uid=999`); Compose only adds the
-container process to the Docker socket's group through `DOCKER_SOCKET_GID`.
+Docker-backed MCP tools do not mount `/var/run/docker.sock` into the MCP app.
+The Compose stack starts a separate `docker-socket-app` service for Docker
+reads. The MCP app connects to that service through the Unix socket path in
+`DOCKER_SOCKET_APP_SOCKET_PATH`.
+
+```text
+app -> /run/docker-socket-app/gateway.sock -> docker-socket-app -> /var/run/docker.sock
+```
+
+The `docker-socket-app-run` named volume is mounted into both containers at
+`/run/docker-socket-app`. The `docker-socket-app` process creates the socket
+file there; the MCP app only connects to it. The Docker socket app accepts a
+fixed set of read-only Docker operations and has no HTTP or TCP port.
+
+Only the `docker-socket-app` service mounts `/var/run/docker.sock`. On Linux,
+Compose adds the `docker-socket-app` container process to the Docker socket's
+group through `DOCKER_SOCKET_GID`.
 
 On Linux hosts where `/var/run/docker.sock` is not group-readable by group `0`,
 discover the socket group id with:

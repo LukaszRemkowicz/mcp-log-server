@@ -4,16 +4,18 @@ This document covers local setup, database runtime wiring, and migration
 commands for `mcp-log-server`.
 The root README keeps only the shortest quick-start path.
 
-
 Configuration is expected to come from environment variables injected by
 Doppler.
 
 Reference variables are listed in [.env.example](../../.env.example), but the
 runtime path should be Doppler rather than `env_file`.
 
-All settings currently have development defaults in code, so the server can
-start locally without explicitly setting every variable. Production startup
-rejects known local placeholder secrets.
+Most settings have development defaults in code. The main exception is
+`DOCKER_SOCKET_APP_SOCKET_PATH`, because the MCP app must know where to connect
+for Docker-backed reads. Docker Compose injects this value for normal local and
+production runs.
+
+Production startup rejects known local placeholder secrets.
 
 For real deployment, some values should still be treated as required.
 
@@ -30,6 +32,7 @@ Production-required secrets/config:
 - `DATABASE_NAME`
 - `DATABASE_USER`
 - `DATABASE_PASSWORD`
+- `DOCKER_SOCKET_APP_SOCKET_PATH`
 - `TAG`
 
 Production-recommended runtime config:
@@ -39,8 +42,11 @@ Production-recommended runtime config:
 
 Local development defaults:
 
-- all of the above have defaults in [src/settings.py](../../src/settings.py)
-- local development can run without explicitly setting every variable
+- most of the above have defaults in [src/settings.py](../../src/settings.py)
+- local development through Docker Compose can run without manually setting
+  every variable because Compose injects the container-specific values
+- direct host execution must set `DOCKER_SOCKET_APP_SOCKET_PATH` if code imports
+  settings and Docker-backed tools are available
 - production should not rely on the built-in JWT defaults, especially
   `JWT_SHARED_SECRET=change-me-local-dev-secret`
 

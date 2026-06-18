@@ -53,6 +53,7 @@ jobs:
         DATABASE_NAME=mcp_log_server_test
         DATABASE_USER=mcp_log_server
         DATABASE_PASSWORD=mcp-log-server-local-password
+        DOCKER_SOCKET_APP_SOCKET_PATH=/tmp/docker-socket-app-test.sock
 
   http-e2e:
     name: HTTP E2E
@@ -97,6 +98,7 @@ jobs:
           DATABASE_NAME: mcp_log_server_test
           DATABASE_USER: mcp_log_server
           DATABASE_PASSWORD: mcp-log-server-local-password
+          DOCKER_SOCKET_APP_SOCKET_PATH: /tmp/docker-socket-app-test.sock
         run: bash infra/scripts/run_http_e2e.sh
 
   docker-build:

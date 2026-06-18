@@ -46,15 +46,15 @@ from services.compose_state_service import (
     ComposeStateWarning,
     ExpectedComposeService,
 )
-from services.docker_service import (
+from services.inspection_tools_service import (
     MAX_CONTAINER_FILE_BYTES,
     MAX_VPS_CONTAINERS,
     MAX_VPS_VOLUMES,
     ContainerDetail,
     ContainerHealth,
     ContainerPathStat,
-    DockerService,
-    DockerServiceError,
+    InspectionToolsService,
+    InspectionToolsServiceError,
     VpsContainerInventory,
     VpsVolumeInventory,
 )
@@ -96,7 +96,7 @@ from tools.models import (
 
 logger: logging.Logger = get_logger("tools.container_inspection")
 manifest_service = ProjectManifestService()
-docker_service = DockerService()
+inspection_tools_service = InspectionToolsService()
 compose_state_service = ComposeStateService()
 
 
@@ -234,8 +234,8 @@ async def _prepare_container_inspection_context(
             settings=settings,
         )
 
-    normalized_path = docker_service.normalize_container_path_or_error(path)
-    if isinstance(normalized_path, DockerServiceError):
+    normalized_path = inspection_tools_service.normalize_container_path_or_error(path)
+    if isinstance(normalized_path, InspectionToolsServiceError):
         return build_container_inspection_error_result(
             action=action,
             message=normalized_path.message,
@@ -245,7 +245,7 @@ async def _prepare_container_inspection_context(
             settings=settings,
         )
 
-    if not docker_service.container_path_is_allowed(definition, normalized_path):
+    if not inspection_tools_service.container_path_is_allowed(definition, normalized_path):
         return build_container_inspection_error_result(
             action=action,
             message=(
@@ -282,11 +282,11 @@ async def _prepare_container_directory_context(
     if isinstance(source_context, ToolResult):
         return source_context
 
-    normalized_path = docker_service.resolve_container_directory_path_or_error(
+    normalized_path = inspection_tools_service.resolve_container_directory_path_or_error(
         source_context.definition,
         path,
     )
-    if isinstance(normalized_path, DockerServiceError):
+    if isinstance(normalized_path, InspectionToolsServiceError):
         return build_container_inspection_error_result(
             action=action,
             message=normalized_path.message,
@@ -296,7 +296,9 @@ async def _prepare_container_directory_context(
             settings=settings,
         )
 
-    if not docker_service.container_path_is_allowed(source_context.definition, normalized_path):
+    if not inspection_tools_service.container_path_is_allowed(
+        source_context.definition, normalized_path
+    ):
         return build_container_inspection_error_result(
             action=action,
             message=(
@@ -321,7 +323,7 @@ def create_container_payload(
 ) -> ContainerPathMetadataPayload:
     """Convert one Docker path stat result into the MCP path metadata payload.
 
-    `DockerService` returns infrastructure-focused `ContainerPathStat` objects.
+    `InspectionToolsService` returns infrastructure-focused `ContainerPathStat` objects.
     The MCP tool response uses `ContainerPathMetadataPayload`, so this adapter
     keeps that model conversion explicit at the tool boundary.
     """
@@ -367,7 +369,7 @@ def create_container_health_item_payload(
 
 
 def create_container_health_error_item_payload(
-    error: DockerServiceError,
+    error: InspectionToolsServiceError,
     *,
     source_key: str,
     container_name: str,
@@ -615,8 +617,8 @@ def create_project_compose_state_payload(
 async def inspect_vps_containers() -> ToolResult:
     """Return a bounded Docker ps-style inventory for visible VPS containers."""
 
-    containers = docker_service.inspect_vps_containers()
-    if isinstance(containers, DockerServiceError):
+    containers = inspection_tools_service.inspect_vps_containers()
+    if isinstance(containers, InspectionToolsServiceError):
         return build_container_inspection_error_result(
             action="inspect_vps_containers",
             message=containers.message,
@@ -655,12 +657,12 @@ async def inspect_vps_volumes(
 ) -> ToolResult:
     """Return a bounded Docker volume ls-style inventory for visible VPS volumes."""
 
-    volumes = docker_service.inspect_vps_volumes(
+    volumes = inspection_tools_service.inspect_vps_volumes(
         dangling_only=dangling_only,
         anonymous_only=anonymous_only,
         name_prefix=name_prefix,
     )
-    if isinstance(volumes, DockerServiceError):
+    if isinstance(volumes, InspectionToolsServiceError):
         return build_container_inspection_error_result(
             action="inspect_vps_volumes",
             message=volumes.message,
@@ -716,8 +718,8 @@ async def inspect_project_compose_state(
             settings=settings,
         )
 
-    containers = docker_service.inspect_vps_containers()
-    if isinstance(containers, DockerServiceError):
+    containers = inspection_tools_service.inspect_vps_containers()
+    if isinstance(containers, InspectionToolsServiceError):
         return build_container_inspection_error_result(
             action="inspect_project_compose_state",
             message=containers.message,
@@ -783,8 +785,8 @@ async def inspect_containers_health(
     docker_sources = [source for source in manifest.sources if source.source_type == "docker"]
     container_payloads: list[ContainerHealthPayload] = []
     for source in docker_sources:
-        health = docker_service.inspect_container_health(source.target)
-        if isinstance(health, DockerServiceError):
+        health = inspection_tools_service.inspect_container_health(source.target)
+        if isinstance(health, InspectionToolsServiceError):
             container_payloads.append(
                 create_container_health_error_item_payload(
                     health,
@@ -838,8 +840,8 @@ async def inspect_container_detail(
     if isinstance(context, ToolResult):
         return context
 
-    detail = docker_service.inspect_container_detail(context.definition.target)
-    if isinstance(detail, DockerServiceError):
+    detail = inspection_tools_service.inspect_container_detail(context.definition.target)
+    if isinstance(detail, InspectionToolsServiceError):
         return build_container_inspection_error_result(
             action="inspect_container_detail",
             message=detail.message,
@@ -889,11 +891,11 @@ async def stat_container_path(
     if isinstance(context, ToolResult):
         return context
 
-    stat_payload = docker_service.stat_container_path(
+    stat_payload = inspection_tools_service.stat_container_path(
         context.definition.target,
         context.normalized_path,
     )
-    if isinstance(stat_payload, DockerServiceError):
+    if isinstance(stat_payload, InspectionToolsServiceError):
         return build_container_inspection_error_result(
             action="stat_container_path",
             message=stat_payload.message,
@@ -965,11 +967,11 @@ async def read_container_file(
     if isinstance(context, ToolResult):
         return context
 
-    stat_payload = docker_service.stat_container_path(
+    stat_payload = inspection_tools_service.stat_container_path(
         context.definition.target,
         context.normalized_path,
     )
-    if isinstance(stat_payload, DockerServiceError):
+    if isinstance(stat_payload, InspectionToolsServiceError):
         return build_container_inspection_error_result(
             action="read_container_file",
             message=stat_payload.message,
@@ -979,12 +981,12 @@ async def read_container_file(
             settings=settings,
         )
 
-    read_result = docker_service.read_container_file(
+    read_result = inspection_tools_service.read_container_file(
         context.definition.target,
         context.normalized_path,
         max_bytes=max_bytes,
     )
-    if isinstance(read_result, DockerServiceError):
+    if isinstance(read_result, InspectionToolsServiceError):
         return build_container_inspection_error_result(
             action="read_container_file",
             message=read_result.message,
@@ -1058,11 +1060,11 @@ async def list_container_directory(
     if isinstance(context, ToolResult):
         return context
 
-    list_result = docker_service.list_container_directory(
+    list_result = inspection_tools_service.list_container_directory(
         context.definition.target,
         context.normalized_path,
     )
-    if isinstance(list_result, DockerServiceError):
+    if isinstance(list_result, InspectionToolsServiceError):
         return build_container_inspection_error_result(
             action="list_container_directory",
             message=list_result.message,
