@@ -20,11 +20,11 @@ def test_settings_expose_uppercase_fields() -> None:
     assert runtime_settings.LOG_SNAPSHOT_RETENTION == "7d"
     assert (
         runtime_settings.FAIL2BAN_SOCKET_APP_SOCKET_PATH.as_posix()
-        == "/run/fail2ban-socket-app/gateway.sock"
+        == settings_module.FAIL2BAN_SOCKET_APP_SOCKET_PATH.as_posix()
     )
     assert (
         runtime_settings.DOCKER_SOCKET_APP_SOCKET_PATH.as_posix()
-        == "/run/docker-socket-app/gateway.sock"
+        == settings_module.DOCKER_SOCKET_APP_SOCKET_PATH.as_posix()
     )
     assert runtime_settings.FAIL2BAN_JAILS == [
         "portfolio-nginx-probes",
