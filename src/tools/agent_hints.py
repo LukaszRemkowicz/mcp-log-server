@@ -102,6 +102,15 @@ READ_PROJECT_MANIFEST_TOOL_DESCRIPTION = (
     "flags without inspecting live runtime state."
 )
 
+EXPLAIN_PROJECT_SOURCE_TOOL_DESCRIPTION = (
+    "Explain one authorized project source contract and its configured producer "
+    "provenance. Returns the manifest source definition, required/optional "
+    "classification, parser and normalization profiles, optional producer type, "
+    "scheduler patterns, related cron/systemd evidence when configured, and "
+    "deterministic next-step tips. This tool does not infer producer facts from "
+    "LLM text and does not require every source to have producer metadata."
+)
+
 INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION = (
     "Inspect Docker runtime status for all docker-backed sources in one project. "
     "Returns a compact per-source overview with container status, healthcheck "

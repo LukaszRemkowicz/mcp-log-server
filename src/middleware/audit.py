@@ -68,10 +68,12 @@ WORKSPACE_AGNOSTIC_TOOLS = frozenset(
     {
         "get_mcp_health_check",
         "get_mcp_service_status",
+        "explain_project_source",
         "inspect_container_detail",
         "inspect_containers_health",
         "inspect_live_fail2ban_activity",
         "inspect_project_compose_state",
+        "inspect_project_scheduled_jobs",
         "inspect_tls_certificate",
         "inspect_vps_containers",
         "inspect_vps_volumes",

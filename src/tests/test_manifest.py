@@ -83,6 +83,25 @@ def test_source_definition_does_not_expose_compose_selector_fields() -> None:
     assert "compose_service" not in SourceDefinition.model_fields
 
 
+def test_source_definition_accepts_optional_producer_metadata() -> None:
+    """Verify manifests can describe source producer provenance without requiring it."""
+
+    source = SourceDefinition(
+        source_key="cron_sitemap_analysis",
+        source_type="file",
+        target="/var/log/devops/cron/agent-monitoring/sitemap-analysis.log",
+        description="Sitemap analysis cron output.",
+        parser_type="plain_text",
+        normalization_profile="app_logs",
+        retention_class="short",
+        expected_producer_type="cron",
+        scheduler_patterns=["agent-monitoring", "sitemap-analysis"],
+    )
+
+    assert source.expected_producer_type == "cron"
+    assert source.scheduler_patterns == ["agent-monitoring", "sitemap-analysis"]
+
+
 def test_manifest_loads_absolute_file_source_target(tmp_path: Path) -> None:
     """Verify production manifests may point at absolute log paths."""
 

@@ -74,7 +74,7 @@ documentation categories, not auth scopes.
 | Group | Tools | Purpose |
 | --- | --- | --- |
 | Workflow bootstrap and discovery | `analyze_daily_log_bundle`, `list_projects` | Prepare daily workflow context and expose authorized project/source inventory. |
-| Project manifest inspection | `read_project_manifest` | Read the detailed persisted manifest contract for one authorized project or source. |
+| Project manifest inspection | `read_project_manifest`, `explain_project_source` | Read the detailed persisted manifest contract and explain one source's configured producer provenance. |
 | Log collection and session lifecycle | `collect_logs`, `close_agent_session` | Collect raw logs into workflow or session artifacts and close interactive session audit metadata. |
 | Snapshot inventory and raw inspection | `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot` | List, read, and search persisted raw snapshot files. |
 | Snapshot analysis and derived views | `create_filtered_view`, `group_errors`, `build_incident_bundle`, `inspect_proxy_activity`, `suggest_followup_window` | Build deterministic cleaned views, grouped summaries, proxy diagnostics, incident bundles, and recollection windows. |

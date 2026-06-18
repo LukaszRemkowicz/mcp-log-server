@@ -21,6 +21,7 @@ from tools.agent_hints import (
     CLOSE_AGENT_SESSION_TOOL_DESCRIPTION,
     COLLECT_LOGS_TOOL_DESCRIPTION,
     CREATE_FILTERED_VIEW_TOOL_DESCRIPTION,
+    EXPLAIN_PROJECT_SOURCE_TOOL_DESCRIPTION,
     GREP_LOG_SNAPSHOT_TOOL_DESCRIPTION,
     GROUP_ERRORS_TOOL_DESCRIPTION,
     INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
@@ -75,6 +76,7 @@ def test_application_registers_expected_mcp_components(
         assert "suggest_followup_window" in tool_names
         assert "list_projects" in tool_names
         assert "read_project_manifest" in tool_names
+        assert "explain_project_source" in tool_names
         assert "inspect_vps_containers" in tool_names
         assert "inspect_vps_volumes" in tool_names
         assert "inspect_project_compose_state" in tool_names
@@ -186,6 +188,9 @@ def test_application_registers_expected_mcp_components(
             item["tool_name"] == "inspect_tls_certificate" for item in bootstrap_text["tools"]
         )
         assert any(item["tool_name"] == "read_project_manifest" for item in bootstrap_text["tools"])
+        assert any(
+            item["tool_name"] == "explain_project_source" for item in bootstrap_text["tools"]
+        )
         assert any(
             item["tool_name"] == "inspect_project_compose_state" for item in bootstrap_text["tools"]
         )
@@ -319,6 +324,10 @@ def test_application_registers_expected_mcp_components(
         assert app_tls_tool.description == INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION
         app_manifest_tool = next(tool for tool in tools if tool.name == "read_project_manifest")
         assert app_manifest_tool.description == READ_PROJECT_MANIFEST_TOOL_DESCRIPTION
+        app_explain_source_tool = next(
+            tool for tool in tools if tool.name == "explain_project_source"
+        )
+        assert app_explain_source_tool.description == EXPLAIN_PROJECT_SOURCE_TOOL_DESCRIPTION
         app_compose_state_tool = next(
             tool for tool in tools if tool.name == "inspect_project_compose_state"
         )
@@ -342,6 +351,7 @@ def test_application_registers_expected_mcp_components(
             "get_mcp_service_status",
             "list_projects",
             "read_project_manifest",
+            "explain_project_source",
             "collect_logs",
             "list_log_snapshot_files",
             "read_log_snapshot_file",

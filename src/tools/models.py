@@ -198,6 +198,8 @@ class ProjectManifestSourcePayload(BaseModel):
     default_noise_profile: str | None
     stream: Literal["stdout", "stderr"] | None
     inspect_path_prefixes: list[str]
+    expected_producer_type: Literal["cron", "systemd", "docker", "app"] | None
+    scheduler_patterns: list[str]
 
 
 class ReadProjectManifestPayload(BaseModel):
@@ -213,6 +215,42 @@ class ReadProjectManifestPayload(BaseModel):
     static_asset_paths: list[str]
     static_asset_extensions: list[str]
     sources: list[ProjectManifestSourcePayload]
+
+
+class SourceProducerPayload(BaseModel):
+    """Describe configured producer provenance for one manifest source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    metadata_status: Literal["configured", "missing"]
+    expected_producer_type: Literal["cron", "systemd", "docker", "app"] | None
+    scheduler_patterns: list[str]
+
+
+class SourceSchedulerHintsPayload(BaseModel):
+    """Describe scheduler evidence connected to one manifest source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    inspected_patterns: list[str]
+    matches: list[ScheduledJobMatchPayload]
+    warnings: list[ScheduledJobWarningPayload]
+    truncated: bool
+
+
+class ExplainProjectSourcePayload(BaseModel):
+    """Structured response returned by `explain_project_source`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["explain_project_source"]
+    project_name: str
+    project_summary: str
+    source_key: str
+    source: ProjectManifestSourcePayload
+    producer: SourceProducerPayload
+    scheduler_hints: SourceSchedulerHintsPayload | None
+    next_step_tips: list[str]
 
 
 class ProjectManifestList(RootModel[list[ProjectManifestSummary]]):

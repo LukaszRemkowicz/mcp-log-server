@@ -120,11 +120,13 @@ Current example JWT capabilities:
   - `grep_log_snapshot`
   - `list_projects`
   - `read_project_manifest`
+  - `explain_project_source`
   - `inspect_live_fail2ban_activity`
   - `inspect_tls_certificate`
   - `inspect_vps_containers`
   - `inspect_vps_volumes`
   - `inspect_project_compose_state`
+  - `inspect_project_scheduled_jobs`
   - `inspect_containers_health`
   - `inspect_container_detail`
   - `stat_container_path`
@@ -149,11 +151,13 @@ Current example JWT capabilities:
   - `grep_log_snapshot`
   - `list_projects`
   - `read_project_manifest`
+  - `explain_project_source`
   - `get_mcp_service_status`
   - `get_mcp_health_check`
   - `inspect_vps_containers`
   - `inspect_vps_volumes`
   - `inspect_project_compose_state`
+  - `inspect_project_scheduled_jobs`
   - `inspect_containers_health`
   - `inspect_container_detail`
   - `stat_container_path`

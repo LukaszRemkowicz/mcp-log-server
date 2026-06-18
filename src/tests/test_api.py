@@ -105,6 +105,7 @@ FAIL2BAN_TOOL_CALLS: tuple[ToolCall, ...] = (
 TLS_TOOL_CALLS: tuple[ToolCall, ...] = (("inspect_tls_certificate", {}),)
 PROJECT_MANIFEST_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("read_project_manifest", {"project_name": "landingpage"}),
+    ("explain_project_source", {"project_name": "landingpage", "source_key": "app_file"}),
 )
 ANALYSIS_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("group_errors", {"project_name": "landingpage"}),
@@ -305,6 +306,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "inspect_tls_certificate",
                 "list_projects",
                 "read_project_manifest",
+                "explain_project_source",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
             },
@@ -348,6 +350,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "inspect_tls_certificate",
                 "list_projects",
                 "read_project_manifest",
+                "explain_project_source",
                 "inspect_containers_health",
                 "inspect_project_compose_state",
                 "inspect_vps_containers",
@@ -475,6 +478,7 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert any(item["tool_name"] == "suggest_followup_window" for item in payload["tools"])
     assert any(item["tool_name"] == "list_projects" for item in payload["tools"])
     assert any(item["tool_name"] == "read_project_manifest" for item in payload["tools"])
+    assert any(item["tool_name"] == "explain_project_source" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_tls_certificate" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_vps_containers" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_vps_volumes" for item in payload["tools"])
@@ -1937,6 +1941,8 @@ async def test_read_project_manifest_api_returns_authorized_manifest_contract(
     assert backend_source["default_noise_profile"] == "backend_noise"
     assert backend_source["stream"] is None
     assert backend_source["inspect_path_prefixes"] == []
+    assert backend_source["expected_producer_type"] is None
+    assert backend_source["scheduler_patterns"] == []
     assert "id" not in payload
     assert "created_at" not in payload
     assert "updated_at" not in payload
@@ -2062,6 +2068,169 @@ async def test_read_project_manifest_api_returns_unknown_source_error(
             "traefik",
         ],
     }
+
+
+async def test_explain_project_source_api_returns_producer_and_scheduler_hints(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    tmp_path: Path,
+) -> None:
+    """Verify source explanation connects manifest metadata with scheduler evidence."""
+
+    log_file = tmp_path / "sitemap-analysis.log"
+    log_file.write_text("sitemap complete\n", encoding="utf-8")
+    manifests_dir = tmp_path / "manifests"
+    scheduler_root = tmp_path / "etc" / "cron.d"
+    manifests_dir.mkdir()
+    scheduler_root.mkdir(parents=True)
+    (scheduler_root / "agent-monitoring").write_text(
+        (
+            "15 2 * * * root /opt/agent-monitoring/sitemap-analysis "
+            ">> /var/log/devops/cron/agent-monitoring/sitemap-analysis.log 2>&1\n"
+        ),
+        encoding="utf-8",
+    )
+    (manifests_dir / "landingpage.json").write_text(
+        f"""
+        {{
+          "project_key": "landingpage",
+          "project_summary": "Temporary project.",
+          "sources": [
+            {{
+              "source_key": "cron_sitemap_analysis",
+              "source_type": "file",
+              "target": "{log_file}",
+              "description": "Sitemap analysis cron output.",
+              "required": true,
+              "parser_type": "plain_text",
+              "normalization_profile": "app_logs",
+              "retention_class": "short",
+              "default_noise_profile": "app_noise",
+              "inspect_path_prefixes": [],
+              "expected_producer_type": "cron",
+              "scheduler_patterns": ["agent-monitoring", "sitemap-analysis"]
+            }}
+          ]
+        }}
+        """,
+        encoding="utf-8",
+    )
+    await _seed_project_manifests(manifests_dir)
+    token: str = custom_jwt_token(
+        "workflow-agent",
+        [PROJECTS_READ_SCOPE],
+        "workflow-agent",
+        {"projects_access": "all"},
+    )
+
+    with override_settings(SCHEDULER_INSPECTION_ROOTS=[scheduler_root]):
+        response = await jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "explain-project-source",
+                "method": "tools/call",
+                "params": {
+                    "name": "explain_project_source",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "cron_sitemap_analysis",
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "explain_project_source"
+    assert payload["project_name"] == "landingpage"
+    assert payload["source"]["target"] == log_file.as_posix()
+    assert payload["producer"] == {
+        "metadata_status": "configured",
+        "expected_producer_type": "cron",
+        "scheduler_patterns": ["agent-monitoring", "sitemap-analysis"],
+    }
+    assert payload["scheduler_hints"]["inspected_patterns"] == [
+        "agent-monitoring",
+        "sitemap-analysis",
+    ]
+    assert payload["scheduler_hints"]["matches"][0]["scheduler_type"] == "cron_d"
+    assert payload["scheduler_hints"]["matches"][0]["line_number"] == 1
+    assert payload["scheduler_hints"]["warnings"] == []
+    assert any("stat_project_path" in tip for tip in payload["next_step_tips"])
+
+
+async def test_explain_project_source_api_reports_missing_producer_metadata(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify source explanation is useful even when producer metadata is absent."""
+
+    token: str = custom_jwt_token(
+        "workflow-agent",
+        [PROJECTS_READ_SCOPE],
+        "workflow-agent",
+        {"projects_access": "all"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "explain-project-source-missing-producer",
+            "method": "tools/call",
+            "params": {
+                "name": "explain_project_source",
+                "arguments": {"project_name": "landingpage", "source_key": "app_file"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["producer"]["metadata_status"] == "missing"
+    assert payload["producer"]["expected_producer_type"] is None
+    assert payload["scheduler_hints"] is None
+    assert any("Producer metadata is not configured" in tip for tip in payload["next_step_tips"])
+
+
+async def test_explain_project_source_api_returns_unknown_source_error(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify source explanation reuses the manifest unknown-source contract."""
+
+    token: str = custom_jwt_token(
+        "workflow-agent",
+        [PROJECTS_READ_SCOPE],
+        "workflow-agent",
+        {"projects_access": "all"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "explain-project-source-missing",
+            "method": "tools/call",
+            "params": {
+                "name": "explain_project_source",
+                "arguments": {"project_name": "landingpage", "source_key": "missing"},
+            },
+        },
+    )
+
+    result = response.json()["result"]
+    payload = result["structuredContent"]
+
+    assert response.status_code == 200
+    assert result["isError"] is True
+    assert payload["error_code"] == "unknown_source_key"
+    assert payload["details"]["source_key"] == "missing"
 
 
 async def test_read_container_file_api_returns_file_contents(

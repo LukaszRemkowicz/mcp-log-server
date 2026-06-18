@@ -17,18 +17,25 @@ from logging_config import get_logger
 from manifests.models import Manifest
 from services.log_collection import BuildLogsError, LogCollectionService
 from services.project_manifest import ProjectManifestError, ProjectManifestService
+from services.scheduled_jobs_service import ScheduledJobInspection, ScheduledJobsService
 from tools.agent_hints import (
     COLLECT_LOGS_NEXT_STEP_TIPS,
     COLLECT_LOGS_TOOL_DESCRIPTION,
+    EXPLAIN_PROJECT_SOURCE_TOOL_DESCRIPTION,
     READ_PROJECT_MANIFEST_TOOL_DESCRIPTION,
 )
 from tools.errors import build_collect_logs_error_details, build_collect_logs_error_result
 from tools.models import (
     CollectLogsPayload,
+    ExplainProjectSourcePayload,
     ProjectManifestSourcePayload,
     ProjectManifestSummary,
     ReadProjectManifestPayload,
+    ScheduledJobMatchPayload,
+    ScheduledJobWarningPayload,
     SnapshotWorkspace,
+    SourceProducerPayload,
+    SourceSchedulerHintsPayload,
 )
 from utils.mcp_errors import build_agent_tool_error_result
 from utils.types import JSONObject
@@ -37,6 +44,7 @@ logger: logging.Logger = get_logger("tools.collection")
 
 collection_service = LogCollectionService()
 manifest_service = ProjectManifestService()
+scheduled_jobs_service = ScheduledJobsService()
 
 
 def _get_authorized_manifests() -> AuthorizedProjectManifests:
@@ -131,6 +139,104 @@ def _build_project_manifest_source_payloads(
     ]
 
 
+def _source_producer_payload(source: ProjectManifestSourcePayload) -> SourceProducerPayload:
+    """Return configured producer metadata for one source."""
+
+    has_metadata = any(
+        [
+            source.expected_producer_type,
+            source.scheduler_patterns,
+        ]
+    )
+    return SourceProducerPayload(
+        metadata_status="configured" if has_metadata else "missing",
+        expected_producer_type=source.expected_producer_type,
+        scheduler_patterns=source.scheduler_patterns,
+    )
+
+
+def _scheduler_hint_patterns(source: ProjectManifestSourcePayload) -> list[str]:
+    """Return configured literal patterns for scheduler provenance lookup."""
+
+    if source.scheduler_patterns:
+        return source.scheduler_patterns
+    return []
+
+
+def _source_scheduler_hints_payload(
+    inspection: ScheduledJobInspection,
+) -> SourceSchedulerHintsPayload:
+    """Convert scheduler service evidence into a source-explanation payload."""
+
+    return SourceSchedulerHintsPayload(
+        inspected_patterns=inspection.patterns,
+        matches=[
+            ScheduledJobMatchPayload(
+                scheduler_type=match.scheduler_type,
+                path=match.path,
+                line_number=match.line_number,
+                schedule_context=match.schedule_context,
+                command_text=match.command_text,
+                output_paths=match.output_paths,
+                matched_patterns=match.matched_patterns,
+                visibility_warnings=match.visibility_warnings,
+            )
+            for match in inspection.matches
+        ],
+        warnings=[
+            ScheduledJobWarningPayload(
+                path=warning.path,
+                warning_code=warning.warning_code,
+                message=warning.message,
+            )
+            for warning in inspection.warnings
+        ],
+        truncated=inspection.truncated,
+    )
+
+
+def _source_explanation_next_steps(
+    source: ProjectManifestSourcePayload,
+    scheduler_hints: SourceSchedulerHintsPayload | None,
+) -> list[str]:
+    """Return deterministic next-step tips for one source explanation."""
+
+    tips = [
+        "Use collect_logs with this source_key to collect the configured source.",
+    ]
+    if source.source_type == "file":
+        tips.append(
+            "Use stat_project_path to inspect whether the configured host file "
+            "exists and is readable."
+        )
+        tips.append(
+            "Use list_project_directory to inspect rotated files beside the configured source."
+        )
+    else:
+        tips.append(
+            "Use inspect_containers_health or inspect_container_detail to inspect "
+            "the configured container source."
+        )
+    if source.scheduler_patterns:
+        tips.append(
+            "Use inspect_project_scheduled_jobs with the returned scheduler_patterns "
+            "for more scheduler detail."
+        )
+        if scheduler_hints is not None and not scheduler_hints.matches:
+            tips.append(
+                "No scheduler evidence matched the configured patterns; verify mounts "
+                "and producer naming."
+            )
+    elif source.expected_producer_type in {"cron", "systemd"}:
+        tips.append("Scheduler producer type is configured, but scheduler_patterns are missing.")
+    else:
+        tips.append(
+            "Producer metadata is not configured for this source; treat producer details "
+            "as unknown."
+        )
+    return tips
+
+
 @workflow_discoverable_tool(
     PROJECTS_READ_SCOPE,
     mcp_description=READ_PROJECT_MANIFEST_TOOL_DESCRIPTION,
@@ -177,6 +283,70 @@ async def read_project_manifest(
             "project_name": payload.project_name,
             "requested_source_key": payload.requested_source_key,
             "source_count": len(payload.sources),
+        },
+    )
+    return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
+
+
+@workflow_discoverable_tool(
+    PROJECTS_READ_SCOPE,
+    mcp_description=EXPLAIN_PROJECT_SOURCE_TOOL_DESCRIPTION,
+)
+@project_authorized_tool
+async def explain_project_source(
+    project_name: str,
+    source_key: str,
+) -> ToolResult:
+    """Explain one manifest source contract and configured producer provenance."""
+
+    authorized_manifests = _get_authorized_manifests()
+    manifest = authorized_manifests.manifests.get(project_name)
+    if manifest is None:
+        return build_agent_tool_error_result(
+            error_code="unknown_project_manifest",
+            message="No persisted manifest was found for the requested project.",
+            retry_tips=[
+                "Call list_projects to discover projects visible to this MCP caller.",
+                "Retry with a project_name returned by list_projects.",
+            ],
+            details=cast(JSONObject, {"project_name": project_name}),
+        )
+
+    source_payloads = _build_project_manifest_source_payloads(manifest, source_key)
+    if isinstance(source_payloads, ToolResult):
+        return source_payloads
+    source = source_payloads[0]
+    scheduler_hints: SourceSchedulerHintsPayload | None = None
+    scheduler_patterns = _scheduler_hint_patterns(source)
+    if scheduler_patterns:
+        scheduler_hints = _source_scheduler_hints_payload(
+            scheduled_jobs_service.inspect_project_scheduled_jobs(
+                project_name=manifest.project_key,
+                patterns=scheduler_patterns,
+            )
+        )
+
+    payload = ExplainProjectSourcePayload(
+        action="explain_project_source",
+        project_name=manifest.project_key,
+        project_summary=manifest.project_summary,
+        source_key=source.source_key,
+        source=source,
+        producer=_source_producer_payload(source),
+        scheduler_hints=scheduler_hints,
+        next_step_tips=_source_explanation_next_steps(source, scheduler_hints),
+    )
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "explain_project_source",
+            "project_name": payload.project_name,
+            "source_key": payload.source_key,
+            "producer_metadata_status": payload.producer.metadata_status,
+            "scheduler_match_count": (
+                len(payload.scheduler_hints.matches) if payload.scheduler_hints else None
+            ),
         },
     )
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))

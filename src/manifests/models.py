@@ -24,6 +24,8 @@ class SourceDefinition(BaseModel):
     default_noise_profile: str | None = None
     stream: Literal["stdout", "stderr"] | None = None
     inspect_path_prefixes: list[str] = Field(default_factory=list)
+    expected_producer_type: Literal["cron", "systemd", "docker", "app"] | None = None
+    scheduler_patterns: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_file_target_path_shape(self) -> SourceDefinition:
