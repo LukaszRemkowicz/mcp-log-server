@@ -27,6 +27,7 @@ fi
 
 cleanup() {
   if [[ -n "${SERVER_PID:-}" ]] && kill -0 "$SERVER_PID" 2>/dev/null; then
+    pkill -TERM -P "$SERVER_PID" 2>/dev/null || true
     kill "$SERVER_PID" 2>/dev/null || true
     wait "$SERVER_PID" 2>/dev/null || true
   fi
@@ -188,7 +189,7 @@ export CODEX_AGENT_JWT
   MCP_PORT="$MCP_PORT" \
   MCP_HOST="$MCP_HOST" \
   LOGS_DIR="$LOGS_DIR" \
-  uv run python -m main >"$SERVER_LOG" 2>&1
+  exec uv run python -m main >"$SERVER_LOG" 2>&1
 ) &
 SERVER_PID=$!
 

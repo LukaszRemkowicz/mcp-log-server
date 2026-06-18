@@ -1,22 +1,18 @@
-"""Docker-backed services for approved container file inspection."""
+"""Service methods behind approved container inspection MCP tools."""
 
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING
+from typing import Any, Protocol, cast
 
-from docker.errors import APIError, DockerException
 from pydantic import BaseModel
-from requests import exceptions as requests_exceptions
 
-import docker
 from manifests.models import SourceDefinition
-
-if TYPE_CHECKING:
-    from docker.client import DockerClient  # type: ignore[import-not-found]
+from services.docker_socket_gateway import DockerSocketGatewayClient, DockerSocketGatewayError
 
 DOCKER_INSPECTION_TIMEOUT_SECONDS = 15
 MAX_CONTAINER_FILE_BYTES = 200_000
@@ -70,6 +66,12 @@ SAFE_COMPOSE_LABEL_KEYS = frozenset(
         "com.docker.compose.volume",
     }
 )
+
+
+class DockerSocketClientProtocol(Protocol):
+    """Fixed-operation socket client contract used by inspection tools."""
+
+    def request(self, operation: str, params: Mapping[str, object]) -> dict[str, Any]: ...
 
 
 @dataclass(slots=True)
@@ -219,22 +221,36 @@ class VpsVolumeInventory:
     usage_size_bytes: int | None
 
 
-class DockerServiceError(BaseModel):
+class InspectionToolsServiceError(BaseModel):
     """Expected Docker inspection failure returned to the MCP tool layer."""
 
     message: str
 
 
-class DockerService:
+class InspectionToolsService:
     """Run the small approved Docker operations needed by MCP tools.
 
     This service is intentionally narrower than a generic Docker wrapper. It
     exists for read-only container file inspection, maps Docker runtime errors
-    into `DockerServiceError`, and exposes only the command shapes used by the
+    into `InspectionToolsServiceError`, and exposes only the command shapes used by the
     manifest-bounded container inspection tools.
     """
 
-    def normalize_container_path(self, path: str) -> str:
+    def __init__(self, gateway_client: DockerSocketClientProtocol | None = None) -> None:
+        """Create an inspection service backed by the shared socket gateway client."""
+
+        self.gateway_client = gateway_client or DockerSocketGatewayClient()
+
+    def _request(self, operation: str, params: Mapping[str, object]) -> dict[str, Any]:
+        """Call one fixed Docker operation through the shared socket gateway."""
+
+        try:
+            return self.gateway_client.request(operation, params)
+        except DockerSocketGatewayError as error:
+            raise ValueError(error.message) from error
+
+    @staticmethod
+    def normalize_container_path(path: str) -> str:
         """Normalize one requested container path into a safe absolute POSIX path.
 
         Container inspection accepts explicit paths inside a container, not
@@ -261,13 +277,13 @@ class DockerService:
             normalized_path = f"/{normalized_path}"
         return normalized_path
 
-    def normalize_container_path_or_error(self, path: str) -> str | DockerServiceError:
+    def normalize_container_path_or_error(self, path: str) -> str | InspectionToolsServiceError:
         """Return a normalized container path or a structured validation error."""
 
         try:
             return self.normalize_container_path(path)
         except ValueError as error:
-            return DockerServiceError(message=str(error))
+            return InspectionToolsServiceError(message=str(error))
 
     def container_path_is_allowed(self, definition: SourceDefinition, path: str) -> bool:
         """Return whether a container path stays inside manifest inspection roots.
@@ -313,29 +329,13 @@ class DockerService:
         self,
         definition: SourceDefinition,
         path: str | None,
-    ) -> str | DockerServiceError:
+    ) -> str | InspectionToolsServiceError:
         """Return a directory path or a structured validation error."""
 
         try:
             return self.resolve_container_directory_path(definition, path)
         except ValueError as error:
-            return DockerServiceError(message=str(error))
-
-    @staticmethod
-    def _run_container_command(container_name: str, command: list[str]) -> str:
-        """Run one approved command inside a container and return UTF-8 output."""
-
-        container = DockerService._get_container(container_name)
-        result = container.exec_run(command, stdout=True, stderr=True)
-
-        exit_code = 0 if result.exit_code is None else int(result.exit_code)
-        output = result.output.decode("utf-8", errors="replace")
-        if exit_code != 0:
-            normalized_output = output.strip()
-            if "No such file or directory" in normalized_output or not normalized_output:
-                raise ValueError("Requested container path was not found.")
-            raise ValueError(normalized_output)
-        return output
+            return InspectionToolsServiceError(message=str(error))
 
     @staticmethod
     def _parse_stat_line(raw_line: str) -> ContainerPathStat:
@@ -357,7 +357,7 @@ class DockerService:
         self,
         container_name: str,
         path: str,
-    ) -> ContainerPathStat | DockerServiceError:
+    ) -> ContainerPathStat | InspectionToolsServiceError:
         """Run the approved container stat command and parse one path result.
 
         The method executes a fixed `find <path> -maxdepth 0 ... -exec stat`
@@ -368,38 +368,13 @@ class DockerService:
         """
 
         try:
-            output = self._run_container_command(
-                container_name,
-                [
-                    "find",
-                    path,
-                    "-maxdepth",
-                    "0",
-                    "(",
-                    "-type",
-                    "f",
-                    "-o",
-                    "-type",
-                    "d",
-                    ")",
-                    "-exec",
-                    "stat",
-                    "-c",
-                    "%F\t%s\t%a\t%Y\t%n",
-                    "{}",
-                    ";",
-                ],
+            payload = self._request(
+                "container_path_stat",
+                {"container_name": container_name, "path": path},
             )
         except ValueError as error:
-            return DockerServiceError(message=str(error))
-
-        line = next((line for line in output.splitlines() if line.strip()), "")
-        if not line:
-            return DockerServiceError(message="Requested container path was not found.")
-        try:
-            return self._parse_stat_line(line)
-        except ValueError as error:
-            return DockerServiceError(message=str(error))
+            return InspectionToolsServiceError(message=str(error))
+        return self._container_path_stat_from_payload(payload)
 
     def read_container_file(
         self,
@@ -407,38 +382,39 @@ class DockerService:
         path: str,
         *,
         max_bytes: int = MAX_CONTAINER_FILE_BYTES,
-    ) -> tuple[str, bool] | DockerServiceError:
+    ) -> tuple[str, bool] | InspectionToolsServiceError:
         """Read one regular file inside a container with a bounded response size."""
 
         if max_bytes < 1:
-            return DockerServiceError(message="max_bytes must be a positive integer.")
+            return InspectionToolsServiceError(message="max_bytes must be a positive integer.")
 
         stat_payload = self.stat_container_path(container_name, path)
-        if isinstance(stat_payload, DockerServiceError):
+        if isinstance(stat_payload, InspectionToolsServiceError):
             return stat_payload
         if stat_payload.is_dir:
-            return DockerServiceError(
+            return InspectionToolsServiceError(
                 message="Requested container path is a directory, not a readable regular file."
             )
 
         try:
-            output = self._run_container_command(
-                container_name,
-                ["find", path, "-maxdepth", "0", "-type", "f", "-exec", "cat", "{}", ";"],
+            payload = self._request(
+                "container_file_read",
+                {"container_name": container_name, "path": path, "max_bytes": max_bytes},
             )
         except ValueError as error:
-            return DockerServiceError(message=str(error))
-        encoded_output = output.encode("utf-8")
-        truncated = len(encoded_output) > max_bytes
-        if truncated:
-            output = encoded_output[:max_bytes].decode("utf-8", errors="ignore")
-        return output, truncated
+            return InspectionToolsServiceError(message=str(error))
+        content = payload.get("content")
+        if not isinstance(content, str):
+            return InspectionToolsServiceError(
+                message="Docker socket app returned invalid file content."
+            )
+        return content, bool(payload.get("truncated", False))
 
     def list_container_directory(
         self,
         container_name: str,
         path: str,
-    ) -> tuple[list[ContainerPathStat], bool] | DockerServiceError:
+    ) -> tuple[list[ContainerPathStat], bool] | InspectionToolsServiceError:
         """List one container path like `ls -la`.
 
         Directory paths return immediate regular-file and directory children.
@@ -446,85 +422,45 @@ class DockerService:
         """
 
         path_stat = self.stat_container_path(container_name, path)
-        if isinstance(path_stat, DockerServiceError):
+        if isinstance(path_stat, InspectionToolsServiceError):
             return path_stat
         if not path_stat.is_dir:
             return [path_stat], False
 
         try:
-            output = self._run_container_command(
-                container_name,
-                [
-                    "find",
-                    path,
-                    "-mindepth",
-                    "1",
-                    "-maxdepth",
-                    "1",
-                    "(",
-                    "-type",
-                    "f",
-                    "-o",
-                    "-type",
-                    "d",
-                    ")",
-                    "-exec",
-                    "stat",
-                    "-c",
-                    "%F\t%s\t%a\t%Y\t%n",
-                    "{}",
-                    ";",
-                ],
+            payload = self._request(
+                "container_directory_list",
+                {
+                    "container_name": container_name,
+                    "path": path,
+                    "max_entries": MAX_DIRECTORY_ENTRIES,
+                },
             )
         except ValueError as error:
-            return DockerServiceError(message=str(error))
-        entries: list[ContainerPathStat] = []
-        for raw_line in output.splitlines():
-            if not raw_line.strip():
-                continue
-            entries.append(self._parse_stat_line(raw_line))
-            if len(entries) >= MAX_DIRECTORY_ENTRIES:
-                break
-
-        entries.sort(key=lambda item: (not item.is_dir, item.path))
-        return entries, len(output.splitlines()) > MAX_DIRECTORY_ENTRIES
-
-    @staticmethod
-    def _get_container(container_name: str):
-        """Return one Docker container object or raise a stable value error."""
-
-        try:
-            client: DockerClient = docker.from_env(  # type: ignore[attr-defined]
-                timeout=DOCKER_INSPECTION_TIMEOUT_SECONDS
+            return InspectionToolsServiceError(message=str(error))
+        raw_entries = payload.get("entries")
+        if not isinstance(raw_entries, list):
+            return InspectionToolsServiceError(
+                message="Docker socket app returned invalid directory list."
             )
-            return client.containers.get(container_name)
-        except APIError as error:
-            error_output = str(error).strip() or "Unknown docker error."
-            if "No such container" in error_output:
-                raise ValueError(
-                    f"Configured container {container_name!r} is not available "
-                    "in the current runtime."
-                ) from error
-            raise ValueError(error_output) from error
-        except requests_exceptions.Timeout as error:
-            raise ValueError(f"Timed out inspecting container {container_name!r}.") from error
-        except DockerException as error:
-            raise ValueError(
-                "Docker Engine API is not available in the current runtime."
-            ) from error
+        entries = [
+            self._container_path_stat_from_payload(entry)
+            for entry in raw_entries
+            if isinstance(entry, dict)
+        ]
+        return entries, bool(payload.get("truncated", False))
 
     def inspect_container_health(
         self,
         container_name: str,
-    ) -> ContainerHealth | DockerServiceError:
+    ) -> ContainerHealth | InspectionToolsServiceError:
         """Return structured Docker runtime state for one container."""
 
         try:
-            container = self._get_container(container_name)
+            payload = self._request("container_health", {"container_name": container_name})
         except ValueError as error:
-            return DockerServiceError(message=str(error))
-
-        return self._parse_container_health(container.attrs, container_name)
+            return InspectionToolsServiceError(message=str(error))
+        return self._container_health_from_payload(payload, container_name)
 
     @staticmethod
     def _parse_container_health(
@@ -575,74 +511,274 @@ class DockerService:
             finished_at=finished_at,
         )
 
+    @classmethod
+    def _container_path_stat_from_payload(cls, payload: dict[str, Any]) -> ContainerPathStat:
+        """Convert socket-app path stat JSON into the service dataclass."""
+
+        return ContainerPathStat(
+            path=cls._payload_str(payload.get("path")),
+            is_dir=bool(payload.get("is_dir", False)),
+            size=cls._payload_int(payload.get("size")) or 0,
+            mode=cls._payload_int(payload.get("mode")) or 0,
+            modified_at=cls._payload_optional_str(payload.get("modified_at")),
+        )
+
+    @classmethod
+    def _container_health_from_payload(
+        cls,
+        payload: dict[str, Any],
+        container_name: str,
+    ) -> ContainerHealth:
+        """Convert socket-app health JSON into the service dataclass."""
+
+        return ContainerHealth(
+            container_id=cls._payload_str(payload.get("container_id")),
+            container_name=cls._payload_str(payload.get("container_name")) or container_name,
+            image=cls._payload_optional_str(payload.get("image")),
+            docker_status=cls._payload_optional_str(payload.get("docker_status")),
+            health_status=cls._payload_optional_str(payload.get("health_status")),
+            running=bool(payload.get("running", False)),
+            restarting=bool(payload.get("restarting", False)),
+            paused=bool(payload.get("paused", False)),
+            dead=bool(payload.get("dead", False)),
+            exit_code=cls._payload_int(payload.get("exit_code")),
+            error=cls._payload_optional_str(payload.get("error")) or "",
+            restart_count=cls._payload_int(payload.get("restart_count")),
+            started_at=cls._payload_optional_str(payload.get("started_at")),
+            finished_at=cls._payload_optional_str(payload.get("finished_at")),
+        )
+
+    @classmethod
+    def _container_detail_from_payload(
+        cls,
+        payload: dict[str, Any],
+        container_name: str,
+    ) -> ContainerDetail:
+        """Convert socket-app inspect JSON into the service dataclass."""
+
+        raw_health_payload = payload.get("health")
+        health_payload = (
+            cast(dict[str, Any], raw_health_payload) if isinstance(raw_health_payload, dict) else {}
+        )
+        return ContainerDetail(
+            health=cls._container_health_from_payload(health_payload, container_name),
+            created_at=cls._payload_optional_str(payload.get("created_at")),
+            env_var_names=cls._payload_str_list(payload.get("env_var_names")),
+            env_vars=[
+                cls._container_detail_env_var_from_payload(item)
+                for item in cls._payload_dict_list(payload.get("env_vars"))
+            ],
+            label_keys=cls._payload_str_list(payload.get("label_keys")),
+            compose_labels=cls._payload_str_dict(payload.get("compose_labels")),
+            restart_policy=cls._restart_policy_from_payload(payload.get("restart_policy")),
+            command=cls._payload_str_list(payload.get("command")),
+            entrypoint=cls._payload_str_list(payload.get("entrypoint")),
+            working_dir=cls._payload_optional_str(payload.get("working_dir")),
+            user=cls._payload_optional_str(payload.get("user")),
+            ports=[
+                cls._container_detail_port_from_payload(item)
+                for item in cls._payload_dict_list(payload.get("ports"))
+            ],
+            mounts=[
+                cls._container_detail_mount_from_payload(item)
+                for item in cls._payload_dict_list(payload.get("mounts"))
+            ],
+            networks=[
+                cls._container_detail_network_from_payload(item)
+                for item in cls._payload_dict_list(payload.get("networks"))
+            ],
+            health_log=cls._payload_dict_list(payload.get("health_log")),
+        )
+
+    @classmethod
+    def _vps_container_inventory_from_payload(
+        cls,
+        payload: dict[str, Any],
+    ) -> VpsContainerInventory:
+        """Convert socket-app container inventory JSON into the service dataclass."""
+
+        health = cls._container_health_from_payload(payload, "")
+        command = cls._payload_str_list(payload.get("command"))
+        return VpsContainerInventory(
+            container_id=health.container_id,
+            short_container_id=cls._payload_optional_str(payload.get("short_container_id"))
+            or health.container_id[:12],
+            container_name=health.container_name,
+            image=health.image,
+            command=command,
+            command_preview=cls._payload_optional_str(payload.get("command_preview"))
+            or cls._build_command_preview(command),
+            created_at=cls._payload_optional_str(payload.get("created_at")),
+            docker_status=health.docker_status,
+            state=cls._payload_optional_str(payload.get("state")) or health.docker_status,
+            health_status=health.health_status,
+            running=health.running,
+            restarting=health.restarting,
+            paused=health.paused,
+            dead=health.dead,
+            exit_code=health.exit_code,
+            error=health.error,
+            restart_count=health.restart_count,
+            started_at=health.started_at,
+            finished_at=health.finished_at,
+            compose_labels=cls._payload_str_dict(payload.get("compose_labels")),
+            restart_policy=cls._restart_policy_from_payload(payload.get("restart_policy")),
+            ports=[
+                cls._container_detail_port_from_payload(item)
+                for item in cls._payload_dict_list(payload.get("ports"))
+            ],
+            network_names=cls._payload_str_list(payload.get("network_names")),
+            triage_notes=cls._payload_str_list(payload.get("triage_notes"))
+            or cls._build_container_triage_notes(health),
+            env_var_names=cls._payload_str_list(payload.get("env_var_names")),
+            mounts=[
+                cls._container_detail_mount_from_payload(item)
+                for item in cls._payload_dict_list(payload.get("mounts"))
+            ],
+        )
+
+    @classmethod
+    def _vps_volume_inventory_from_payload(cls, payload: dict[str, Any]) -> VpsVolumeInventory:
+        """Convert socket-app volume inventory JSON into the service dataclass."""
+
+        return VpsVolumeInventory(
+            volume_name=cls._payload_str(payload.get("volume_name")),
+            driver=cls._payload_optional_str(payload.get("driver")),
+            scope=cls._payload_optional_str(payload.get("scope")),
+            created_at=cls._payload_optional_str(payload.get("created_at")),
+            compose_labels=cls._payload_str_dict(payload.get("compose_labels")),
+            option_keys=cls._payload_str_list(payload.get("option_keys")),
+            mountpoint_available=bool(payload.get("mountpoint_available", False)),
+            mountpoint_redacted=bool(payload.get("mountpoint_redacted", False)),
+            usage_ref_count=cls._payload_int(payload.get("usage_ref_count")),
+            usage_size_bytes=cls._payload_int(payload.get("usage_size_bytes")),
+        )
+
+    @classmethod
+    def _container_detail_port_from_payload(
+        cls,
+        payload: dict[str, Any],
+    ) -> ContainerDetailPort:
+        return ContainerDetailPort(
+            private_port=cls._payload_str(payload.get("private_port")),
+            host_ip=cls._payload_optional_str(payload.get("host_ip")),
+            host_port=cls._payload_optional_str(payload.get("host_port")),
+        )
+
+    @classmethod
+    def _container_detail_mount_from_payload(
+        cls,
+        payload: dict[str, Any],
+    ) -> ContainerDetailMount:
+        return ContainerDetailMount(
+            type=cls._payload_optional_str(payload.get("type")),
+            destination=cls._payload_optional_str(payload.get("destination")),
+            mode=cls._payload_optional_str(payload.get("mode")),
+            rw=payload.get("rw") if isinstance(payload.get("rw"), bool) else None,
+            name=cls._payload_optional_str(payload.get("name")),
+        )
+
+    @classmethod
+    def _container_detail_network_from_payload(
+        cls,
+        payload: dict[str, Any],
+    ) -> ContainerDetailNetwork:
+        return ContainerDetailNetwork(
+            name=cls._payload_str(payload.get("name")),
+            ip_address=cls._payload_optional_str(payload.get("ip_address")),
+            aliases=cls._payload_str_list(payload.get("aliases")),
+        )
+
+    @classmethod
+    def _container_detail_env_var_from_payload(
+        cls,
+        payload: dict[str, Any],
+    ) -> ContainerDetailEnvVar:
+        return ContainerDetailEnvVar(
+            name=cls._payload_str(payload.get("name")),
+            value=cls._payload_optional_str(payload.get("value")),
+            value_redacted=bool(payload.get("value_redacted", True)),
+            secret=bool(payload.get("secret", False)),
+        )
+
+    @classmethod
+    def _restart_policy_from_payload(cls, value: object) -> ContainerRestartPolicy:
+        if not isinstance(value, dict):
+            return ContainerRestartPolicy(name=None, maximum_retry_count=None)
+        return ContainerRestartPolicy(
+            name=cls._payload_optional_str(value.get("name") or value.get("Name")),
+            maximum_retry_count=cls._payload_int(
+                value.get("maximum_retry_count") or value.get("MaximumRetryCount")
+            ),
+        )
+
+    @staticmethod
+    def _payload_optional_str(value: object) -> str | None:
+        if value is None or value == "":
+            return None
+        return str(value)
+
+    @classmethod
+    def _payload_str(cls, value: object) -> str:
+        return cls._payload_optional_str(value) or ""
+
+    @staticmethod
+    def _payload_int(value: object) -> int | None:
+        return value if isinstance(value, int) else None
+
+    @staticmethod
+    def _payload_str_list(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if item is not None]
+
+    @staticmethod
+    def _payload_dict_list(value: object) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        return [item for item in value if isinstance(item, dict)]
+
+    @staticmethod
+    def _payload_str_dict(value: object) -> dict[str, str]:
+        if not isinstance(value, dict):
+            return {}
+        return {
+            str(key): str(item)
+            for key, item in value.items()
+            if key is not None and item is not None
+        }
+
     def inspect_container_detail(
         self,
         container_name: str,
-    ) -> ContainerDetail | DockerServiceError:
+    ) -> ContainerDetail | InspectionToolsServiceError:
         """Return curated Docker inspect-style metadata for one container."""
 
         try:
-            container = self._get_container(container_name)
+            payload = self._request("container_detail", {"container_name": container_name})
         except ValueError as error:
-            return DockerServiceError(message=str(error))
-
-        attrs = container.attrs
-        config = attrs.get("Config") if isinstance(attrs, dict) else {}
-        if not isinstance(config, dict):
-            config = {}
-        state = attrs.get("State") if isinstance(attrs, dict) else {}
-        if not isinstance(state, dict):
-            state = {}
-
-        created_at = None
-        if isinstance(attrs, dict) and attrs.get("Created") is not None:
-            created_at = str(attrs.get("Created"))
-
-        return ContainerDetail(
-            health=self._parse_container_health(attrs, container_name),
-            created_at=created_at,
-            env_var_names=self._extract_env_var_names(config.get("Env")),
-            env_vars=self._extract_env_vars(config.get("Env")),
-            label_keys=self._extract_label_keys(config.get("Labels")),
-            compose_labels=self._extract_compose_labels(config.get("Labels")),
-            restart_policy=self._extract_restart_policy(
-                attrs.get("HostConfig") if isinstance(attrs, dict) else None
-            ),
-            command=self._extract_string_list(config.get("Cmd")),
-            entrypoint=self._extract_string_list(config.get("Entrypoint")),
-            working_dir=self._extract_optional_string(config.get("WorkingDir")),
-            user=self._extract_optional_string(config.get("User")),
-            ports=self._extract_ports(
-                attrs.get("NetworkSettings") if isinstance(attrs, dict) else None
-            ),
-            mounts=self._extract_mounts(attrs.get("Mounts") if isinstance(attrs, dict) else None),
-            networks=self._extract_networks(
-                attrs.get("NetworkSettings") if isinstance(attrs, dict) else None
-            ),
-            health_log=self._extract_health_log(state.get("Health")),
-        )
+            return InspectionToolsServiceError(message=str(error))
+        return self._container_detail_from_payload(payload, container_name)
 
     def inspect_vps_containers(
         self,
-    ) -> list[VpsContainerInventory] | DockerServiceError:
+    ) -> list[VpsContainerInventory] | InspectionToolsServiceError:
         """Return a bounded Docker ps-style inventory for visible VPS containers."""
 
         try:
-            client: DockerClient = docker.from_env(  # type: ignore[attr-defined]
-                timeout=DOCKER_INSPECTION_TIMEOUT_SECONDS
+            payload = self._request("vps_containers_inventory", {})
+        except ValueError as error:
+            return InspectionToolsServiceError(message=str(error))
+        raw_containers = payload.get("containers")
+        if not isinstance(raw_containers, list):
+            return InspectionToolsServiceError(
+                message="Docker socket app returned invalid inventory."
             )
-            containers = client.containers.list(all=True)
-        except requests_exceptions.Timeout:
-            return DockerServiceError(message="Timed out listing Docker containers.")
-        except DockerException:
-            return DockerServiceError(
-                message="Docker Engine API is not available in the current runtime."
-            )
-
-        results: list[VpsContainerInventory] = []
-        for container in containers[:MAX_VPS_CONTAINERS]:
-            attrs = container.attrs
-            results.append(self._parse_vps_container_inventory(attrs))
+        results = [
+            self._vps_container_inventory_from_payload(container)
+            for container in raw_containers
+            if isinstance(container, dict)
+        ]
         return sorted(results, key=lambda item: item.container_name)
 
     def inspect_vps_volumes(
@@ -651,37 +787,30 @@ class DockerService:
         dangling_only: bool = False,
         anonymous_only: bool = False,
         name_prefix: str | None = None,
-    ) -> list[VpsVolumeInventory] | DockerServiceError:
+    ) -> list[VpsVolumeInventory] | InspectionToolsServiceError:
         """Return a bounded Docker volume ls-style inventory for visible VPS volumes."""
 
         try:
-            client: DockerClient = docker.from_env(  # type: ignore[attr-defined]
-                timeout=DOCKER_INSPECTION_TIMEOUT_SECONDS
+            payload = self._request(
+                "vps_volumes_inventory",
+                {
+                    "dangling_only": dangling_only,
+                    "anonymous_only": anonymous_only,
+                    "name_prefix": name_prefix,
+                },
             )
-            volume_filters = {"dangling": True} if dangling_only else None
-            volumes = (
-                client.volumes.list(filters=volume_filters)
-                if volume_filters is not None
-                else client.volumes.list()
+        except ValueError as error:
+            return InspectionToolsServiceError(message=str(error))
+        raw_volumes = payload.get("volumes")
+        if not isinstance(raw_volumes, list):
+            return InspectionToolsServiceError(
+                message="Docker socket app returned invalid volume inventory."
             )
-        except requests_exceptions.Timeout:
-            return DockerServiceError(message="Timed out listing Docker volumes.")
-        except DockerException:
-            return DockerServiceError(
-                message="Docker Engine API is not available in the current runtime."
-            )
-
-        results: list[VpsVolumeInventory] = []
-        for volume in volumes[:MAX_VPS_VOLUMES]:
-            attrs = volume.attrs
-            parsed = self._parse_vps_volume_inventory(attrs)
-            if not self._matches_vps_volume_filters(
-                parsed,
-                anonymous_only=anonymous_only,
-                name_prefix=name_prefix,
-            ):
-                continue
-            results.append(parsed)
+        results = [
+            self._vps_volume_inventory_from_payload(volume)
+            for volume in raw_volumes
+            if isinstance(volume, dict)
+        ]
         return sorted(results, key=lambda item: item.volume_name)
 
     def _parse_vps_container_inventory(self, attrs: object) -> VpsContainerInventory:

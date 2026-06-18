@@ -8,6 +8,30 @@ This repository is the implementation home for the MCP server described in
 keeps deterministic collection and analysis tooling separate from the LLM: code
 gathers facts, the agent interprets them.
 
+## What This Solves
+
+This service gives AI agents a safe, repeatable way to inspect production logs
+and container state without giving the agent direct server access.
+
+Instead of asking an LLM to guess what happened from copied terminal output, the
+MCP server collects the exact facts first:
+
+- application and infrastructure logs
+- saved log snapshots for later follow-up
+- filtered and grouped error views
+- approved read-only container and file inspection data
+- runtime health details for Docker-backed services
+
+The important boundary is simple:
+
+- the MCP server gathers and stores facts
+- the LLM reads those facts and explains what they mean
+
+For reviewers, this repository shows the backend service that makes log
+investigation reproducible, auditable, and safer than ad-hoc shell access. For
+operators, it provides Docker Compose deployment paths, JWT-protected MCP
+tools, database-backed audit metadata, and release scripts.
+
 ## Current Status
 
 MVP-ready service foundation:
@@ -24,15 +48,15 @@ MVP-ready service foundation:
 
 Current production hardening includes required database/JWT secrets, startup
 rejection for known local placeholder secrets, non-root app containers,
-frozen no-dev production dependency builds, Docker socket group handling, and
-authenticated MCP deploy health checks.
+frozen no-dev production dependency builds, Docker access through a separate
+Unix-socket app, and authenticated MCP deploy health checks.
 
 ## Documentation Map
 
 | Topic | Document |
 | --- | --- |
 | Current implemented state | [infra/docs/current_project_state.md](infra/docs/current_project_state.md) |
-| Architecture and post-MVP roadmap | [infra/docs/analysis/mcp_log_server_architecture.md](infra/docs/analysis/mcp_log_server_architecture.md) |
+| Architecture and roadmap | [infra/docs/analysis/mcp_log_server_architecture.md](infra/docs/analysis/mcp_log_server_architecture.md) |
 | Local setup, database runtime, migrations, manifest upload | [infra/docs/local_development.md](infra/docs/local_development.md) |
 | Auth, logging, MCP HTTP settings, Docker socket/runtime config | [infra/docs/runtime_configuration.md](infra/docs/runtime_configuration.md) |
 | Backup, restore, build, deploy overview | [infra/docs/operations.md](infra/docs/operations.md) |
@@ -92,6 +116,12 @@ src/
 docker/
   app/
     Dockerfile
+  docker-socket-app/
+    Dockerfile
+docker-socket-app/
+  src/
+  tests/
+  README.md
 docker-compose.yml
 docker-compose.prod.yml
 infra/docs/
@@ -114,7 +144,7 @@ Configuration is expected to come from environment variables injected by
 Doppler. Reference variables are listed in [.env.example](.env.example), but the
 runtime path should be Doppler rather than `env_file`.
 
-Start the local database and app:
+Start the local database, MCP app, and Docker socket app:
 
 ```bash
 doppler run -- docker compose up --build
@@ -182,6 +212,46 @@ After a successful deploy records `current_tag`, host-side `uv run shell` and
 already set. Set `TAG=vX.Y.Z` explicitly to run a host-side command against a
 specific production image before or outside the recorded deployment state.
 
+## Docker Access
+
+The MCP app does not mount `/var/run/docker.sock`.
+
+Docker reads go through a small separate container named `docker-socket-app`.
+That container is the only application container with the real Docker socket
+mounted. The MCP app talks to it over a private Unix socket file shared by a
+Compose volume. There is no HTTP port and no TCP listener for Docker access.
+
+```text
+MCP app
+  -> /run/docker-socket-app/gateway.sock
+  -> docker-socket-app
+  -> Docker SDK
+  -> /var/run/docker.sock
+```
+
+The socket path is configured with `DOCKER_SOCKET_APP_SOCKET_PATH`. In Compose,
+both the MCP app and `docker-socket-app` receive the same value:
+
+```text
+/run/docker-socket-app/gateway.sock
+```
+
+The named volume `docker-socket-app-run` makes that directory visible to both
+containers. The `docker-socket-app` process creates the socket file there. The
+MCP app only connects to that file.
+
+Inside the MCP code, Docker access is kept behind one transport client:
+`DockerSocketGatewayClient`. Current users are:
+
+- `LogCollectionService` for `collect_logs`
+- `InspectionToolsService` for container, volume, Compose-state, and file-read
+  inspection tools
+
+The Docker socket app accepts only fixed read-only operations such as
+`container_logs`, `container_health`, `container_file_read`, and
+`vps_containers_inventory`. It does not accept arbitrary shell commands,
+arbitrary Docker API calls, or mutation operations.
+
 ## Production Notes
 
 Production deploys should run through Doppler and the release scripts. The app
@@ -209,16 +279,11 @@ absolute paths; date templates are not expanded. For dated log files, use a
 stable current path, a host-side symlink/logrotate convention, or update the
 manifest from the owning ops repository.
 
-The local and production app containers may mount `/var/run/docker.sock` so MCP
-collection and inspection tools can read approved Docker metadata and logs. The
-app process still runs as the non-root `app` user. On Linux hosts where the
-socket group differs, pass `DOCKER_SOCKET_GID` as described in
+The production MCP app keeps Docker access behind `docker-socket-app`, using
+the same Unix socket shape described above. On Linux hosts where the real Docker
+socket group differs, pass `DOCKER_SOCKET_GID` so the `docker-socket-app`
+container can read `/var/run/docker.sock`; see
 [infra/docs/runtime_configuration.md](infra/docs/runtime_configuration.md).
-
-Docker socket access is an intentional high-trust MVP capability. The post-MVP
-hardening plan is to move direct socket access into a private Docker helper
-service while preserving the same agent-facing MCP contracts; see
-[infra/docs/analysis/mcp_log_server_architecture.md](infra/docs/analysis/mcp_log_server_architecture.md#phase-10-post-mvp-docker-privilege-isolation).
 
 ## Quality Checks
 

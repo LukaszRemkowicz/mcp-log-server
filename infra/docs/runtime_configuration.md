@@ -262,6 +262,17 @@ Manifests and logs are intentionally separate:
 
   Without that header FastMCP can reject the request as not acceptable.
 
+- `DOCKER_SOCKET_APP_SOCKET_PATH`
+  Unix socket file used by the MCP app for Docker-backed reads.
+  Required when the MCP settings module is loaded.
+
+  Compose sets this to:
+
+  - `/run/docker-socket-app/gateway.sock`
+
+  The same value is passed to `docker-socket-app`, which creates the socket
+  file. The MCP app connects to it.
+
 Run the service through Docker Compose with Doppler:
 
 ```bash
@@ -276,10 +287,23 @@ examples.
 The local Compose stack also starts a `db` service and stores its data in the
 named `postgres-data` volume.
 
-The local `app` service mounts `/var/run/docker.sock` so MCP collection and
-inspection tools can read approved Docker metadata and logs. The app process
-still runs as the non-root `app` user (`uid=999`); Compose only adds the
-container process to the Docker socket's group through `DOCKER_SOCKET_GID`.
+Docker-backed MCP tools do not mount `/var/run/docker.sock` into the MCP app.
+The Compose stack starts a separate `docker-socket-app` service for Docker
+reads. The MCP app connects to that service through the Unix socket path in
+`DOCKER_SOCKET_APP_SOCKET_PATH`.
+
+```text
+app -> /run/docker-socket-app/gateway.sock -> docker-socket-app -> /var/run/docker.sock
+```
+
+The `docker-socket-app-run` named volume is mounted into both containers at
+`/run/docker-socket-app`. The `docker-socket-app` process creates the socket
+file there; the MCP app only connects to it. The Docker socket app accepts a
+fixed set of read-only Docker operations and has no HTTP or TCP port.
+
+Only the `docker-socket-app` service mounts `/var/run/docker.sock`. On Linux,
+Compose adds the `docker-socket-app` container process to the Docker socket's
+group through `DOCKER_SOCKET_GID`.
 
 On Linux hosts where `/var/run/docker.sock` is not group-readable by group `0`,
 discover the socket group id with:
@@ -313,32 +337,22 @@ Docker volume. The release scripts do not require a host data directory or
 `POSTGRES_DATA_DIR` override. Keep database backups current before Docker volume
 cleanup or host maintenance.
 
-The production deploy script includes the fail2ban socket override by default,
-so the normal VPS path is:
+The production deploy script starts the fail2ban Unix-socket app by default, so
+the normal VPS path is:
 
 ```bash
 doppler run -- TAG=v1.2.3 infra/scripts/release/deploy.sh
 ```
 
-If the VPS should deploy without live fail2ban socket access, disable the
-override explicitly:
+Then verify that the fail2ban socket app container is running:
 
 ```bash
-doppler run -- ENABLE_FAIL2BAN_SOCKET=false TAG=v1.2.3 infra/scripts/release/deploy.sh
-```
-
-Then verify from inside the app container:
-
-```bash
-docker compose \
-  -f docker-compose.prod.yml \
-  -f docker-compose.fail2ban.yml \
-  exec app fail2ban-client -s /var/run/fail2ban/fail2ban.sock status
+docker compose -f docker-compose.prod.yml ps fail2ban-socket-app
 ```
 
 Production compose differences:
 
-- runs the `app` and `db` services
+- runs the `app`, `db`, `docker-socket-app`, and `fail2ban-socket-app` services
 - does not mount the local source tree
 - does not use `watchfiles`
 - stores Postgres data in the Compose-managed `postgres-data` Docker volume

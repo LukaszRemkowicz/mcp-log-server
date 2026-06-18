@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fail2ban-socket-app"
+version = "0.1.0"
+description = "Internal Unix-socket app for fixed fail2ban diagnostics"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3.0",
+  "pytest-asyncio>=1.3.0",
+  "ruff>=0.15.12",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fail2ban_socket_app"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

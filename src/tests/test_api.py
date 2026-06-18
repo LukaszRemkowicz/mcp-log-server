@@ -22,7 +22,8 @@ from auth.scopes import (
 )
 from core.types import LogWorkspace
 from database.models import McpCaller
-from services.docker_service import (
+from services.fail2ban_service import Fail2banActivity, Fail2banJailStatus, Fail2banServiceStatus
+from services.inspection_tools_service import (
     ContainerDetail,
     ContainerDetailEnvVar,
     ContainerDetailMount,
@@ -34,7 +35,6 @@ from services.docker_service import (
     VpsContainerInventory,
     VpsVolumeInventory,
 )
-from services.fail2ban_service import Fail2banActivity, Fail2banJailStatus, Fail2banServiceStatus
 from services.tls_certificate_service import TlsCertificateInspection
 from tests.conftest import (
     CustomJwtToken,
@@ -560,7 +560,7 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
 
     if tool_name in {"read_container_file", "stat_container_path"}:
         mocker.patch(
-            "tools.container_inspection.docker_service.stat_container_path",
+            "tools.container_inspection.inspection_tools_service.stat_container_path",
             return_value=ContainerPathStat(
                 path="/app/VERSION",
                 is_dir=False,
@@ -570,12 +570,12 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
             ),
         )
         mocker.patch(
-            "tools.container_inspection.docker_service.read_container_file",
+            "tools.container_inspection.inspection_tools_service.read_container_file",
             return_value=("release-123\n", False),
         )
     if tool_name == "inspect_containers_health":
         mocker.patch(
-            "tools.container_inspection.docker_service.inspect_container_health",
+            "tools.container_inspection.inspection_tools_service.inspect_container_health",
             return_value=ContainerHealth(
                 container_id="abc123def456",
                 container_name="backend-container",
@@ -595,7 +595,7 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
         )
     if tool_name == "inspect_container_detail":
         mocker.patch(
-            "tools.container_inspection.docker_service.inspect_container_detail",
+            "tools.container_inspection.inspection_tools_service.inspect_container_detail",
             return_value=ContainerDetail(
                 health=ContainerHealth(
                     container_id="abc123def456",
@@ -633,7 +633,7 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
         )
     if tool_name == "list_container_directory":
         mocker.patch(
-            "tools.container_inspection.docker_service.list_container_directory",
+            "tools.container_inspection.inspection_tools_service.list_container_directory",
             return_value=(
                 [
                     ContainerPathStat(
@@ -649,7 +649,7 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
         )
     if tool_name == "inspect_project_compose_state":
         mocker.patch(
-            "tools.container_inspection.docker_service.inspect_vps_containers",
+            "tools.container_inspection.inspection_tools_service.inspect_vps_containers",
             return_value=[
                 VpsContainerInventory(
                     container_id="abc123def4567890",
@@ -2075,7 +2075,7 @@ async def test_read_container_file_api_returns_file_contents(
     )
 
     mocker.patch(
-        "tools.container_inspection.docker_service.stat_container_path",
+        "tools.container_inspection.inspection_tools_service.stat_container_path",
         return_value=ContainerPathStat(
             path="/app/VERSION",
             is_dir=False,
@@ -2085,7 +2085,7 @@ async def test_read_container_file_api_returns_file_contents(
         ),
     )
     mocker.patch(
-        "tools.container_inspection.docker_service.read_container_file",
+        "tools.container_inspection.inspection_tools_service.read_container_file",
         return_value=("release-123\n", False),
     )
 
@@ -2129,7 +2129,7 @@ async def test_inspect_containers_health_api_returns_container_status(
     )
 
     mocker.patch(
-        "tools.container_inspection.docker_service.inspect_container_health",
+        "tools.container_inspection.inspection_tools_service.inspect_container_health",
         return_value=ContainerHealth(
             container_id="abc123def456",
             container_name="app-container",
@@ -2196,7 +2196,7 @@ async def test_inspect_vps_containers_api_returns_docker_ps_inventory(
     )
 
     mocker.patch(
-        "tools.container_inspection.docker_service.inspect_vps_containers",
+        "tools.container_inspection.inspection_tools_service.inspect_vps_containers",
         return_value=[
             VpsContainerInventory(
                 container_id="abc123def4567890",
@@ -2295,7 +2295,7 @@ async def test_inspect_vps_volumes_api_returns_volume_inventory(
     )
 
     mocker.patch(
-        "tools.container_inspection.docker_service.inspect_vps_volumes",
+        "tools.container_inspection.inspection_tools_service.inspect_vps_volumes",
         return_value=[
             VpsVolumeInventory(
                 volume_name="dockerpage_db_data",
@@ -2372,7 +2372,7 @@ async def test_inspect_vps_volumes_api_forwards_volume_filters(
     )
 
     inspect_mock = mocker.patch(
-        "tools.container_inspection.docker_service.inspect_vps_volumes",
+        "tools.container_inspection.inspection_tools_service.inspect_vps_volumes",
         return_value=[],
     )
 
@@ -2409,12 +2409,12 @@ async def test_inspect_vps_volumes_api_forwards_volume_filters(
     }
 
 
-async def test_inspect_tls_certificate_api_returns_site_domain_summary(
+async def test_inspect_tls_certificate_api_returns_configured_domain_summary(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
 ) -> None:
-    """Verify inspect_tls_certificate returns bounded SITE_DOMAIN certificate facts."""
+    """Verify inspect_tls_certificate returns configured domain certificate facts."""
 
     token: str = custom_jwt_token(
         "codex-agent",
@@ -2423,23 +2423,41 @@ async def test_inspect_tls_certificate_api_returns_site_domain_summary(
         {"allowed_projects": ["landingpage"], "client_type": "codex"},
     )
     mocker.patch(
-        "tools.tls.tls_certificate_service.inspect_site_certificate",
-        return_value=TlsCertificateInspection(
-            domain_key="site",
-            hostname="example.com",
-            port=443,
-            inspection_status="ok",
-            warning_level="ok",
-            subject_summary="CN=example.com",
-            issuer_summary="CN=Example CA",
-            not_before="2025-12-01T00:00:00+00:00",
-            not_after="2026-04-01T00:00:00+00:00",
-            days_until_expiry=90,
-            hostname_matches=True,
-            matched_names=["example.com"],
-            error_code=None,
-            message="TLS certificate is valid for SITE_DOMAIN.",
-        ),
+        "tools.tls.tls_certificate_service.inspect_certificates",
+        return_value=[
+            TlsCertificateInspection(
+                domain_key="site",
+                hostname="example.com",
+                port=443,
+                inspection_status="ok",
+                warning_level="ok",
+                subject_summary="CN=example.com",
+                issuer_summary="CN=Example CA",
+                not_before="2025-12-01T00:00:00+00:00",
+                not_after="2026-04-01T00:00:00+00:00",
+                days_until_expiry=90,
+                hostname_matches=True,
+                matched_names=["example.com"],
+                error_code=None,
+                message="TLS certificate is valid for SITE_DOMAIN.",
+            ),
+            TlsCertificateInspection(
+                domain_key="site_subdomain",
+                hostname="admin.example.com",
+                port=443,
+                inspection_status="warning",
+                warning_level="expired",
+                subject_summary="CN=example.com",
+                issuer_summary="CN=Example CA",
+                not_before="2025-12-01T00:00:00+00:00",
+                not_after="2026-01-01T00:00:00+00:00",
+                days_until_expiry=-1,
+                hostname_matches=True,
+                matched_names=["admin.example.com"],
+                error_code=None,
+                message="TLS certificate for SITE_DOMAIN is expired.",
+            ),
+        ],
     )
 
     response = await jsonrpc.post(
@@ -2457,12 +2475,16 @@ async def test_inspect_tls_certificate_api_returns_site_domain_summary(
     assert response.status_code == 200
     assert response.json()["result"]["isError"] is False
     assert payload["action"] == "inspect_tls_certificate"
-    assert payload["domain_key"] == "site"
-    assert payload["hostname"] == "example.com"
-    assert payload["port"] == 443
-    assert payload["inspection_status"] == "ok"
-    assert payload["warning_level"] == "ok"
-    assert payload["hostname_matches"] is True
+    assert payload["site_domain"]
+    assert payload["configured_subdomains"] == ["admin", "stage", "mcp"]
+    assert payload["inspection_status"] == "warning"
+    assert [item["hostname"] for item in payload["inspections"]] == [
+        "example.com",
+        "admin.example.com",
+    ]
+    assert payload["inspections"][0]["domain_key"] == "site"
+    assert payload["inspections"][1]["domain_key"] == "site_subdomain"
+    assert payload["inspections"][1]["warning_level"] == "expired"
 
 
 async def test_inspect_container_detail_api_returns_curated_container_metadata(
@@ -2480,7 +2502,7 @@ async def test_inspect_container_detail_api_returns_curated_container_metadata(
     )
 
     mocker.patch(
-        "tools.container_inspection.docker_service.inspect_container_detail",
+        "tools.container_inspection.inspection_tools_service.inspect_container_detail",
         return_value=ContainerDetail(
             health=ContainerHealth(
                 container_id="abc123def456",
@@ -2668,7 +2690,7 @@ async def test_stat_container_path_api_returns_file_metadata(
     )
 
     mocker.patch(
-        "tools.container_inspection.docker_service.stat_container_path",
+        "tools.container_inspection.inspection_tools_service.stat_container_path",
         return_value=ContainerPathStat(
             path="/app/VERSION",
             is_dir=False,
@@ -2721,7 +2743,7 @@ async def test_inspect_project_compose_state_api_returns_comparison(
         {"allowed_projects": ["dockerpage"]},
     )
     mocker.patch(
-        "tools.container_inspection.docker_service.inspect_vps_containers",
+        "tools.container_inspection.inspection_tools_service.inspect_vps_containers",
         return_value=[
             VpsContainerInventory(
                 container_id="abc123def4567890",
@@ -2819,7 +2841,7 @@ async def test_inspect_project_compose_state_api_requires_expected_state(
         {"allowed_projects": ["dockerpage"]},
     )
     mocker.patch(
-        "tools.container_inspection.docker_service.inspect_vps_containers",
+        "tools.container_inspection.inspection_tools_service.inspect_vps_containers",
         return_value=[],
     )
 
@@ -2869,7 +2891,7 @@ async def test_list_container_directory_api_returns_entries(
     )
 
     list_directory = mocker.patch(
-        "tools.container_inspection.docker_service.list_container_directory",
+        "tools.container_inspection.inspection_tools_service.list_container_directory",
         return_value=(
             [
                 ContainerPathStat(
