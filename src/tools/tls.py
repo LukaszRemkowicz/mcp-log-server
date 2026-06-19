@@ -15,11 +15,26 @@ from services.tls_certificate_service import (
     TlsCertificateService,
     TlsInspectionStatus,
 )
-from tools.agent_hints import INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION
-from tools.models import InspectTlsCertificatePayload, TlsCertificateInspectionPayload
+from services.traefik_tls_service import (
+    TraefikRouterTlsInspection,
+    TraefikTlsInspectionError,
+    TraefikTlsInspectionResult,
+    TraefikTlsService,
+)
+from tools.agent_hints import (
+    INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION,
+    INSPECT_TRAEFIK_TLS_CONFIGURATION_TOOL_DESCRIPTION,
+)
+from tools.models import (
+    InspectTlsCertificatePayload,
+    InspectTraefikTlsConfigurationPayload,
+    TlsCertificateInspectionPayload,
+    TraefikRouterTlsPayload,
+)
 
 logger: logging.Logger = get_logger("tools.tls")
 tls_certificate_service = TlsCertificateService()
+traefik_tls_service = TraefikTlsService()
 
 
 def _build_tls_certificate_payload(
@@ -61,6 +76,49 @@ def _build_tls_certificate_payload(
     )
 
 
+def _build_traefik_router_tls_payload(
+    result: TraefikTlsInspectionResult | TraefikTlsInspectionError,
+) -> InspectTraefikTlsConfigurationPayload:
+    """Convert service-layer Traefik TLS facts into the MCP response contract."""
+
+    if isinstance(result, TraefikTlsInspectionError):
+        return InspectTraefikTlsConfigurationPayload(
+            action="inspect_traefik_tls_configuration",
+            inspection_status="unavailable",
+            router_count=0,
+            truncated=False,
+            routers=[],
+            warnings=[result.message],
+        )
+
+    router_payloads = [_build_traefik_router_payload(router) for router in result.routers]
+    return InspectTraefikTlsConfigurationPayload(
+        action="inspect_traefik_tls_configuration",
+        inspection_status="ok",
+        router_count=len(router_payloads),
+        truncated=result.truncated,
+        routers=router_payloads,
+        warnings=[],
+    )
+
+
+def _build_traefik_router_payload(
+    router: TraefikRouterTlsInspection,
+) -> TraefikRouterTlsPayload:
+    """Convert one service-layer Traefik router row into its MCP payload."""
+
+    return TraefikRouterTlsPayload(
+        router_name=router.router_name,
+        container_name=router.container_name,
+        rule=router.rule,
+        entrypoints=router.entrypoints,
+        service=router.service,
+        tls_enabled=router.tls_enabled,
+        cert_resolver=router.cert_resolver,
+        certificate_source=router.certificate_source,
+    )
+
+
 @workflow_discoverable_tool(
     MCP_STATUS_READ_SCOPE,
     mcp_description=INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION,
@@ -77,6 +135,28 @@ async def inspect_tls_certificate() -> ToolResult:
             "tool_name": "inspect_tls_certificate",
             "hostnames": [inspection.hostname for inspection in payload.inspections],
             "inspection_status": payload.inspection_status,
+        },
+    )
+    return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
+
+
+@workflow_discoverable_tool(
+    MCP_STATUS_READ_SCOPE,
+    mcp_description=INSPECT_TRAEFIK_TLS_CONFIGURATION_TOOL_DESCRIPTION,
+)
+async def inspect_traefik_tls_configuration() -> ToolResult:
+    """Inspect sanitized Traefik router TLS runtime configuration."""
+
+    result = traefik_tls_service.inspect_router_tls()
+    payload = _build_traefik_router_tls_payload(result)
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_traefik_tls_configuration",
+            "inspection_status": payload.inspection_status,
+            "router_count": payload.router_count,
+            "truncated": payload.truncated,
         },
     )
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))

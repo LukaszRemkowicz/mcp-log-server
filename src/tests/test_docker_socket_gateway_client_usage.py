@@ -30,13 +30,23 @@ def test_log_collection_service_uses_shared_socket_gateway_client() -> None:
                         "container_name": "backend",
                         "running": True,
                         "created_at": "2026-06-17T12:00:00+00:00",
+                        "compose_labels": {
+                            "com.docker.compose.project": "portfolio",
+                            "com.docker.compose.service": "be",
+                            "com.docker.compose.oneoff": "False",
+                        },
                     }
                 ]
             }
         }
     )
 
-    result = LogCollectionService(docker_socket_client=client)._resolve_container_by_name("backend")
+    result = LogCollectionService(
+        docker_socket_client=client
+    )._resolve_container_by_compose_service(
+        compose_project="portfolio",
+        compose_service="be",
+    )
 
     assert result == "backend"
     assert client.calls == [("vps_containers_inventory", {})]

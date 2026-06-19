@@ -23,15 +23,30 @@ class SourceDefinition(BaseModel):
     retention_class: str
     default_noise_profile: str | None = None
     stream: Literal["stdout", "stderr"] | None = None
+    compose_project: str | None = None
+    compose_service: str | None = None
     inspect_path_prefixes: list[str] = Field(default_factory=list)
+    expected_producer_type: Literal["cron", "systemd", "docker", "app"] | None = None
+    scheduler_patterns: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_file_target_path_shape(self) -> SourceDefinition:
-        """Require clean absolute paths for manifest-owned file sources."""
+    def validate_source_shape(self) -> SourceDefinition:
+        """Require clean source paths and explicit Docker Compose selectors."""
+
+        compose_project = self.compose_project.strip() if self.compose_project else None
+        compose_service = self.compose_service.strip() if self.compose_service else None
+        if self.source_type == "docker":
+            if compose_project is None or compose_service is None:
+                raise ValueError(
+                    "docker sources require compose_project and compose_service selectors."
+                )
+            self.compose_project = compose_project
+            self.compose_service = compose_service
+        elif self.compose_project is not None or self.compose_service is not None:
+            raise ValueError("compose selectors are only valid for docker sources.")
 
         if self.source_type != "file":
             return self
-
         normalized_target = self.target.replace("\\", "/")
         target_parts = normalized_target.split("/")
         path_parts = target_parts[1:]
@@ -49,6 +64,37 @@ class SourceDefinition(BaseModel):
         return self
 
 
+class ProjectDeploymentMetadata(BaseModel):
+    """Optional project-level deployment provenance inputs."""
+
+    compose_files: list[str] = Field(default_factory=list)
+    current_tag_path: str | None = None
+    expected_image_repositories: dict[str, str] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_path_shapes(self) -> ProjectDeploymentMetadata:
+        """Require clean absolute paths for configured deployment files."""
+
+        paths = [*self.compose_files]
+        if self.current_tag_path is not None:
+            paths.append(self.current_tag_path)
+        for path in paths:
+            normalized_path = path.replace("\\", "/")
+            path_parts = normalized_path.split("/")[1:]
+            invalid_path = (
+                not normalized_path
+                or not normalized_path.startswith("/")
+                or normalized_path.startswith("//")
+                or normalized_path.startswith("~")
+                or _PATH_SCHEME_PATTERN.match(normalized_path) is not None
+                or any(ord(character) < 32 for character in normalized_path)
+                or any(part in {"", ".", ".."} for part in path_parts)
+            )
+            if invalid_path:
+                raise ValueError("deployment paths must be clean absolute paths.")
+        return self
+
+
 class Manifest(BaseModel):
     """Describe the core manifest for one project."""
 
@@ -56,4 +102,5 @@ class Manifest(BaseModel):
     project_summary: str
     static_asset_paths: list[str] = Field(default_factory=list)
     static_asset_extensions: list[str] = Field(default_factory=list)
+    deployment: ProjectDeploymentMetadata | None = None
     sources: list[SourceDefinition] = Field(min_length=1)

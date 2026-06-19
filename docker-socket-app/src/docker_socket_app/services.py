@@ -35,6 +35,7 @@ class DockerSocketService:
     - `container_directory_list`
     - `vps_containers_inventory`
     - `vps_volumes_inventory`
+    - `traefik_router_tls_inventory`
     """
 
     def __init__(self, backend: DockerBackend) -> None:
@@ -98,6 +99,9 @@ class DockerSocketService:
                 anonymous_only=self._optional_bool(params, "anonymous_only"),
                 name_prefix=self._optional_string(params, "name_prefix"),
             )
+        if operation == "traefik_router_tls_inventory":
+            self._reject_params(params)
+            return self.backend.traefik_router_tls_inventory()
 
         raise ProtocolException(f"Unsupported docker socket operation: {operation}")
 

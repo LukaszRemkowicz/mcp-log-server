@@ -19,6 +19,8 @@ from services.inspection_tools_service import (
     VpsContainerInventory,
     VpsVolumeInventory,
 )
+from services.project_deployment_service import ProjectDeploymentService
+from services.project_runtime_service import ProjectRuntimeService
 from tests.conftest import FakeDockerClient
 
 
@@ -67,6 +69,8 @@ def test_container_path_is_allowed_uses_manifest_inspection_prefixes(
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend container",
         parser_type="json",
         normalization_profile="application",
@@ -82,6 +86,8 @@ def test_container_path_is_allowed_rejects_parent_traversal() -> None:
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend container",
         parser_type="json",
         normalization_profile="application",
@@ -101,6 +107,8 @@ def test_resolve_container_directory_path_defaults_to_first_inspection_prefix(
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend container",
         parser_type="json",
         normalization_profile="application",
@@ -116,6 +124,8 @@ def test_resolve_container_directory_path_uses_explicit_path() -> None:
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend container",
         parser_type="json",
         normalization_profile="application",
@@ -906,13 +916,15 @@ def test_inspect_vps_containers_returns_empty_inventory(
 
 
 def test_compose_state_service_compares_expected_and_running_state() -> None:
-    """Verify Compose service identity is inferred from target container labels."""
+    """Verify Compose service identity comes from manifest selectors."""
 
     sources = [
         SourceDefinition(
             source_key="backend",
             source_type="docker",
             target="backend-container",
+            compose_project="portfolio",
+            compose_service="be",
             description="Backend container.",
             parser_type="plain_text",
             normalization_profile="app",
@@ -922,6 +934,8 @@ def test_compose_state_service_compares_expected_and_running_state() -> None:
             source_key="worker",
             source_type="docker",
             target="worker-container",
+            compose_project="portfolio",
+            compose_service="worker",
             description="Worker container.",
             parser_type="plain_text",
             normalization_profile="app",
@@ -951,7 +965,7 @@ def test_compose_state_service_compares_expected_and_running_state() -> None:
             finished_at=None,
             compose_labels={
                 "com.docker.compose.project": "portfolio",
-                "com.docker.compose.service": "backend",
+                "com.docker.compose.service": "be",
             },
             restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
             ports=[
@@ -1043,7 +1057,7 @@ def test_compose_state_service_compares_expected_and_running_state() -> None:
     assert not isinstance(result, ComposeStateUnavailable)
     assert result.compose_project == "portfolio"
     assert [service.service_name for service in result.expected_services] == [
-        "backend",
+        "be",
         "worker",
     ]
     assert result.running_containers[0].mounts[0].source_redacted is True
@@ -1054,14 +1068,14 @@ def test_compose_state_service_compares_expected_and_running_state() -> None:
     }
 
 
-def test_compose_state_service_returns_unavailable_without_expected_state() -> None:
-    """Verify the compose comparison needs a target container with Compose labels."""
+def test_compose_state_service_returns_unavailable_without_docker_sources() -> None:
+    """Verify the compose comparison needs at least one Docker source selector."""
 
     source = SourceDefinition(
-        source_key="backend",
-        source_type="docker",
-        target="backend-container",
-        description="Backend container.",
+        source_key="backend_file",
+        source_type="file",
+        target="/var/log/backend.log",
+        description="Backend file.",
         parser_type="plain_text",
         normalization_profile="app",
         retention_class="short",
@@ -1074,7 +1088,407 @@ def test_compose_state_service_returns_unavailable_without_expected_state() -> N
     )
 
     assert isinstance(result, ComposeStateUnavailable)
-    assert "matched a Compose-labelled container" in result.message
+    assert "declares Compose selectors" in result.message
+
+
+def test_compose_state_service_uses_optional_compose_selectors_without_target_match() -> None:
+    """Verify Compose selectors can anchor runtime state when target names are stale."""
+
+    source = SourceDefinition(
+        source_key="app",
+        source_type="docker",
+        target="old-mcp-app-container",
+        compose_project="mcp",
+        compose_service="app",
+        description="MCP app container.",
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+    )
+    running = [
+        VpsContainerInventory(
+            container_id="abc123def4567890",
+            short_container_id="abc123def456",
+            container_name="mcp-app-1",
+            image="mcp/app:2026-06-19",
+            command=[],
+            command_preview="",
+            created_at=None,
+            docker_status="running",
+            state="running",
+            health_status="healthy",
+            running=True,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=0,
+            started_at=None,
+            finished_at=None,
+            compose_labels={
+                "com.docker.compose.project": "mcp",
+                "com.docker.compose.service": "app",
+            },
+            restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
+            ports=[],
+            network_names=[],
+            triage_notes=[],
+        )
+    ]
+
+    result = ComposeStateService().compare(
+        project_name="mcp",
+        sources=[source],
+        running_containers=running,
+    )
+
+    assert not isinstance(result, ComposeStateUnavailable)
+    assert result.compose_project == "mcp"
+    assert result.expected_services[0].service_name == "app"
+    assert result.running_containers[0].container_name == "mcp-app-1"
+
+
+def test_project_runtime_service_returns_sanitized_env_and_database_shape() -> None:
+    """Verify project runtime inspection exposes DB shape without secret values."""
+
+    source = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
+        description="Backend container.",
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+    )
+    container = VpsContainerInventory(
+        container_id="abc123def4567890",
+        short_container_id="abc123def456",
+        container_name="backend-container",
+        image="portfolio/backend:2026-05-17",
+        command=[],
+        command_preview="",
+        created_at="2026-05-17T10:00:00Z",
+        docker_status="running",
+        state="running",
+        health_status="healthy",
+        running=True,
+        restarting=False,
+        paused=False,
+        dead=False,
+        exit_code=0,
+        error="",
+        restart_count=1,
+        started_at="2026-05-17T10:01:00Z",
+        finished_at=None,
+        compose_labels={
+            "com.docker.compose.project": "portfolio",
+            "com.docker.compose.service": "backend",
+        },
+        restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
+        ports=[],
+        network_names=["portfolio_default"],
+        triage_notes=[],
+        env_var_names=[
+            "DATABASE_HOST",
+            "DATABASE_PORT",
+            "DATABASE_NAME",
+            "DATABASE_USER",
+            "DATABASE_PASSWORD",
+            "NODE_ENV",
+            "CUSTOM_VALUE",
+        ],
+        mounts=[],
+    )
+    detail = ContainerDetail(
+        health=ContainerHealth(
+            container_id=container.container_id,
+            container_name=container.container_name,
+            image=container.image,
+            docker_status=container.docker_status,
+            health_status=container.health_status,
+            running=True,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=1,
+            started_at=container.started_at,
+            finished_at=None,
+        ),
+        created_at=container.created_at,
+        env_var_names=container.env_var_names,
+        env_vars=[
+            ContainerDetailEnvVar(
+                name="DATABASE_HOST",
+                value="db",
+                value_redacted=False,
+                secret=False,
+            ),
+            ContainerDetailEnvVar(
+                name="DATABASE_PORT",
+                value="5432",
+                value_redacted=False,
+                secret=False,
+            ),
+            ContainerDetailEnvVar(
+                name="DATABASE_NAME",
+                value="app",
+                value_redacted=False,
+                secret=False,
+            ),
+            ContainerDetailEnvVar(
+                name="DATABASE_USER",
+                value="app_user",
+                value_redacted=False,
+                secret=False,
+            ),
+            ContainerDetailEnvVar(
+                name="DATABASE_PASSWORD",
+                value=None,
+                value_redacted=True,
+                secret=True,
+            ),
+            ContainerDetailEnvVar(
+                name="NODE_ENV",
+                value="production",
+                value_redacted=False,
+                secret=False,
+            ),
+            ContainerDetailEnvVar(
+                name="CUSTOM_VALUE",
+                value=None,
+                value_redacted=True,
+                secret=False,
+            ),
+        ],
+        label_keys=[],
+        compose_labels=container.compose_labels,
+        restart_policy=container.restart_policy,
+        command=[],
+        entrypoint=[],
+        working_dir=None,
+        user=None,
+        ports=[],
+        mounts=[],
+        networks=[],
+        health_log=[],
+    )
+
+    result = ProjectRuntimeService().inspect(
+        project_name="landingpage",
+        sources=[source],
+        running_containers=[container],
+        container_details={"backend-container": detail},
+    )
+
+    assert not isinstance(result, ComposeStateUnavailable)
+    assert result.compose_project == "portfolio"
+    assert result.containers[0].selected_env == [
+        ContainerDetailEnvVar(
+            name="DATABASE_HOST",
+            value="db",
+            value_redacted=False,
+            secret=False,
+        ),
+        ContainerDetailEnvVar(
+            name="DATABASE_NAME",
+            value="app",
+            value_redacted=False,
+            secret=False,
+        ),
+        ContainerDetailEnvVar(
+            name="DATABASE_PORT",
+            value="5432",
+            value_redacted=False,
+            secret=False,
+        ),
+        ContainerDetailEnvVar(
+            name="DATABASE_USER",
+            value="app_user",
+            value_redacted=False,
+            secret=False,
+        ),
+        ContainerDetailEnvVar(
+            name="NODE_ENV",
+            value="production",
+            value_redacted=False,
+            secret=False,
+        ),
+    ]
+    assert result.containers[0].secret_env_names == ["DATABASE_PASSWORD"]
+    assert result.containers[0].database.host == "db"
+    assert result.containers[0].database.port == "5432"
+    assert result.containers[0].database.name == "app"
+    assert result.containers[0].database.user == "app_user"
+    assert "hidden" not in result.model_dump_json()
+
+
+def test_project_deployment_service_reports_running_image_tag_mismatch(
+    tmp_path,
+) -> None:
+    """Verify deployment provenance compares expected tag with running images."""
+
+    tag_file = tmp_path / "current_tag"
+    tag_file.write_text("v2.0.0\n", encoding="utf-8")
+    source = SourceDefinition(
+        source_key="app",
+        source_type="docker",
+        target="mcp-app-1",
+        compose_project="mcp-prod",
+        compose_service="app",
+        description="MCP app.",
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+    )
+    container = VpsContainerInventory(
+        container_id="abc123def4567890",
+        short_container_id="abc123def456",
+        container_name="mcp-app-1",
+        image="prod-mcp-log-server:v1.9.0",
+        command=[],
+        command_preview="",
+        created_at="2026-05-17T10:00:00Z",
+        docker_status="running",
+        state="running",
+        health_status="healthy",
+        running=True,
+        restarting=False,
+        paused=False,
+        dead=False,
+        exit_code=0,
+        error="",
+        restart_count=0,
+        started_at="2026-05-17T10:01:00Z",
+        finished_at=None,
+        compose_labels={
+            "com.docker.compose.project": "mcp-prod",
+            "com.docker.compose.service": "app",
+        },
+        restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
+        ports=[],
+        network_names=["mcp-prod_default"],
+        triage_notes=[],
+        env_var_names=[],
+        mounts=[],
+    )
+
+    result = ProjectDeploymentService().inspect(
+        project_name="mcp",
+        sources=[source],
+        compose_files=["/opt/mcp/docker-compose.prod.yml"],
+        current_tag_path=str(tag_file),
+        expected_image_repositories={"app": "prod-mcp-log-server"},
+        running_containers=[container],
+    )
+
+    assert not isinstance(result, ComposeStateUnavailable)
+    assert result.current_tag.value == "v2.0.0"
+    assert result.current_tag.path == str(tag_file)
+    assert result.expected_services[0].service_name == "app"
+    assert result.running_containers[0].image_repository == "prod-mcp-log-server"
+    assert result.running_containers[0].image_tag == "v1.9.0"
+    assert [warning.warning_code for warning in result.warnings] == ["image_tag_mismatch"]
+    assert result.warnings[0].expected == "v2.0.0"
+    assert result.warnings[0].actual == "v1.9.0"
+
+
+def test_project_deployment_service_reports_matching_deployment(tmp_path) -> None:
+    """Verify matching deployment facts are returned without mismatch warnings."""
+
+    tag_file = tmp_path / "current_tag"
+    tag_file.write_text("v2.0.0\n", encoding="utf-8")
+    source = SourceDefinition(
+        source_key="app",
+        source_type="docker",
+        target="mcp-app-1",
+        compose_project="mcp-prod",
+        compose_service="app",
+        description="MCP app.",
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+    )
+    container = VpsContainerInventory(
+        container_id="abc123def4567890",
+        short_container_id="abc123def456",
+        container_name="mcp-app-1",
+        image="prod-mcp-log-server:v2.0.0@sha256:abc",
+        command=[],
+        command_preview="",
+        created_at="2026-05-17T10:00:00Z",
+        docker_status="running",
+        state="running",
+        health_status="healthy",
+        running=True,
+        restarting=False,
+        paused=False,
+        dead=False,
+        exit_code=0,
+        error="",
+        restart_count=0,
+        started_at="2026-05-17T10:01:00Z",
+        finished_at=None,
+        compose_labels={
+            "com.docker.compose.project": "mcp-prod",
+            "com.docker.compose.service": "app",
+        },
+        restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
+        ports=[],
+        network_names=["mcp-prod_default"],
+        triage_notes=[],
+        env_var_names=[],
+        mounts=[],
+    )
+
+    result = ProjectDeploymentService().inspect(
+        project_name="mcp",
+        sources=[source],
+        compose_files=["/opt/mcp/docker-compose.prod.yml"],
+        current_tag_path=str(tag_file),
+        expected_image_repositories={"app": "prod-mcp-log-server"},
+        running_containers=[container],
+    )
+
+    assert not isinstance(result, ComposeStateUnavailable)
+    assert result.current_tag.status == "ok"
+    assert result.running_containers[0].image_digest == "sha256:abc"
+    assert result.warnings == []
+
+
+def test_project_deployment_service_reports_missing_tag_and_running_service() -> None:
+    """Verify missing configured tag files and absent services are explicit."""
+
+    source = SourceDefinition(
+        source_key="app",
+        source_type="docker",
+        target="mcp-app-1",
+        compose_project="mcp-prod",
+        compose_service="app",
+        description="MCP app.",
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+    )
+
+    result = ProjectDeploymentService().inspect(
+        project_name="mcp",
+        sources=[source],
+        compose_files=["/opt/mcp/docker-compose.prod.yml"],
+        current_tag_path="/tmp/mcp-log-server-test-missing-tag",
+        expected_image_repositories={"app": "prod-mcp-log-server"},
+        running_containers=[],
+    )
+
+    assert not isinstance(result, ComposeStateUnavailable)
+    assert [warning.warning_code for warning in result.warnings] == [
+        "expected_service_not_running",
+        "current_tag_missing",
+    ]
 
 
 @pytest.mark.skip(reason="Fixed Docker operations now live in socket app.")

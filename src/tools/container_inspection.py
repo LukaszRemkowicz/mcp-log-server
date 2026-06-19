@@ -19,6 +19,8 @@ It exposes only deterministic, read-only inspection primitives:
 - `list_container_directory`
 - `inspect_containers_health`
 - `inspect_container_detail`
+- `inspect_project_runtime`
+- `inspect_project_deployment`
 """
 
 from __future__ import annotations
@@ -59,11 +61,15 @@ from services.inspection_tools_service import (
     VpsContainerInventory,
     VpsVolumeInventory,
 )
+from services.project_deployment_service import ProjectDeploymentService
 from services.project_manifest import ProjectManifestError, ProjectManifestService
+from services.project_runtime_service import ProjectRuntimeService
 from tools.agent_hints import (
     INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
     INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
     INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION,
+    INSPECT_PROJECT_DEPLOYMENT_TOOL_DESCRIPTION,
+    INSPECT_PROJECT_RUNTIME_TOOL_DESCRIPTION,
     INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
     INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
@@ -99,6 +105,8 @@ logger: logging.Logger = get_logger("tools.container_inspection")
 manifest_service = ProjectManifestService()
 inspection_tools_service = InspectionToolsService()
 compose_state_service = ComposeStateService()
+project_deployment_service = ProjectDeploymentService(compose_state_service)
+project_runtime_service = ProjectRuntimeService(compose_state_service)
 READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
     readOnlyHint=True,
     destructiveHint=False,
@@ -534,7 +542,7 @@ def create_vps_volume_inventory_payload(
 def create_expected_compose_service_payload(
     service: ExpectedComposeService,
 ) -> ExpectedComposeServicePayload:
-    """Convert inferred Compose service identity into an MCP payload row."""
+    """Convert manifest-declared Compose service identity into an MCP payload row."""
 
     return ExpectedComposeServicePayload(
         source_key=service.source_key,
@@ -766,6 +774,174 @@ async def inspect_project_compose_state(
         },
     )
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
+
+
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=INSPECT_PROJECT_RUNTIME_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
+)
+@project_authorized_tool
+async def inspect_project_runtime(
+    project_name: str | None = None,
+) -> ToolResult:
+    """Inspect sanitized runtime configuration for one Compose-backed project."""
+
+    assert project_name is not None
+    manifest = _get_authorized_manifest(project_name)
+    if manifest is None:
+        manifest_error = _build_unknown_project_manifest_error(project_name)
+        return build_container_inspection_error_result(
+            action="inspect_project_runtime",
+            message=manifest_error.message,
+            requested_project_name=project_name,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    containers = inspection_tools_service.inspect_vps_containers()
+    if isinstance(containers, InspectionToolsServiceError):
+        return build_container_inspection_error_result(
+            action="inspect_project_runtime",
+            message=containers.message,
+            requested_project_name=project_name,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    preliminary = compose_state_service.compare(
+        project_name=manifest.project_key,
+        sources=manifest.sources,
+        running_containers=containers,
+    )
+    if isinstance(preliminary, ComposeStateUnavailable):
+        return build_container_inspection_error_result(
+            action="inspect_project_runtime",
+            message=preliminary.message,
+            requested_project_name=project_name,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    compose_projects = {service.compose_project for service in preliminary.expected_services}
+    detail_by_container: dict[str, ContainerDetail] = {}
+    for container in containers:
+        if container.compose_labels.get("com.docker.compose.project") not in compose_projects:
+            continue
+        detail = inspection_tools_service.inspect_container_detail(container.container_name)
+        if isinstance(detail, InspectionToolsServiceError):
+            continue
+        detail_by_container[container.container_name] = detail
+
+    inspection = project_runtime_service.inspect(
+        project_name=manifest.project_key,
+        sources=manifest.sources,
+        running_containers=containers,
+        container_details=detail_by_container,
+    )
+    if isinstance(inspection, ComposeStateUnavailable):
+        return build_container_inspection_error_result(
+            action="inspect_project_runtime",
+            message=inspection.message,
+            requested_project_name=project_name,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    payload = {
+        "action": "inspect_project_runtime",
+        **inspection.model_dump(mode="json"),
+    }
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_project_runtime",
+            "project_name": payload["project_name"],
+            "compose_project": payload["compose_project"],
+            "container_count": len(payload["containers"]),
+            "warning_count": len(payload["warnings"]),
+        },
+    )
+    return ToolResult(content=[], structured_content=payload)
+
+
+@workflow_discoverable_tool(
+    CONTAINER_FILES_READ_SCOPE,
+    mcp_description=INSPECT_PROJECT_DEPLOYMENT_TOOL_DESCRIPTION,
+    annotations=READ_ONLY_TOOL_ANNOTATIONS,
+)
+@project_authorized_tool
+async def inspect_project_deployment(
+    project_name: str | None = None,
+) -> ToolResult:
+    """Inspect expected-vs-running deployment image provenance."""
+
+    assert project_name is not None
+    manifest = _get_authorized_manifest(project_name)
+    if manifest is None:
+        manifest_error = _build_unknown_project_manifest_error(project_name)
+        return build_container_inspection_error_result(
+            action="inspect_project_deployment",
+            message=manifest_error.message,
+            requested_project_name=project_name,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    containers = inspection_tools_service.inspect_vps_containers()
+    if isinstance(containers, InspectionToolsServiceError):
+        return build_container_inspection_error_result(
+            action="inspect_project_deployment",
+            message=containers.message,
+            requested_project_name=project_name,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    deployment = manifest.deployment
+    inspection = project_deployment_service.inspect(
+        project_name=manifest.project_key,
+        sources=manifest.sources,
+        compose_files=deployment.compose_files if deployment is not None else [],
+        current_tag_path=deployment.current_tag_path if deployment is not None else None,
+        expected_image_repositories=(
+            deployment.expected_image_repositories if deployment is not None else {}
+        ),
+        running_containers=containers,
+    )
+    if isinstance(inspection, ComposeStateUnavailable):
+        return build_container_inspection_error_result(
+            action="inspect_project_deployment",
+            message=inspection.message,
+            requested_project_name=project_name,
+            source_key=None,
+            path=None,
+            settings=settings,
+        )
+
+    payload = {
+        "action": "inspect_project_deployment",
+        **inspection.model_dump(mode="json"),
+    }
+    logger.info(
+        "tool result",
+        extra={
+            "event": "tool_result",
+            "tool_name": "inspect_project_deployment",
+            "project_name": payload["project_name"],
+            "compose_project": payload["compose_project"],
+            "running_container_count": len(payload["running_containers"]),
+            "warning_count": len(payload["warnings"]),
+        },
+    )
+    return ToolResult(content=[], structured_content=payload)
 
 
 @workflow_discoverable_tool(

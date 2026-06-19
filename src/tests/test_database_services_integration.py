@@ -69,6 +69,8 @@ async def test_database_services_round_trip_against_real_postgres() -> None:
                 source_key="backend",
                 source_type="docker",
                 target="integration-backend",
+                compose_project=project_key,
+                compose_service="backend",
                 description="Backend integration logs.",
                 parser_type="python_json",
                 normalization_profile="backend_app",

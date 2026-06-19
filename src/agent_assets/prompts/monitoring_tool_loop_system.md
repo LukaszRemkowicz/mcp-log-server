@@ -25,6 +25,16 @@ Decision contract:
   real application/admin/API routes, and `owasp_security` is listed as an
   optional skill but has not been read yet, return `action=read_skills` for
   `owasp_security` before `final_report`.
+- When collect_logs reports unavailable sources or provenance_diagnostics,
+  use the recommended project-scoped provenance tools before treating that
+  source as healthy, idle, or empty. Start with `explain_project_source`; use
+  `inspect_project_scheduled_jobs` for cron/systemd producers, file inspection
+  tools for file sources, and `inspect_project_runtime` or
+  `inspect_project_deployment` for Docker/Compose runtime questions.
+- Distinguish configured-but-unavailable sources from producer absence,
+  producer not-run evidence, producer wrote-elsewhere evidence, and empty or
+  unreadable live files. State unresolved coverage gaps separately from
+  observed log findings.
 - Keep detailed interpretation inside retrieved skill text and deterministic
   tool results, not unstated assumptions.
 - If no optional skill is relevant and evidence is sufficient, finish with
