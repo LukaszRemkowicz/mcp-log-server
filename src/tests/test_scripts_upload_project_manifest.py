@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 
 from cli.commands import upload_project_manifest as upload_command
 from cli.main import app
+from database.schemas import ProjectManifestCreate, ProjectManifestUpdate
 
 runner = CliRunner()
 
@@ -23,30 +24,34 @@ class FakeProjectManifestService:
     def __init__(self) -> None:
         self.uploaded_project_keys: list[str] = []
         self.updated_project_keys: list[str] = []
+        self.created_payloads: list[ProjectManifestCreate] = []
+        self.updated_payloads: list[ProjectManifestUpdate] = []
         self.existing_project_keys: set[str] = set()
 
-    async def exists(self, project_key):
+    async def exists(self, project_key: str) -> bool:
         """Return whether the fake manifest row exists."""
 
         return project_key in self.existing_project_keys
 
-    async def create(self, payload):
+    async def create(self, payload: ProjectManifestCreate) -> SimpleNamespace:
         """Pretend to create one manifest."""
 
         self.existing_project_keys.add(payload.project_key)
         self.uploaded_project_keys.append(payload.project_key)
+        self.created_payloads.append(payload)
         return SimpleNamespace(id=uuid4())
 
     @staticmethod
-    async def get(project_key):
+    async def get(project_key: str) -> SimpleNamespace:
         """Return a fake existing row."""
 
         return SimpleNamespace(id=uuid4(), project_key=project_key)
 
-    async def update(self, payload):
+    async def update(self, payload: ProjectManifestUpdate) -> SimpleNamespace:
         """Pretend to update one manifest."""
 
         self.updated_project_keys.append(str(payload.pk))
+        self.updated_payloads.append(payload)
         return SimpleNamespace(id=payload.pk)
 
 
@@ -89,6 +94,40 @@ def _write_manifest(manifests_dir, project_key: str) -> None:
     )
 
 
+def _write_manifest_with_deployment(manifests_dir, project_key: str) -> None:
+    """Write one valid manifest fixture with deployment metadata."""
+
+    (manifests_dir / f"{project_key}.json").write_text(
+        f"""{{
+  "project_key": "{project_key}",
+  "project_summary": "Test project.",
+  "static_asset_paths": ["/static/"],
+  "static_asset_extensions": [".css"],
+  "deployment": {{
+    "compose_files": ["/opt/{project_key}/docker-compose.prod.yml"],
+    "current_tag_path": "/var/lib/{project_key}/prod/current_tag",
+    "expected_image_repositories": {{
+      "backend": "{project_key}-backend"
+    }}
+  }},
+  "sources": [
+    {{
+      "source_key": "backend",
+      "source_type": "docker",
+      "target": "{project_key}-backend",
+      "compose_project": "{project_key}",
+      "compose_service": "backend",
+      "description": "Backend logs.",
+      "parser_type": "python_json",
+      "normalization_profile": "backend_app",
+      "retention_class": "hot"
+    }}
+  ]
+}}""",
+        encoding="utf-8",
+    )
+
+
 def test_upload_project_manifest_uploads_one_project(monkeypatch, tmp_path) -> None:
     manifests_dir = tmp_path / "manifests"
     manifests_dir.mkdir()
@@ -106,6 +145,30 @@ def test_upload_project_manifest_uploads_one_project(monkeypatch, tmp_path) -> N
     assert fake_service.uploaded_project_keys == ["landingpage"]
     assert "Created project manifest landingpage (sources: 1, row_id:" in result.output
     assert "Upload summary: created 1, already existing 0, total 1." in result.output
+
+
+def test_upload_project_manifest_persists_deployment_metadata(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    manifests_dir = tmp_path / "manifests"
+    manifests_dir.mkdir()
+    _write_manifest_with_deployment(manifests_dir, "landingpage")
+    fake_service = FakeProjectManifestService()
+
+    monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
+
+    result = runner.invoke(
+        app,
+        ["upload-project-manifest", "--path", str(manifests_dir), "landingpage"],
+    )
+
+    assert result.exit_code == 0
+    assert fake_service.created_payloads[0].deployment == {
+        "compose_files": ["/opt/landingpage/docker-compose.prod.yml"],
+        "current_tag_path": "/var/lib/landingpage/prod/current_tag",
+        "expected_image_repositories": {"backend": "landingpage-backend"},
+    }
 
 
 def test_upload_project_manifest_uploads_all_projects(monkeypatch, tmp_path) -> None:
@@ -178,6 +241,37 @@ def test_update_project_manifest_updates_existing_project(
     assert result.exit_code == 0
     assert len(fake_service.updated_project_keys) == 1
     assert "Updated project manifest landingpage (sources: 1, row_id:" in result.output
+
+
+def test_update_project_manifest_persists_deployment_metadata(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    manifests_dir = tmp_path / "manifests"
+    manifests_dir.mkdir()
+    _write_manifest_with_deployment(manifests_dir, "landingpage")
+    fake_service = FakeProjectManifestService()
+    fake_service.existing_project_keys.add("landingpage")
+
+    monkeypatch.setattr(upload_command, "ProjectManifestService", lambda: fake_service)
+
+    result = runner.invoke(
+        app,
+        [
+            "update-project-manifest",
+            "--path",
+            str(manifests_dir),
+            "--project",
+            "landingpage",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert fake_service.updated_payloads[0].deployment == {
+        "compose_files": ["/opt/landingpage/docker-compose.prod.yml"],
+        "current_tag_path": "/var/lib/landingpage/prod/current_tag",
+        "expected_image_repositories": {"backend": "landingpage-backend"},
+    }
 
 
 def test_update_project_manifest_updates_all_existing_projects(

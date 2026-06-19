@@ -8,6 +8,7 @@
 # Typical usage:
 #   TAG=v0.1.0 doppler run -- infra/scripts/release/deploy.sh
 #   AUTO_APPROVE=true TAG=v0.1.0 doppler run -- infra/scripts/release/deploy.sh
+#   TAG=v0.1.0 doppler run -- infra/scripts/release/deploy.sh --emergency
 #
 # What this script does:
 #   - validates Compose configuration and required production secrets
@@ -32,6 +33,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../utils.sh
 source "$SCRIPT_DIR/../utils.sh"
 
+while (($#)); do
+    case "$1" in
+        --emergency)
+            EMERGENCY=true
+            ;;
+        *)
+            log_error "Unknown deploy argument: $1"
+            exit 1
+            ;;
+    esac
+    shift
+done
+
 PROJECT_DIR="$(get_project_dir)"
 ENVIRONMENT="$(normalize_environment "${ENVIRONMENT:-prod}")"
 validate_release_environment "$ENVIRONMENT"
@@ -50,6 +64,7 @@ LOCK_DIR="$STATE_DIR/deploy.lock"
 SKIP_BACKUP="${SKIP_BACKUP:-false}"
 SKIP_MIGRATE="${SKIP_MIGRATE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
+EMERGENCY="${EMERGENCY:-false}"
 DATABASE_NAME="${DATABASE_NAME:-mcp_log_server}"
 DATABASE_USER="${DATABASE_USER:-mcp_log_server}"
 DATABASE_PASSWORD="${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}"
@@ -104,6 +119,9 @@ printf "🐳 Fail2ban socket app image: %s\n" "$FAIL2BAN_SOCKET_APP_IMAGE_NAME"
 printf "🐳 Docker socket GID: %s\n" "$DOCKER_SOCKET_GID"
 printf "🧾 Fail2ban log GID: %s\n" "$FAIL2BAN_LOG_GID"
 printf "📁 Project manifests host path: %s\n" "$PROJECT_MANIFESTS_HOST_PATH"
+if [[ "$EMERGENCY" == "true" ]]; then
+    log_warn "Emergency mode enabled; deploy state and health checks still run normally."
+fi
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 printf "📁 State directory: %s\n" "$STATE_DIR"
 

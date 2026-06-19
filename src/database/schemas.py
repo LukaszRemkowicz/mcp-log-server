@@ -78,6 +78,7 @@ class ProjectManifestCreate(BaseModel):
     project_summary: str
     static_asset_paths: list[str]
     static_asset_extensions: list[str]
+    deployment: dict[str, Any] | None = None
     sources: list[dict[str, Any]]
 
 
@@ -88,6 +89,7 @@ class ProjectManifestUpdate(BaseModel):
     project_summary: str | None = None
     static_asset_paths: list[str] | None = None
     static_asset_extensions: list[str] | None = None
+    deployment: dict[str, Any] | None = None
     sources: list[dict[str, Any]] | None = None
 
 

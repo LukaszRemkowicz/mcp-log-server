@@ -3275,7 +3275,6 @@ async def test_inspect_project_deployment_api_returns_image_provenance(
     assert [warning["warning_code"] for warning in payload["warnings"]] == [
         "expected_service_not_running",
         "expected_service_not_running",
-        "current_tag_not_configured",
     ]
 
 

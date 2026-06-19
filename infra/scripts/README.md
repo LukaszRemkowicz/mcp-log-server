@@ -171,6 +171,10 @@ For non-interactive automation, pass approval explicitly:
 AUTO_APPROVE=true TAG=v1.2.3 infra/scripts/release/deploy.sh
 ```
 
+`deploy.sh` also accepts `--emergency` for interface symmetry with
+`release.sh`. Emergency mode does not bypass deploy confirmation, backups,
+migrations, health checks, or `current_tag` recording.
+
 Deploy behavior:
 
 - verifies the local MCP app, Docker socket app, and fail2ban socket app images
