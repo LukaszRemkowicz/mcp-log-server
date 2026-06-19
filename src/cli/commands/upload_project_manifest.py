@@ -61,6 +61,9 @@ def _create_payload(manifest: Manifest) -> ProjectManifestCreate:
         project_summary=manifest.project_summary,
         static_asset_paths=manifest.static_asset_paths,
         static_asset_extensions=manifest.static_asset_extensions,
+        deployment=(
+            manifest.deployment.model_dump(mode="json") if manifest.deployment is not None else None
+        ),
         sources=[source.model_dump(mode="json") for source in manifest.sources],
     )
 
@@ -78,6 +81,9 @@ async def _update_payload(
         project_summary=manifest.project_summary,
         static_asset_paths=manifest.static_asset_paths,
         static_asset_extensions=manifest.static_asset_extensions,
+        deployment=(
+            manifest.deployment.model_dump(mode="json") if manifest.deployment is not None else None
+        ),
         sources=[source.model_dump(mode="json") for source in manifest.sources],
     )
 

@@ -373,6 +373,10 @@ class ProjectManifest(DatabaseModel):
         default=list,
         description="Static asset file extensions from the manifest used for noise classification.",
     )
+    deployment: fields.Field[dict[str, Any] | None] = fields.JSONField(
+        null=True,
+        description="Optional deployment provenance metadata from the manifest.",
+    )
     sources: fields.Field[list[dict[str, Any]]] = fields.JSONField(
         description="List of source definitions with the same shape as Manifest.sources.",
     )

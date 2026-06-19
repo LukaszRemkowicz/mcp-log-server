@@ -110,6 +110,7 @@ class ProjectManifestFactory(TortoiseModelFactory):
     project_summary = factory.Sequence(lambda value: f"Test project {value}.")
     static_asset_paths = factory.LazyFunction(list)
     static_asset_extensions = factory.LazyFunction(list)
+    deployment = None
     sources = factory.LazyFunction(list)
 
     @classmethod
@@ -122,6 +123,7 @@ class ProjectManifestFactory(TortoiseModelFactory):
             project_summary=obj.project_summary,
             static_asset_paths=obj.static_asset_paths,
             static_asset_extensions=obj.static_asset_extensions,
+            deployment=obj.deployment,
             sources=obj.sources,
         )
 

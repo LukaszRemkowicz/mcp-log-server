@@ -46,16 +46,23 @@ validate_release_environment "$ENVIRONMENT"
 TAG="${TAG:-$(git -C "$PROJECT_DIR" describe --tags --exact-match 2>/dev/null || true)}"
 validate_tag "$TAG"
 export ENVIRONMENT TAG EMERGENCY
+child_args=()
+if [[ "${EMERGENCY:-false}" == "true" ]]; then
+    child_args+=(--emergency)
+fi
 
 log_header "Releasing ${ENVIRONMENT}-mcp-log-server:${TAG}"
 log_info "Environment: $ENVIRONMENT"
 log_info "Release tag: $TAG"
 log_info "Project root: $PROJECT_DIR"
+if [[ "${EMERGENCY:-false}" == "true" ]]; then
+    log_warn "Emergency mode enabled: release will allow build from a dirty working tree."
+fi
 
 log_step 1 2 "Build release image"
-"$SCRIPT_DIR/build.sh"
+"$SCRIPT_DIR/build.sh" "${child_args[@]}"
 
 log_step 2 2 "Deploy release image"
-"$SCRIPT_DIR/deploy.sh"
+"$SCRIPT_DIR/deploy.sh" "${child_args[@]}"
 
 log_success "Release complete: ${ENVIRONMENT}-mcp-log-server:${TAG}"
