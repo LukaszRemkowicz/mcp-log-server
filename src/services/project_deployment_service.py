@@ -245,7 +245,8 @@ class ProjectDeploymentService:
         current_tag: DeploymentCurrentTag,
     ) -> list[DeploymentWarning]:
         warnings: list[DeploymentWarning] = []
-        running_by_service = {container.service_name: container for container in running_containers}
+        active_containers = [container for container in running_containers if container.running]
+        running_by_service = {container.service_name: container for container in active_containers}
         for expected_service in expected_services:
             container = running_by_service.get(expected_service.service_name)
             if container is None:
