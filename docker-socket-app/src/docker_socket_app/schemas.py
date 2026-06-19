@@ -109,3 +109,7 @@ class DockerBackend(ABC):
         name_prefix: str | None = None,
     ) -> dict[str, Any]:
         """Return bounded and redacted Docker volume inventory."""
+
+    @abstractmethod
+    def traefik_router_tls_inventory(self) -> dict[str, Any]:
+        """Return bounded and sanitized Traefik router TLS inventory."""

@@ -570,6 +570,34 @@ class InspectTlsCertificatePayload(BaseModel):
     inspections: list[TlsCertificateInspectionPayload]
 
 
+class TraefikRouterTlsPayload(BaseModel):
+    """Describe one sanitized Traefik router TLS inspection result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    router_name: str
+    container_name: str
+    rule: str | None
+    entrypoints: list[str]
+    service: str | None
+    tls_enabled: bool
+    cert_resolver: str | None
+    certificate_source: Literal["acme_resolver", "static_or_default", "not_tls"]
+
+
+class InspectTraefikTlsConfigurationPayload(BaseModel):
+    """Structured response returned by `inspect_traefik_tls_configuration`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_traefik_tls_configuration"]
+    inspection_status: Literal["ok", "unavailable"]
+    router_count: int
+    truncated: bool
+    routers: list[TraefikRouterTlsPayload]
+    warnings: list[str]
+
+
 class InspectProxyActivityPayload(BaseModel):
     """Structured response returned by `inspect_proxy_activity`."""
 

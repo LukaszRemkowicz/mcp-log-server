@@ -33,6 +33,7 @@ from tools.agent_hints import (
     INSPECT_PROJECT_SCHEDULED_JOBS_TOOL_DESCRIPTION,
     INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION,
     INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION,
+    INSPECT_TRAEFIK_TLS_CONFIGURATION_TOOL_DESCRIPTION,
     INSPECT_VPS_CONTAINERS_TOOL_DESCRIPTION,
     INSPECT_VPS_VOLUMES_TOOL_DESCRIPTION,
     LIST_CONTAINER_DIRECTORY_TOOL_DESCRIPTION,
@@ -96,6 +97,7 @@ def test_application_registers_expected_mcp_components(
         assert "close_agent_session" in tool_names
         assert "inspect_live_fail2ban_activity" in tool_names
         assert "inspect_tls_certificate" in tool_names
+        assert "inspect_traefik_tls_configuration" in tool_names
         assert "get_mcp_service_status" in tool_names
         assert "get_mcp_health_check" in tool_names
         assert "list_workflow_skills" not in tool_names
@@ -195,6 +197,10 @@ def test_application_registers_expected_mcp_components(
         )
         assert any(
             item["tool_name"] == "inspect_tls_certificate" for item in bootstrap_text["tools"]
+        )
+        assert any(
+            item["tool_name"] == "inspect_traefik_tls_configuration"
+            for item in bootstrap_text["tools"]
         )
         assert any(item["tool_name"] == "read_project_manifest" for item in bootstrap_text["tools"])
         assert any(
@@ -339,6 +345,12 @@ def test_application_registers_expected_mcp_components(
         assert app_fail2ban_tool.description == INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION
         app_tls_tool = next(tool for tool in tools if tool.name == "inspect_tls_certificate")
         assert app_tls_tool.description == INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION
+        app_traefik_tls_tool = next(
+            tool for tool in tools if tool.name == "inspect_traefik_tls_configuration"
+        )
+        assert (
+            app_traefik_tls_tool.description == INSPECT_TRAEFIK_TLS_CONFIGURATION_TOOL_DESCRIPTION
+        )
         app_manifest_tool = next(tool for tool in tools if tool.name == "read_project_manifest")
         assert app_manifest_tool.description == READ_PROJECT_MANIFEST_TOOL_DESCRIPTION
         app_explain_source_tool = next(

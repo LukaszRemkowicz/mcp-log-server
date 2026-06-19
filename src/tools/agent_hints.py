@@ -97,6 +97,13 @@ INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION = (
     "not modify DNS, Traefik, ACME, or certificate state."
 )
 
+INSPECT_TRAEFIK_TLS_CONFIGURATION_TOOL_DESCRIPTION = (
+    "Inspect sanitized Traefik HTTP router TLS configuration from Docker labels. "
+    "Returns router name, container name, router rule, entrypoints, service, TLS "
+    "enabled state, certificate resolver, and derived certificate source without "
+    "exposing raw Docker labels, Traefik admin APIs, shell access, or mutation."
+)
+
 READ_PROJECT_MANIFEST_TOOL_DESCRIPTION = (
     "Read the persisted manifest contract for one authorized project, optionally "
     "filtered to one source_key. Returns project summary, static asset hints, "

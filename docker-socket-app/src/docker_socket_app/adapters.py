@@ -19,6 +19,12 @@ MAX_FILE_BYTES = 200_000
 MAX_DIRECTORY_ENTRIES = 200
 MAX_VPS_CONTAINERS = 200
 MAX_VPS_VOLUMES = 200
+MAX_TRAEFIK_ROUTERS = 200
+TRAEFIK_ROUTER_LABEL_PREFIX = "traefik.http.routers."
+TRAEFIK_ROUTER_SAFE_PROPERTIES = frozenset(
+    {"entrypoints", "rule", "service", "tls", "tls.certresolver"}
+)
+TRUE_LABEL_VALUES = frozenset({"1", "on", "true", "yes"})
 ANONYMOUS_VOLUME_NAME_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 SAFE_COMPOSE_LABEL_KEYS = frozenset(
     {
@@ -337,6 +343,25 @@ class DockerSdkAdapter(DockerBackend):
         rows.sort(key=lambda item: item["volume_name"])
         return {"volumes": rows[:MAX_VPS_VOLUMES], "truncated": len(rows) > MAX_VPS_VOLUMES}
 
+    def traefik_router_tls_inventory(self) -> dict[str, Any]:
+        """Return bounded, sanitized Traefik HTTP router TLS inventory."""
+
+        try:
+            containers = self.client.containers.list(all=True)
+        except requests_exceptions.Timeout as error:
+            raise DockerBackendError("Timed out listing Docker containers.") from error
+        except DockerException as error:
+            raise DockerBackendError(str(error).strip() or "Docker operation failed.") from error
+
+        rows: list[dict[str, Any]] = []
+        for container in containers:
+            rows.extend(self._extract_traefik_router_tls_rows(container.attrs))
+        rows.sort(key=lambda item: (item["router_name"], item["container_name"]))
+        return {
+            "routers": rows[:MAX_TRAEFIK_ROUTERS],
+            "truncated": len(rows) > MAX_TRAEFIK_ROUTERS,
+        }
+
     def _get_container(self, container_name: str) -> Any:
         try:
             return self.client.containers.get(container_name)
@@ -459,6 +484,79 @@ class DockerSdkAdapter(DockerBackend):
             "usage_ref_count": usage_data.get("RefCount"),
             "usage_size_bytes": usage_data.get("Size"),
         }
+
+    @classmethod
+    def _extract_traefik_router_tls_rows(cls, attrs: object) -> list[dict[str, Any]]:
+        attrs_dict = attrs if isinstance(attrs, dict) else {}
+        config = attrs_dict.get("Config") if isinstance(attrs_dict.get("Config"), dict) else {}
+        labels = config.get("Labels") if isinstance(config.get("Labels"), dict) else {}
+        if str(labels.get("traefik.enable", "")).strip().lower() != "true":
+            return []
+
+        routers: dict[str, dict[str, str]] = {}
+        for raw_key, raw_value in labels.items():
+            if raw_value is None:
+                continue
+            key = str(raw_key)
+            if not key.startswith(TRAEFIK_ROUTER_LABEL_PREFIX):
+                continue
+            remainder = key.removeprefix(TRAEFIK_ROUTER_LABEL_PREFIX)
+            router_name, separator, property_name = remainder.partition(".")
+            if (
+                not separator
+                or not router_name
+                or property_name not in TRAEFIK_ROUTER_SAFE_PROPERTIES
+            ):
+                continue
+            routers.setdefault(router_name, {})[property_name] = str(raw_value)
+
+        raw_container_name = attrs_dict.get("Name")
+        container_name = str(raw_container_name).lstrip("/") if raw_container_name else ""
+        rows: list[dict[str, Any]] = []
+        for router_name, properties in routers.items():
+            tls_enabled = cls._parse_traefik_tls_enabled(properties)
+            cert_resolver = cls._optional_string(properties.get("tls.certresolver"))
+            rows.append(
+                {
+                    "router_name": router_name,
+                    "container_name": container_name,
+                    "rule": cls._optional_string(properties.get("rule")),
+                    "entrypoints": cls._split_traefik_entrypoints(properties.get("entrypoints")),
+                    "service": cls._optional_string(properties.get("service")),
+                    "tls_enabled": tls_enabled,
+                    "cert_resolver": cert_resolver,
+                    "certificate_source": cls._derive_traefik_certificate_source(
+                        tls_enabled=tls_enabled,
+                        cert_resolver=cert_resolver,
+                    ),
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _split_traefik_entrypoints(value: object) -> list[str]:
+        if value is None:
+            return []
+        return [part.strip() for part in str(value).split(",") if part.strip()]
+
+    @staticmethod
+    def _parse_traefik_tls_enabled(properties: dict[str, str]) -> bool:
+        if properties.get("tls.certresolver"):
+            return True
+        tls_value = properties.get("tls")
+        return str(tls_value).strip().lower() in TRUE_LABEL_VALUES
+
+    @staticmethod
+    def _derive_traefik_certificate_source(
+        *,
+        tls_enabled: bool,
+        cert_resolver: str | None,
+    ) -> str:
+        if not tls_enabled:
+            return "not_tls"
+        if cert_resolver:
+            return "acme_resolver"
+        return "static_or_default"
 
     @staticmethod
     def _parse_container_health(attrs: object, container_name: str) -> dict[str, Any]:

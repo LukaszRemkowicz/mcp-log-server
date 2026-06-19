@@ -36,6 +36,7 @@ from services.inspection_tools_service import (
     VpsVolumeInventory,
 )
 from services.tls_certificate_service import TlsCertificateInspection
+from services.traefik_tls_service import TraefikRouterTlsInspection, TraefikTlsInspectionResult
 from tests.conftest import (
     CustomJwtToken,
     FileBackedProjectContext,
@@ -110,7 +111,10 @@ HOST_PATH_TOOL_CALLS: tuple[ToolCall, ...] = (
 FAIL2BAN_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("inspect_live_fail2ban_activity", {"project_name": "landingpage"}),
 )
-TLS_TOOL_CALLS: tuple[ToolCall, ...] = (("inspect_tls_certificate", {}),)
+TLS_TOOL_CALLS: tuple[ToolCall, ...] = (
+    ("inspect_tls_certificate", {}),
+    ("inspect_traefik_tls_configuration", {}),
+)
 PROJECT_MANIFEST_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("read_project_manifest", {"project_name": "landingpage"}),
     ("explain_project_source", {"project_name": "landingpage", "source_key": "app_file"}),
@@ -492,6 +496,9 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert any(item["tool_name"] == "read_project_manifest" for item in payload["tools"])
     assert any(item["tool_name"] == "explain_project_source" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_tls_certificate" for item in payload["tools"])
+    assert any(
+        item["tool_name"] == "inspect_traefik_tls_configuration" for item in payload["tools"]
+    )
     assert any(item["tool_name"] == "inspect_vps_containers" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_vps_volumes" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_project_compose_state" for item in payload["tools"])
@@ -2729,6 +2736,75 @@ async def test_inspect_tls_certificate_api_returns_configured_domain_summary(
     assert payload["inspections"][0]["domain_key"] == "site"
     assert payload["inspections"][1]["domain_key"] == "site_subdomain"
     assert payload["inspections"][1]["warning_level"] == "expired"
+
+
+async def test_inspect_traefik_tls_configuration_api_returns_router_tls_facts(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify Traefik TLS inspection returns sanitized router resolver facts."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [MCP_STATUS_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+    mocker.patch(
+        "tools.tls.traefik_tls_service.inspect_router_tls",
+        return_value=TraefikTlsInspectionResult(
+            routers=[
+                TraefikRouterTlsInspection(
+                    router_name="portfolio-prod",
+                    container_name="portfolio-prod-nginx-1",
+                    rule="Host(`example.com`)",
+                    entrypoints=["websecure"],
+                    service="portfolio-prod",
+                    tls_enabled=True,
+                    cert_resolver="letsencrypt",
+                    certificate_source="acme_resolver",
+                )
+            ],
+            truncated=False,
+        ),
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-traefik-tls-configuration",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_traefik_tls_configuration",
+                "arguments": {},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_traefik_tls_configuration"
+    assert payload["inspection_status"] == "ok"
+    assert payload["router_count"] == 1
+    assert payload["truncated"] is False
+    assert payload["warnings"] == []
+    assert payload["routers"] == [
+        {
+            "router_name": "portfolio-prod",
+            "container_name": "portfolio-prod-nginx-1",
+            "rule": "Host(`example.com`)",
+            "entrypoints": ["websecure"],
+            "service": "portfolio-prod",
+            "tls_enabled": True,
+            "cert_resolver": "letsencrypt",
+            "certificate_source": "acme_resolver",
+        }
+    ]
+    assert "labels" not in payload["routers"][0]
 
 
 async def test_inspect_container_detail_api_returns_curated_container_metadata(

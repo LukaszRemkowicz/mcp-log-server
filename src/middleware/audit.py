@@ -77,6 +77,7 @@ WORKSPACE_AGNOSTIC_TOOLS = frozenset(
         "inspect_project_scheduled_jobs",
         "inspect_project_runtime",
         "inspect_tls_certificate",
+        "inspect_traefik_tls_configuration",
         "inspect_vps_containers",
         "inspect_vps_volumes",
         "list_container_directory",

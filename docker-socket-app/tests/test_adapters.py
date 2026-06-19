@@ -7,7 +7,8 @@ from docker_socket_app.adapters import DockerSdkAdapter
 
 
 class FakeContainer:
-    def __init__(self) -> None:
+    def __init__(self, attrs: dict[str, Any] | None = None) -> None:
+        self.attrs = attrs or {}
         self.log_kwargs: dict[str, Any] | None = None
 
     def logs(self, **kwargs: Any) -> list[bytes]:
@@ -16,11 +17,16 @@ class FakeContainer:
 
 
 class FakeContainers:
-    def __init__(self, container: FakeContainer) -> None:
+    def __init__(self, container: FakeContainer | None = None) -> None:
         self.container = container
 
     def get(self, container_name: str) -> FakeContainer:
+        assert self.container is not None
         return self.container
+
+    def list(self, all: bool = False) -> list[FakeContainer]:  # noqa: A002
+        assert self.container is not None
+        return [self.container]
 
 
 class FakeDockerClient:
@@ -114,3 +120,44 @@ def test_extract_env_vars_exposes_db_shape_without_secret_values() -> None:
             "secret": False,
         },
     ]
+
+
+def test_traefik_router_tls_inventory_extracts_sanitized_router_labels() -> None:
+    container = FakeContainer(
+        attrs={
+            "Name": "/portfolio-prod-nginx-1",
+            "Config": {
+                "Labels": {
+                    "traefik.enable": "true",
+                    "traefik.http.routers.portfolio-prod.rule": "Host(`example.com`)",
+                    "traefik.http.routers.portfolio-prod.entrypoints": "websecure",
+                    "traefik.http.routers.portfolio-prod.tls": "true",
+                    "traefik.http.routers.portfolio-prod.tls.certresolver": "letsencrypt",
+                    "traefik.http.routers.portfolio-prod.service": "portfolio-prod",
+                    "traefik.http.middlewares.secret.basicauth.users": "user:hash",
+                    "unrelated.secret": "hidden",
+                }
+            },
+            "State": {"Running": True, "Status": "running"},
+            "Id": "abc123def4567890",
+        }
+    )
+    adapter = DockerSdkAdapter(client=FakeDockerClient(container))
+
+    result = adapter.traefik_router_tls_inventory()
+
+    assert result == {
+        "routers": [
+            {
+                "router_name": "portfolio-prod",
+                "container_name": "portfolio-prod-nginx-1",
+                "rule": "Host(`example.com`)",
+                "entrypoints": ["websecure"],
+                "service": "portfolio-prod",
+                "tls_enabled": True,
+                "cert_resolver": "letsencrypt",
+                "certificate_source": "acme_resolver",
+            }
+        ],
+        "truncated": False,
+    }

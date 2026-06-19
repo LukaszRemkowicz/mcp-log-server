@@ -123,6 +123,7 @@ Current example JWT capabilities:
   - `explain_project_source`
   - `inspect_live_fail2ban_activity`
   - `inspect_tls_certificate`
+  - `inspect_traefik_tls_configuration`
   - `inspect_vps_containers`
   - `inspect_vps_volumes`
   - `inspect_project_compose_state`

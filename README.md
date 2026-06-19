@@ -81,7 +81,7 @@ documentation categories, not auth scopes.
 | Container inspection | `inspect_containers_health`, `inspect_container_detail`, `inspect_project_compose_state`, `inspect_project_runtime`, `inspect_project_deployment`, `stat_container_path`, `read_container_file`, `list_container_directory` | Inspect approved manifest-bounded containers, runtime Compose-labelled state, sanitized runtime env shape, deployment image provenance, and paths without mutating container state. |
 | Host path inspection | `stat_project_path`, `read_project_file`, `list_project_directory` | Inspect approved manifest-bounded host file sources without arbitrary filesystem access or mutation. |
 | Scheduler provenance | `inspect_project_scheduled_jobs` | Inspect configured read-only cron/systemd roots for project scheduler evidence without running or editing jobs. |
-| VPS and edge diagnostics | `inspect_tls_certificate` | Inspect the configured `SITE_DOMAIN` TLS certificate without accepting arbitrary hostnames or ports. |
+| VPS and edge diagnostics | `inspect_tls_certificate`, `inspect_traefik_tls_configuration` | Inspect the configured `SITE_DOMAIN` TLS certificate and sanitized Traefik router TLS state without accepting arbitrary hostnames, ports, raw Docker labels, or mutation requests. |
 | MCP service diagnostics | `get_mcp_service_status`, `get_mcp_health_check` | Check MCP server/runtime health during development and operations. |
 
 ## Snapshot Storage And Cleanup
