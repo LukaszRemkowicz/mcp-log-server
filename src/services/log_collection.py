@@ -1182,17 +1182,18 @@ class LogCollectionService:
         self,
         definition: SourceDefinition,
     ) -> str | SourceCollectionResult:
-        """Resolve the concrete Docker container name used for one docker log source."""
+        """Resolve the running container for one manifest Compose service selector."""
 
         try:
-            resolved_container = self._resolve_container_by_name(definition.target)
+            selector = f"{definition.compose_project}/{definition.compose_service}"
+            resolved_container = self._resolve_container_by_compose_service(
+                compose_project=str(definition.compose_project),
+                compose_service=str(definition.compose_service),
+            )
             if resolved_container is None:
                 return self._build_docker_source_error(
                     definition,
-                    error=(
-                        f"Configured container {definition.target!r} is not available "
-                        "in the current runtime."
-                    ),
+                    error=(f"Compose service {selector!r} is not running in the current runtime."),
                 )
             return resolved_container
         except DockerSocketGatewayError as error:
@@ -1200,8 +1201,13 @@ class LogCollectionService:
                 return self._build_docker_unavailable_error(definition)
             return self._build_docker_source_error(definition, error=error.message)
 
-    def _resolve_container_by_name(self, container_name: str) -> str | None:
-        """Return the newest running container that exactly matches a container name."""
+    def _resolve_container_by_compose_service(
+        self,
+        *,
+        compose_project: str,
+        compose_service: str,
+    ) -> str | None:
+        """Return the newest running non-one-off container for one Compose service."""
 
         payload = self.docker_socket_client.request("vps_containers_inventory", {})
         containers = payload.get("containers", [])
@@ -1211,13 +1217,25 @@ class LogCollectionService:
             container
             for container in containers
             if isinstance(container, dict)
-            and container.get("container_name") == container_name
             and container.get("running") is True
+            and self._compose_label(container, "com.docker.compose.project") == compose_project
+            and self._compose_label(container, "com.docker.compose.service") == compose_service
+            and self._compose_label(container, "com.docker.compose.oneoff").lower() != "true"
         ]
         if not exact_matches:
             return None
         newest = max(exact_matches, key=self._inventory_created_at)
         return str(newest.get("container_name") or "")
+
+    @staticmethod
+    def _compose_label(container: dict[str, object], label: str) -> str:
+        """Return one normalized Compose label value from a container inventory item."""
+
+        compose_labels = container.get("compose_labels")
+        if not isinstance(compose_labels, dict):
+            return ""
+        value = compose_labels.get(label)
+        return str(value) if value is not None else ""
 
     def _stream_docker_logs(
         self,

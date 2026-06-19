@@ -2018,6 +2018,8 @@ async def test_read_project_manifest_api_returns_authorized_manifest_contract(
     assert backend_source["retention_class"] == "short"
     assert backend_source["default_noise_profile"] == "backend_noise"
     assert backend_source["stream"] is None
+    assert backend_source["compose_project"] is None
+    assert backend_source["compose_service"] is None
     assert backend_source["inspect_path_prefixes"] == []
     assert backend_source["expected_producer_type"] is None
     assert backend_source["scheduler_patterns"] == []
@@ -3143,16 +3145,19 @@ async def test_inspect_project_compose_state_api_returns_comparison(
     }
     assert payload["running_containers"][0]["mounts"][0]["source_redacted"] is True
     assert payload["running_containers"][0]["volume_names"] == ["dockerpage_static"]
-    assert payload["warnings"] == []
+    assert [warning["warning_type"] for warning in payload["warnings"]] == [
+        "expected_service_not_running",
+        "expected_service_not_running",
+    ]
     assert "hidden" not in json.dumps(payload)
 
 
-async def test_inspect_project_compose_state_api_requires_expected_state(
+async def test_inspect_project_compose_state_api_reports_missing_running_services(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
 ) -> None:
-    """Verify compose-state inspection requires labelled target containers."""
+    """Verify compose-state inspection reports manifest services absent from runtime."""
 
     token: str = custom_jwt_token(
         "codex-agent",
@@ -3182,9 +3187,13 @@ async def test_inspect_project_compose_state_api_requires_expected_state(
     payload = result["structuredContent"]
 
     assert response.status_code == 200
-    assert result["isError"] is True
+    assert result["isError"] is False
     assert payload["action"] == "inspect_project_compose_state"
-    assert payload["error_code"] == "compose_expected_state_unavailable"
+    assert [warning["warning_type"] for warning in payload["warnings"]] == [
+        "expected_service_not_running",
+        "expected_service_not_running",
+        "expected_service_not_running",
+    ]
 
 
 async def test_inspect_project_deployment_api_returns_image_provenance(
@@ -3264,7 +3273,9 @@ async def test_inspect_project_deployment_api_returns_image_provenance(
     assert payload["running_containers"][0]["image_repository"] == "portfolio/backend"
     assert payload["running_containers"][0]["image_tag"] == "2026-05-17"
     assert [warning["warning_code"] for warning in payload["warnings"]] == [
-        "current_tag_not_configured"
+        "expected_service_not_running",
+        "expected_service_not_running",
+        "current_tag_not_configured",
     ]
 
 

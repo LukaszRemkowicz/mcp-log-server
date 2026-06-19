@@ -69,6 +69,8 @@ def test_container_path_is_allowed_uses_manifest_inspection_prefixes(
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend container",
         parser_type="json",
         normalization_profile="application",
@@ -84,6 +86,8 @@ def test_container_path_is_allowed_rejects_parent_traversal() -> None:
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend container",
         parser_type="json",
         normalization_profile="application",
@@ -103,6 +107,8 @@ def test_resolve_container_directory_path_defaults_to_first_inspection_prefix(
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend container",
         parser_type="json",
         normalization_profile="application",
@@ -118,6 +124,8 @@ def test_resolve_container_directory_path_uses_explicit_path() -> None:
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend container",
         parser_type="json",
         normalization_profile="application",
@@ -908,13 +916,15 @@ def test_inspect_vps_containers_returns_empty_inventory(
 
 
 def test_compose_state_service_compares_expected_and_running_state() -> None:
-    """Verify Compose service identity is inferred from target container labels."""
+    """Verify Compose service identity comes from manifest selectors."""
 
     sources = [
         SourceDefinition(
             source_key="backend",
             source_type="docker",
             target="backend-container",
+            compose_project="portfolio",
+            compose_service="be",
             description="Backend container.",
             parser_type="plain_text",
             normalization_profile="app",
@@ -924,6 +934,8 @@ def test_compose_state_service_compares_expected_and_running_state() -> None:
             source_key="worker",
             source_type="docker",
             target="worker-container",
+            compose_project="portfolio",
+            compose_service="worker",
             description="Worker container.",
             parser_type="plain_text",
             normalization_profile="app",
@@ -953,7 +965,7 @@ def test_compose_state_service_compares_expected_and_running_state() -> None:
             finished_at=None,
             compose_labels={
                 "com.docker.compose.project": "portfolio",
-                "com.docker.compose.service": "backend",
+                "com.docker.compose.service": "be",
             },
             restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
             ports=[
@@ -1045,7 +1057,7 @@ def test_compose_state_service_compares_expected_and_running_state() -> None:
     assert not isinstance(result, ComposeStateUnavailable)
     assert result.compose_project == "portfolio"
     assert [service.service_name for service in result.expected_services] == [
-        "backend",
+        "be",
         "worker",
     ]
     assert result.running_containers[0].mounts[0].source_redacted is True
@@ -1056,14 +1068,14 @@ def test_compose_state_service_compares_expected_and_running_state() -> None:
     }
 
 
-def test_compose_state_service_returns_unavailable_without_expected_state() -> None:
-    """Verify the compose comparison needs a target container with Compose labels."""
+def test_compose_state_service_returns_unavailable_without_docker_sources() -> None:
+    """Verify the compose comparison needs at least one Docker source selector."""
 
     source = SourceDefinition(
-        source_key="backend",
-        source_type="docker",
-        target="backend-container",
-        description="Backend container.",
+        source_key="backend_file",
+        source_type="file",
+        target="/var/log/backend.log",
+        description="Backend file.",
         parser_type="plain_text",
         normalization_profile="app",
         retention_class="short",
@@ -1076,7 +1088,65 @@ def test_compose_state_service_returns_unavailable_without_expected_state() -> N
     )
 
     assert isinstance(result, ComposeStateUnavailable)
-    assert "matched a Compose-labelled container" in result.message
+    assert "declares Compose selectors" in result.message
+
+
+def test_compose_state_service_uses_optional_compose_selectors_without_target_match() -> None:
+    """Verify Compose selectors can anchor runtime state when target names are stale."""
+
+    source = SourceDefinition(
+        source_key="app",
+        source_type="docker",
+        target="old-mcp-app-container",
+        compose_project="mcp",
+        compose_service="app",
+        description="MCP app container.",
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+    )
+    running = [
+        VpsContainerInventory(
+            container_id="abc123def4567890",
+            short_container_id="abc123def456",
+            container_name="mcp-app-1",
+            image="mcp/app:2026-06-19",
+            command=[],
+            command_preview="",
+            created_at=None,
+            docker_status="running",
+            state="running",
+            health_status="healthy",
+            running=True,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=0,
+            started_at=None,
+            finished_at=None,
+            compose_labels={
+                "com.docker.compose.project": "mcp",
+                "com.docker.compose.service": "app",
+            },
+            restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
+            ports=[],
+            network_names=[],
+            triage_notes=[],
+        )
+    ]
+
+    result = ComposeStateService().compare(
+        project_name="mcp",
+        sources=[source],
+        running_containers=running,
+    )
+
+    assert not isinstance(result, ComposeStateUnavailable)
+    assert result.compose_project == "mcp"
+    assert result.expected_services[0].service_name == "app"
+    assert result.running_containers[0].container_name == "mcp-app-1"
 
 
 def test_project_runtime_service_returns_sanitized_env_and_database_shape() -> None:
@@ -1086,6 +1156,8 @@ def test_project_runtime_service_returns_sanitized_env_and_database_shape() -> N
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend container.",
         parser_type="plain_text",
         normalization_profile="app",
@@ -1266,6 +1338,8 @@ def test_project_deployment_service_reports_running_image_tag_mismatch(
         source_key="app",
         source_type="docker",
         target="mcp-app-1",
+        compose_project="mcp-prod",
+        compose_service="app",
         description="MCP app.",
         parser_type="plain_text",
         normalization_profile="app",
@@ -1332,6 +1406,8 @@ def test_project_deployment_service_reports_matching_deployment(tmp_path) -> Non
         source_key="app",
         source_type="docker",
         target="mcp-app-1",
+        compose_project="mcp-prod",
+        compose_service="app",
         description="MCP app.",
         parser_type="plain_text",
         normalization_profile="app",
@@ -1391,6 +1467,8 @@ def test_project_deployment_service_reports_missing_tag_and_running_service() ->
         source_key="app",
         source_type="docker",
         target="mcp-app-1",
+        compose_project="mcp-prod",
+        compose_service="app",
         description="MCP app.",
         parser_type="plain_text",
         normalization_profile="app",

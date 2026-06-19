@@ -40,17 +40,39 @@ SECOND_SESSION_ID = "quiet-field-opens-b1c2"
 class FakeDockerSocketClient:
     def __init__(self) -> None:
         self.resolved_by_name: dict[str, datetime | None] = {}
+        self.inventory_containers: list[dict[str, object]] = []
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.stream_calls: list[tuple[str, dict[str, int | str | datetime]]] = []
         self.stream_exception: DockerSocketGatewayError | None = None
         self.resolve_exception: DockerSocketGatewayError | None = None
+
+    def add_compose_container(
+        self,
+        name: str,
+        *,
+        project: str = "portfolio",
+        service: str = "be",
+        created_at: datetime | None = None,
+    ) -> None:
+        self.inventory_containers.append(
+            {
+                "container_name": name,
+                "running": True,
+                "created_at": (created_at or datetime(2026, 6, 8, 10, 30, tzinfo=UTC)).isoformat(),
+                "compose_labels": {
+                    "com.docker.compose.project": project,
+                    "com.docker.compose.service": service,
+                    "com.docker.compose.oneoff": "False",
+                },
+            }
+        )
 
     def request(self, operation: str, params: Mapping[str, object]) -> dict[str, Any]:
         self.calls.append((operation, dict(params)))
         if operation == "vps_containers_inventory":
             if self.resolve_exception is not None:
                 raise self.resolve_exception
-            containers = []
+            containers = list(self.inventory_containers)
             for name, created_at in self.resolved_by_name.items():
                 if created_at is None:
                     continue
@@ -595,6 +617,8 @@ def test_collect_source_reports_docker_timeout_with_time_window_tip(
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend logs.",
         required=True,
         parser_type="plain_text",
@@ -604,7 +628,7 @@ def test_collect_source_reports_docker_timeout_with_time_window_tip(
         stream="stdout",
     )
     gateway = FakeDockerSocketClient()
-    gateway.resolved_by_name["backend-container"] = datetime(2026, 6, 8, 10, 30, tzinfo=UTC)
+    gateway.add_compose_container("backend-container")
     gateway.stream_exception = DockerSocketGatewayError(
         message="Timed out collecting docker logs for backend-container.",
         error_code="docker_log_timeout",
@@ -645,6 +669,8 @@ def test_collect_sources_keeps_file_source_when_docker_source_fails(
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend logs.",
         required=True,
         parser_type="plain_text",
@@ -691,6 +717,8 @@ def test_collect_source_sends_socket_log_filters(
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend logs.",
         required=True,
         parser_type="plain_text",
@@ -700,7 +728,7 @@ def test_collect_source_sends_socket_log_filters(
         stream="stdout",
     )
     gateway = FakeDockerSocketClient()
-    gateway.resolved_by_name["backend-container"] = datetime(2026, 6, 8, 10, 30, tzinfo=UTC)
+    gateway.add_compose_container("backend-container")
 
     result = LogCollectionService(docker_socket_client=gateway).collect_source(
         definition,
@@ -740,6 +768,8 @@ def test_collect_source_streams_persisted_docker_logs_without_following(
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend logs.",
         required=True,
         parser_type="plain_text",
@@ -749,7 +779,7 @@ def test_collect_source_streams_persisted_docker_logs_without_following(
         stream="stdout",
     )
     gateway = FakeDockerSocketClient()
-    gateway.resolved_by_name["backend-container"] = datetime(2026, 6, 8, 10, 30, tzinfo=UTC)
+    gateway.add_compose_container("backend-container")
 
     output_file = tmp_path / "backend.log"
     result = LogCollectionService(docker_socket_client=gateway).collect_source(
@@ -769,15 +799,17 @@ def test_collect_source_streams_persisted_docker_logs_without_following(
     assert gateway.stream_calls[0][0] == "backend-container"
 
 
-def test_collect_source_uses_injected_docker_socket_client_for_explicit_target(
+def test_collect_source_uses_injected_docker_socket_client_for_compose_selector(
     tmp_path: Path,
 ) -> None:
     gateway = FakeDockerSocketClient()
-    gateway.resolved_by_name["backend-container"] = datetime(2026, 6, 8, 10, 30, tzinfo=UTC)
+    gateway.add_compose_container("backend-container")
     definition = SourceDefinition(
         source_key="backend",
         source_type="docker",
-        target="backend-container",
+        target="stale-backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend logs.",
         required=True,
         parser_type="plain_text",
@@ -801,13 +833,26 @@ def test_collect_source_uses_injected_docker_socket_client_for_explicit_target(
     assert gateway.stream_calls == [("backend-container", {})]
 
 
-def test_resolve_docker_log_container_returns_stream_target_name() -> None:
+def test_resolve_docker_log_container_does_not_fallback_to_target_name() -> None:
     gateway = FakeDockerSocketClient()
-    gateway.resolved_by_name["configured-container"] = datetime(2026, 6, 8, 10, 30, tzinfo=UTC)
+    gateway.inventory_containers = [
+        {
+            "container_name": "configured-container",
+            "running": True,
+            "created_at": datetime(2026, 6, 8, 10, 30, tzinfo=UTC).isoformat(),
+            "compose_labels": {
+                "com.docker.compose.project": "other",
+                "com.docker.compose.service": "backend",
+                "com.docker.compose.oneoff": "False",
+            },
+        }
+    ]
     definition = SourceDefinition(
         source_key="backend",
         source_type="docker",
         target="configured-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend logs.",
         required=True,
         parser_type="plain_text",
@@ -821,7 +866,55 @@ def test_resolve_docker_log_container_returns_stream_target_name() -> None:
 
     resolved_target = service._resolve_docker_log_container(definition)
 
-    assert resolved_target == "configured-container"
+    assert isinstance(resolved_target, SourceCollectionResult)
+    assert resolved_target.status == "unavailable"
+    assert "Compose service 'portfolio/be'" in str(resolved_target.error)
+
+
+def test_resolve_docker_log_container_prefers_compose_service_and_ignores_oneoff() -> None:
+    gateway = FakeDockerSocketClient()
+    gateway.inventory_containers = [
+        {
+            "container_name": "mcp-app-run-abc123",
+            "running": True,
+            "created_at": datetime(2026, 6, 8, 10, 40, tzinfo=UTC).isoformat(),
+            "compose_labels": {
+                "com.docker.compose.project": "mcp",
+                "com.docker.compose.service": "app",
+                "com.docker.compose.oneoff": "True",
+            },
+        },
+        {
+            "container_name": "mcp-app-1",
+            "running": True,
+            "created_at": datetime(2026, 6, 8, 10, 30, tzinfo=UTC).isoformat(),
+            "compose_labels": {
+                "com.docker.compose.project": "mcp",
+                "com.docker.compose.service": "app",
+                "com.docker.compose.oneoff": "False",
+            },
+        },
+    ]
+    definition = SourceDefinition(
+        source_key="app",
+        source_type="docker",
+        target="stale-mcp-app-container",
+        compose_project="mcp",
+        compose_service="app",
+        description="MCP app logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream="stdout",
+    )
+
+    service = LogCollectionService(docker_socket_client=gateway)
+
+    resolved_target = service._resolve_docker_log_container(definition)
+
+    assert resolved_target == "mcp-app-1"
 
 
 def test_collect_source_streams_persisted_file_logs_to_output_file(tmp_path) -> None:
@@ -892,6 +985,8 @@ def test_build_source_create_payload_uses_internal_unavailable_result() -> None:
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend logs.",
         required=True,
         parser_type="plain_text",
@@ -1026,6 +1121,8 @@ def test_collect_source_reports_docker_api_unavailable(
         source_key="backend",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend logs.",
         required=True,
         parser_type="plain_text",

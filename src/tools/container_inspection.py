@@ -542,7 +542,7 @@ def create_vps_volume_inventory_payload(
 def create_expected_compose_service_payload(
     service: ExpectedComposeService,
 ) -> ExpectedComposeServicePayload:
-    """Convert inferred Compose service identity into an MCP payload row."""
+    """Convert manifest-declared Compose service identity into an MCP payload row."""
 
     return ExpectedComposeServicePayload(
         source_key=service.source_key,

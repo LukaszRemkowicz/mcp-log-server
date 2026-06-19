@@ -229,8 +229,8 @@ INSPECT_PROJECT_SCHEDULED_JOBS_TOOL_DESCRIPTION = (
 
 INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION = (
     "Inspect Docker Compose runtime state for one authorized project by matching "
-    "manifest docker source targets to current Docker Compose labels. Returns "
-    "inferred Compose services, matching containers, status, ports, mounts, "
+    "manifest docker Compose selectors to current Docker Compose labels. Returns "
+    "manifest-declared Compose services, matching containers, status, ports, mounts, "
     "volumes, environment variable names, and runtime-shape warnings. This tool "
     "does not parse Compose files, expose env values, or mutate Docker state."
 )

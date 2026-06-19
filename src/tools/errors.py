@@ -337,10 +337,10 @@ CONTAINER_INSPECTION_ERROR_RULES: tuple[ContainerInspectionErrorRule, ...] = (
         retry_tips=["Retry in a runtime where the Docker socket is mounted and reachable."],
     ),
     ContainerInspectionErrorRule(
-        message_fragment="No Docker manifest source target matched a Compose-labelled container",
+        message_fragment="No Docker manifest source declares Compose selectors",
         error_code="compose_expected_state_unavailable",
         retry_tips=[
-            "Ensure a Docker source target matches a runtime container with Docker Compose labels.",
+            "Ensure at least one Docker source declares compose_project and compose_service.",
         ],
     ),
     ContainerInspectionErrorRule(

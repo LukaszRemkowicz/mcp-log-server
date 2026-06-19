@@ -57,6 +57,8 @@ def test_container_source_lookup_requires_manifest_source_key() -> None:
         source_key="app",
         source_type="docker",
         target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
         description="Backend container.",
         parser_type="plain_text",
         normalization_profile="app",
@@ -76,11 +78,34 @@ def test_container_source_lookup_requires_manifest_source_key() -> None:
         ProjectManifestService.get_container_source(manifest, "backend-container")
 
 
-def test_source_definition_does_not_expose_compose_selector_fields() -> None:
-    """Verify manifests do not maintain Compose service identity as source metadata."""
+def test_source_definition_requires_compose_selector_fields_for_docker_sources() -> None:
+    """Verify Docker sources must declare stable Compose service identity."""
 
-    assert "compose_project" not in SourceDefinition.model_fields
-    assert "compose_service" not in SourceDefinition.model_fields
+    with pytest.raises(ValidationError, match="docker sources require compose_project"):
+        SourceDefinition(
+            source_key="app",
+            source_type="docker",
+            target="mcp-app-1",
+            description="MCP app container.",
+            parser_type="plain_text",
+            normalization_profile="app_logs",
+            retention_class="short",
+        )
+
+    source = SourceDefinition(
+        source_key="app",
+        source_type="docker",
+        target="mcp-app-1",
+        compose_project="mcp",
+        compose_service="app",
+        description="MCP app container.",
+        parser_type="plain_text",
+        normalization_profile="app_logs",
+        retention_class="short",
+    )
+
+    assert source.compose_project == "mcp"
+    assert source.compose_service == "app"
 
 
 def test_source_definition_accepts_optional_producer_metadata() -> None:
@@ -119,6 +144,8 @@ def test_manifest_accepts_optional_deployment_metadata(tmp_path: Path) -> None:
                 source_key="app",
                 source_type="docker",
                 target="mcp-app-1",
+                compose_project="mcp",
+                compose_service="app",
                 description="MCP app.",
                 parser_type="plain_text",
                 normalization_profile="app_logs",

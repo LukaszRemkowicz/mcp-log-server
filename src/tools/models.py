@@ -210,6 +210,8 @@ class ProjectManifestSourcePayload(BaseModel):
     retention_class: str
     default_noise_profile: str | None
     stream: Literal["stdout", "stderr"] | None
+    compose_project: str | None
+    compose_service: str | None
     inspect_path_prefixes: list[str]
     expected_producer_type: Literal["cron", "systemd", "docker", "app"] | None
     scheduler_patterns: list[str]
