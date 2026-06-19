@@ -1,8 +1,8 @@
-"""Post-MVP MCP tool for strictly allowlisted fail2ban live-status diagnostics.
+"""MCP tool for strictly allowlisted fail2ban live-status diagnostics.
 
-TODO(post-MVP): verify this tool on the VPS after MCP can run `fail2ban-client`
-with the host fail2ban socket mounted. Phase 6 MVP should use collected
-`vps-security` fail2ban log sources and snapshot tools instead.
+The tool reads live fail2ban state through the dedicated fail2ban socket app.
+Historical fail2ban evidence still belongs in collected `vps-security`
+snapshots and the normal snapshot analysis tools.
 """
 
 from __future__ import annotations
@@ -70,7 +70,7 @@ def _build_fail2ban_payload(
 async def inspect_live_fail2ban_activity(
     project_name: str | None = None,
 ) -> ToolResult:
-    """TODO(post-MVP): inspect live fail2ban runtime state.
+    """Inspect live fail2ban runtime state.
 
     This tool is intentionally separate from `collect_logs`. `collect_logs`
     reads manifest-backed files such as `/var/log/fail2ban.log` into a snapshot

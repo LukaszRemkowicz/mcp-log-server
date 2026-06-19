@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 from pytest_mock import MockerFixture
 
@@ -1461,6 +1463,92 @@ def test_project_deployment_service_reports_matching_deployment(tmp_path) -> Non
     assert not isinstance(result, ComposeStateUnavailable)
     assert result.current_tag.status == "ok"
     assert result.running_containers[0].image_digest == "sha256:abc"
+    assert result.warnings == []
+
+
+def test_project_deployment_service_ignores_exited_oneoffs_for_tag_comparison(
+    tmp_path,
+) -> None:
+    """Verify old exited one-off containers do not create tag mismatch warnings."""
+
+    tag_file = tmp_path / "current_tag"
+    tag_file.write_text("v2.0.0\n", encoding="utf-8")
+    source = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="portfolio-prod-be-1",
+        compose_project="portfolio-prod",
+        compose_service="be",
+        description="Portfolio backend.",
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+    )
+    running_container = VpsContainerInventory(
+        container_id="abc123def4567890",
+        short_container_id="abc123def456",
+        container_name="portfolio-prod-be-1",
+        image="production-be:v2.0.0",
+        command=[],
+        command_preview="",
+        created_at="2026-05-17T10:00:00Z",
+        docker_status="running",
+        state="running",
+        health_status="healthy",
+        running=True,
+        restarting=False,
+        paused=False,
+        dead=False,
+        exit_code=0,
+        error="",
+        restart_count=0,
+        started_at="2026-05-17T10:01:00Z",
+        finished_at=None,
+        compose_labels={
+            "com.docker.compose.project": "portfolio-prod",
+            "com.docker.compose.service": "be",
+        },
+        restart_policy=ContainerRestartPolicy(name="always", maximum_retry_count=0),
+        ports=[],
+        network_names=["portfolio-prod_default"],
+        triage_notes=[],
+        env_var_names=[],
+        mounts=[],
+    )
+    old_oneoff = replace(
+        running_container,
+        container_id="def456abc1237890",
+        short_container_id="def456abc123",
+        container_name="portfolio-prod-be-run-old",
+        image="production-be:v1.9.0",
+        docker_status="exited",
+        state="exited",
+        health_status="unhealthy",
+        running=False,
+        exit_code=0,
+        started_at="2026-05-01T10:01:00Z",
+        finished_at="2026-05-01T10:05:00Z",
+        compose_labels={
+            "com.docker.compose.project": "portfolio-prod",
+            "com.docker.compose.service": "be",
+            "com.docker.compose.oneoff": "True",
+        },
+    )
+
+    result = ProjectDeploymentService().inspect(
+        project_name="landingpage",
+        sources=[source],
+        compose_files=["/home/app/docker-compose.prod.yml"],
+        current_tag_path=str(tag_file),
+        expected_image_repositories={"be": "production-be"},
+        running_containers=[running_container, old_oneoff],
+    )
+
+    assert not isinstance(result, ComposeStateUnavailable)
+    assert [container.container_name for container in result.running_containers] == [
+        "portfolio-prod-be-1",
+        "portfolio-prod-be-run-old",
+    ]
     assert result.warnings == []
 
 

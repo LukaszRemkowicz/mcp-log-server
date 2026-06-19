@@ -63,6 +63,8 @@ services:
       - /etc/cron.weekly:/host/etc/cron.weekly:ro
       - /var/spool/cron:/host/var/spool/cron:ro
       - /etc/systemd/system:/host/etc/systemd/system:ro
+      - /var/lib/mcp-log-server:/var/lib/mcp-log-server:ro
+      - /var/lib/portfolio:/var/lib/portfolio:ro
       - type: bind
         source: ${PROJECT_MANIFESTS_HOST_PATH}
         target: ${PROJECT_MANIFESTS_PATH:-/app/project-manifests}
