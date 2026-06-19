@@ -71,6 +71,9 @@ log_info "Fail2ban socket app image: $FAIL2BAN_SOCKET_APP_IMAGE_NAME"
 if [[ "$NO_CACHE" == "true" ]]; then
     log_info "No-cache mode enabled (fresh build)"
 fi
+if [[ "$EMERGENCY" == "true" ]]; then
+    log_warn "Emergency mode enabled: skipping clean working tree enforcement."
+fi
 
 # Step 1: require a clean working tree unless the operator explicitly opts out.
 log_step 1 10 "Check working tree"

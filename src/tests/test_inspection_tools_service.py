@@ -1064,7 +1064,11 @@ def test_compose_state_service_compares_expected_and_running_state() -> None:
     assert result.warnings[0].warning_type.__class__.__name__ == "ComposeStateWarningType"
     assert {warning.warning_type for warning in result.warnings} == {
         "expected_service_not_running",
-        "unexpected_running_service",
+    }
+    assert {container.service_name for container in result.running_containers} == {
+        "be",
+        "extra",
+        "worker",
     }
 
 
@@ -1457,6 +1461,116 @@ def test_project_deployment_service_reports_matching_deployment(tmp_path) -> Non
     assert not isinstance(result, ComposeStateUnavailable)
     assert result.current_tag.status == "ok"
     assert result.running_containers[0].image_digest == "sha256:abc"
+    assert result.warnings == []
+
+
+def test_project_deployment_service_compares_tag_only_for_configured_repositories(
+    tmp_path,
+) -> None:
+    """Verify shared/support services are not compared to the app release tag."""
+
+    tag_file = tmp_path / "current_tag"
+    tag_file.write_text("v2.0.0\n", encoding="utf-8")
+    sources = [
+        SourceDefinition(
+            source_key="app",
+            source_type="docker",
+            target="mcp-app-1",
+            compose_project="mcp-prod",
+            compose_service="app",
+            description="MCP app.",
+            parser_type="plain_text",
+            normalization_profile="app",
+            retention_class="short",
+        ),
+        SourceDefinition(
+            source_key="db",
+            source_type="docker",
+            target="mcp-db-1",
+            compose_project="mcp-prod",
+            compose_service="db",
+            description="MCP DB.",
+            parser_type="plain_text",
+            normalization_profile="app",
+            retention_class="short",
+        ),
+    ]
+    containers = [
+        VpsContainerInventory(
+            container_id="abc123def4567890",
+            short_container_id="abc123def456",
+            container_name="mcp-app-1",
+            image="prod-mcp-log-server:v2.0.0",
+            command=[],
+            command_preview="",
+            created_at="2026-05-17T10:00:00Z",
+            docker_status="running",
+            state="running",
+            health_status="healthy",
+            running=True,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=0,
+            started_at="2026-05-17T10:01:00Z",
+            finished_at=None,
+            compose_labels={
+                "com.docker.compose.project": "mcp-prod",
+                "com.docker.compose.service": "app",
+            },
+            restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
+            ports=[],
+            network_names=["mcp-prod_default"],
+            triage_notes=[],
+            env_var_names=[],
+            mounts=[],
+        ),
+        VpsContainerInventory(
+            container_id="def456abc1237890",
+            short_container_id="def456abc123",
+            container_name="mcp-db-1",
+            image="postgres:18",
+            command=[],
+            command_preview="",
+            created_at="2026-05-17T10:00:00Z",
+            docker_status="running",
+            state="running",
+            health_status="healthy",
+            running=True,
+            restarting=False,
+            paused=False,
+            dead=False,
+            exit_code=0,
+            error="",
+            restart_count=0,
+            started_at="2026-05-17T10:01:00Z",
+            finished_at=None,
+            compose_labels={
+                "com.docker.compose.project": "mcp-prod",
+                "com.docker.compose.service": "db",
+            },
+            restart_policy=ContainerRestartPolicy(name="unless-stopped", maximum_retry_count=0),
+            ports=[],
+            network_names=["mcp-prod_default"],
+            triage_notes=[],
+            env_var_names=[],
+            mounts=[],
+        ),
+    ]
+
+    result = ProjectDeploymentService().inspect(
+        project_name="mcp",
+        sources=sources,
+        compose_files=["/opt/mcp/docker-compose.prod.yml"],
+        current_tag_path=str(tag_file),
+        expected_image_repositories={"app": "prod-mcp-log-server"},
+        running_containers=containers,
+    )
+
+    assert not isinstance(result, ComposeStateUnavailable)
+    assert result.current_tag.status == "ok"
     assert result.warnings == []
 
 

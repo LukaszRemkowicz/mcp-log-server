@@ -521,6 +521,7 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
         "project_summary",
         "static_asset_paths",
         "static_asset_extensions",
+        "deployment",
         "sources",
     }
     assert (
@@ -530,6 +531,10 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
     assert (
         ProjectManifest._meta.fields_map["sources"].description
         == "List of source definitions with the same shape as Manifest.sources."
+    )
+    assert (
+        ProjectManifest._meta.fields_map["deployment"].description
+        == "Optional deployment provenance metadata from the manifest."
     )
     assert ProjectManifest.objects is not None
     assert ProjectManifest.objects._model is ProjectManifest

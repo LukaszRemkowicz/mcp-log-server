@@ -61,6 +61,7 @@ class ProjectManifestService:
                 "project_summary": row.project_summary,
                 "static_asset_paths": row.static_asset_paths,
                 "static_asset_extensions": row.static_asset_extensions,
+                "deployment": row.deployment,
                 "sources": row.sources,
             }
         )

@@ -272,7 +272,11 @@ class ProjectDeploymentService:
                         actual=container.image_repository,
                     )
                 )
-            if current_tag.value is not None and container.image_tag != current_tag.value:
+            if (
+                expected_service.expected_image_repository is not None
+                and current_tag.value is not None
+                and container.image_tag != current_tag.value
+            ):
                 warnings.append(
                     DeploymentWarning(
                         warning_code="image_tag_mismatch",
@@ -283,7 +287,7 @@ class ProjectDeploymentService:
                         actual=container.image_tag,
                     )
                 )
-        if current_tag.status != "ok":
+        if current_tag.status not in {"ok", "not_configured"}:
             warnings.append(
                 DeploymentWarning(
                     warning_code=f"current_tag_{current_tag.status}",

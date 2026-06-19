@@ -396,6 +396,11 @@ async def _seed_project_manifests(
                     project_summary=manifest.project_summary,
                     static_asset_paths=manifest.static_asset_paths,
                     static_asset_extensions=manifest.static_asset_extensions,
+                    deployment=(
+                        manifest.deployment.model_dump(mode="json")
+                        if manifest.deployment is not None
+                        else None
+                    ),
                     sources=sources,
                 )
             )
@@ -406,6 +411,11 @@ async def _seed_project_manifests(
                 project_summary=manifest.project_summary,
                 static_asset_paths=manifest.static_asset_paths,
                 static_asset_extensions=manifest.static_asset_extensions,
+                deployment=(
+                    manifest.deployment.model_dump(mode="json")
+                    if manifest.deployment is not None
+                    else None
+                ),
                 sources=sources,
             )
         )

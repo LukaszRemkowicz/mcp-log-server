@@ -16,7 +16,6 @@ class ComposeStateWarningType(StrEnum):
     """Stable warning codes returned by Compose state comparison."""
 
     EXPECTED_SERVICE_NOT_RUNNING = "expected_service_not_running"
-    UNEXPECTED_RUNNING_SERVICE = "unexpected_running_service"
     IMAGE_MISMATCH = "image_mismatch"
     COMPOSE_PROJECT_LABEL_MISMATCH = "compose_project_label_mismatch"
     COMPOSE_SERVICE_LABEL_MISMATCH = "compose_service_label_mismatch"
@@ -254,18 +253,6 @@ class ComposeStateService:
                 )
             warnings.extend(cls._compare_expected_service(expected, matched[0]))
 
-        for key, containers in running_by_service.items():
-            if key in expected_by_service:
-                continue
-            for container in containers:
-                warnings.append(
-                    ComposeStateWarning(
-                        warning_type=ComposeStateWarningType.UNEXPECTED_RUNNING_SERVICE,
-                        service_name=container.service_name,
-                        message="Running container has no expected Compose service.",
-                        container_name=container.container_name,
-                    )
-                )
         return sorted(warnings, key=lambda item: (item.warning_type, item.service_name or ""))
 
     @staticmethod
