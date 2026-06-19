@@ -17,7 +17,10 @@ COLLECT_LOGS_TOOL_DESCRIPTION = (
     "Use since/until to collect a narrower incident window. "
     "After session collection, use session_id plus project_name with follow-up tools. "
     "After workflow collection, use project_name for the newest workflow artifact, "
-    "or add archive_name when you need one archived workflow artifact."
+    "or add archive_name when you need one archived workflow artifact. "
+    "When a configured source is unavailable, read provenance_diagnostics and "
+    "call the recommended project-scoped provenance tools before interpreting "
+    "the source as healthy, idle, or empty."
 )
 
 CLOSE_AGENT_SESSION_TOOL_DESCRIPTION = (
@@ -94,12 +97,28 @@ INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION = (
     "not modify DNS, Traefik, ACME, or certificate state."
 )
 
+INSPECT_TRAEFIK_TLS_CONFIGURATION_TOOL_DESCRIPTION = (
+    "Inspect sanitized Traefik HTTP router TLS configuration from Docker labels. "
+    "Returns router name, container name, router rule, entrypoints, service, TLS "
+    "enabled state, certificate resolver, and derived certificate source without "
+    "exposing raw Docker labels, Traefik admin APIs, shell access, or mutation."
+)
+
 READ_PROJECT_MANIFEST_TOOL_DESCRIPTION = (
     "Read the persisted manifest contract for one authorized project, optionally "
     "filtered to one source_key. Returns project summary, static asset hints, "
     "source keys, configured source targets, parser and normalization profiles, "
     "retention class, noise profile, inspect path prefixes, and required-source "
     "flags without inspecting live runtime state."
+)
+
+EXPLAIN_PROJECT_SOURCE_TOOL_DESCRIPTION = (
+    "Explain one authorized project source contract and its configured producer "
+    "provenance. Returns the manifest source definition, required/optional "
+    "classification, parser and normalization profiles, optional producer type, "
+    "scheduler patterns, related cron/systemd evidence when configured, and "
+    "deterministic next-step tips. This tool does not infer producer facts from "
+    "LLM text and does not require every source to have producer metadata."
 )
 
 INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION = (
@@ -199,12 +218,41 @@ LIST_PROJECT_DIRECTORY_TOOL_DESCRIPTION = (
     "prevent traversal and symlink escapes."
 )
 
+INSPECT_PROJECT_SCHEDULED_JOBS_TOOL_DESCRIPTION = (
+    "Inspect bounded host scheduler files for one authorized project. "
+    "Searches only configured read-only cron and systemd roots visible to MCP, "
+    "using literal project-scoped patterns. Returns matching scheduler file paths, "
+    "line numbers, schedule or unit context, command text, detected output "
+    "redirection paths, and visibility warnings. This tool does not run jobs, "
+    "edit scheduler files, or expose arbitrary host grep."
+)
+
 INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION = (
     "Inspect Docker Compose runtime state for one authorized project by matching "
-    "manifest docker source targets to current Docker Compose labels. Returns "
-    "inferred Compose services, matching containers, status, ports, mounts, "
+    "manifest docker Compose selectors to current Docker Compose labels. Returns "
+    "manifest-declared Compose services, matching containers, status, ports, mounts, "
     "volumes, environment variable names, and runtime-shape warnings. This tool "
     "does not parse Compose files, expose env values, or mutate Docker state."
+)
+
+INSPECT_PROJECT_RUNTIME_TOOL_DESCRIPTION = (
+    "Inspect sanitized runtime configuration for one authorized project by using "
+    "Docker Compose labels to group running containers. Returns Compose project "
+    "and service names, container status, image and restart facts, safe selected "
+    "environment values, secret environment key presence with values redacted, "
+    "database host/port/name/user shape when present, ports, networks, and "
+    "mount destinations without exposing raw env dumps, secret values, host "
+    "mount source paths, or mutation operations."
+)
+
+INSPECT_PROJECT_DEPLOYMENT_TOOL_DESCRIPTION = (
+    "Inspect read-only deployment and image provenance for one authorized "
+    "project. Compares configured deployment metadata, such as Compose file "
+    "paths, current tag file, and expected image repositories, with the "
+    "Compose-labelled containers currently running. Returns image names, tags, "
+    "ids, creation/start timestamps, deployment labels, and mismatch warnings "
+    "without pulling, building, deploying, restarting, or exposing registry "
+    "credentials."
 )
 
 LOG_ANALYSIS_CAUTIONS = [
@@ -228,6 +276,10 @@ COLLECT_LOGS_NEXT_STEP_TIPS = [
     ),
     "Call list_log_snapshot_files to inspect which persisted source files are available.",
     "Call grep_log_snapshot or group_errors before opening large files in full.",
+    (
+        "If provenance_diagnostics is present, call the recommended tools to explain "
+        "unavailable configured sources before writing the final report."
+    ),
 ]
 
 LIST_SNAPSHOT_NEXT_STEP_TIPS = [

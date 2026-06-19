@@ -36,6 +36,10 @@ class FakeDockerBackend:
         self.calls.append(("container_health", {"container_name": container_name}))
         return {"container_name": container_name, "running": True}
 
+    def traefik_router_tls_inventory(self) -> dict[str, Any]:
+        self.calls.append(("traefik_router_tls_inventory", {}))
+        return {"routers": [], "truncated": False}
+
 
 def test_dispatch_request_rejects_unknown_services() -> None:
     service = DockerSocketService(backend=FakeDockerBackend())
@@ -82,3 +86,16 @@ def test_dispatch_request_calls_fixed_log_operation() -> None:
             },
         )
     ]
+
+
+def test_dispatch_request_calls_fixed_traefik_router_tls_operation() -> None:
+    backend = FakeDockerBackend()
+    service = DockerSocketService(backend=backend)
+
+    response = dispatch_request(
+        {"operation": "traefik_router_tls_inventory", "params": {}},
+        service,
+    )
+
+    assert response == {"ok": True, "result": {"routers": [], "truncated": False}}
+    assert backend.calls == [("traefik_router_tls_inventory", {})]

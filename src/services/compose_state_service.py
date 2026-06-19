@@ -106,17 +106,13 @@ class ComposeStateService:
         sources: list[SourceDefinition],
         running_containers: list[VpsContainerInventory],
     ) -> ComposeStateInspection | ComposeStateUnavailable:
-        """Return Compose state derived from manifest targets and runtime labels."""
+        """Return Compose state derived from manifest Compose selectors and runtime labels."""
 
-        expected_services = self._build_expected_services(
-            sources=sources,
-            running_containers=running_containers,
-        )
+        expected_services = self._build_expected_services(sources=sources)
         if not expected_services:
             return ComposeStateUnavailable(
                 message=(
-                    "No Docker manifest source target matched a Compose-labelled "
-                    "container in the current runtime."
+                    "No Docker manifest source declares Compose selectors for runtime comparison."
                 )
             )
 
@@ -142,27 +138,16 @@ class ComposeStateService:
     def _build_expected_services(
         *,
         sources: list[SourceDefinition],
-        running_containers: list[VpsContainerInventory],
     ) -> list[ExpectedComposeService]:
-        containers_by_name = {
-            container.container_name: container for container in running_containers
-        }
         services: list[ExpectedComposeService] = []
         for source in sources:
             if source.source_type != "docker":
                 continue
-            container = containers_by_name.get(source.target)
-            if container is None:
-                continue
-            compose_project = container.compose_labels.get(COMPOSE_PROJECT_LABEL)
-            compose_service = container.compose_labels.get(COMPOSE_SERVICE_LABEL)
-            if compose_project is None or compose_service is None:
-                continue
             services.append(
                 ExpectedComposeService(
                     source_key=source.source_key,
-                    compose_project=compose_project,
-                    service_name=compose_service,
+                    compose_project=str(source.compose_project),
+                    service_name=str(source.compose_service),
                 )
             )
         return sorted(services, key=lambda item: (item.compose_project, item.service_name))
@@ -295,7 +280,7 @@ class ComposeStateService:
                 ComposeStateWarning(
                     warning_type=ComposeStateWarningType.COMPOSE_PROJECT_LABEL_MISMATCH,
                     service_name=expected.service_name,
-                    message="Compose project label differs from the inferred service identity.",
+                    message="Compose project label differs from the manifest service identity.",
                     expected=expected.compose_project,
                     actual=actual_project,
                     container_name=running.container_name,
@@ -306,7 +291,7 @@ class ComposeStateService:
                 ComposeStateWarning(
                     warning_type=ComposeStateWarningType.COMPOSE_SERVICE_LABEL_MISMATCH,
                     service_name=expected.service_name,
-                    message="Compose service label differs from the inferred service identity.",
+                    message="Compose service label differs from the manifest service identity.",
                     expected=expected.service_name,
                     actual=running.service_name,
                     container_name=running.container_name,

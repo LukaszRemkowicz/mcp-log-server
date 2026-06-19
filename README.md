@@ -74,13 +74,14 @@ documentation categories, not auth scopes.
 | Group | Tools | Purpose |
 | --- | --- | --- |
 | Workflow bootstrap and discovery | `analyze_daily_log_bundle`, `list_projects` | Prepare daily workflow context and expose authorized project/source inventory. |
-| Project manifest inspection | `read_project_manifest` | Read the detailed persisted manifest contract for one authorized project or source. |
+| Project manifest inspection | `read_project_manifest`, `explain_project_source` | Read the detailed persisted manifest contract and explain one source's configured producer provenance. |
 | Log collection and session lifecycle | `collect_logs`, `close_agent_session` | Collect raw logs into workflow or session artifacts and close interactive session audit metadata. |
 | Snapshot inventory and raw inspection | `list_log_snapshot_files`, `read_log_snapshot_file`, `grep_log_snapshot` | List, read, and search persisted raw snapshot files. |
 | Snapshot analysis and derived views | `create_filtered_view`, `group_errors`, `build_incident_bundle`, `inspect_proxy_activity`, `suggest_followup_window` | Build deterministic cleaned views, grouped summaries, proxy diagnostics, incident bundles, and recollection windows. |
-| Container inspection | `inspect_containers_health`, `inspect_container_detail`, `inspect_project_compose_state`, `stat_container_path`, `read_container_file`, `list_container_directory` | Inspect approved manifest-bounded containers, runtime Compose-labelled state, and paths without mutating container state. |
+| Container inspection | `inspect_containers_health`, `inspect_container_detail`, `inspect_project_compose_state`, `inspect_project_runtime`, `inspect_project_deployment`, `stat_container_path`, `read_container_file`, `list_container_directory` | Inspect approved manifest-bounded containers, runtime Compose-labelled state, sanitized runtime env shape, deployment image provenance, and paths without mutating container state. |
 | Host path inspection | `stat_project_path`, `read_project_file`, `list_project_directory` | Inspect approved manifest-bounded host file sources without arbitrary filesystem access or mutation. |
-| VPS and edge diagnostics | `inspect_tls_certificate` | Inspect the configured `SITE_DOMAIN` TLS certificate without accepting arbitrary hostnames or ports. |
+| Scheduler provenance | `inspect_project_scheduled_jobs` | Inspect configured read-only cron/systemd roots for project scheduler evidence without running or editing jobs. |
+| VPS and edge diagnostics | `inspect_tls_certificate`, `inspect_traefik_tls_configuration` | Inspect the configured `SITE_DOMAIN` TLS certificate and sanitized Traefik router TLS state without accepting arbitrary hostnames, ports, raw Docker labels, or mutation requests. |
 | MCP service diagnostics | `get_mcp_service_status`, `get_mcp_health_check` | Check MCP server/runtime health during development and operations. |
 
 ## Snapshot Storage And Cleanup
@@ -270,6 +271,27 @@ normal production usage does not need `--path`.
 current Docker runtime labels/metadata. It does not read Compose files or
 validate desired image, port, mount, volume, or environment configuration.
 
+`inspect_project_runtime` builds on that same read-only Docker path and returns
+sanitized runtime configuration for the Compose-labelled project containers. It
+exposes selected non-secret environment values and database host/port/name/user
+shape when present, while reporting secret environment key presence without
+returning secret values or raw environment dumps.
+
+`inspect_project_deployment` compares optional manifest deployment metadata
+with the Compose-labelled containers that are actually running. It reports
+configured Compose file paths, current tag file status and value when present,
+running image repositories/tags/digests, lifecycle timestamps, and mismatch
+warnings without pulling, building, deploying, restarting, or exposing registry
+credentials.
+
+When `collect_logs` cannot collect a configured source, the project payload
+includes `provenance_diagnostics` and the persisted
+`collection_diagnostics.json` sidecar includes matching provenance hints. These
+hints tell agents which read-only project tools to call next, such as
+`explain_project_source`, scheduler inspection, file inspection, runtime
+inspection, or deployment inspection, without making those tools prerequisites
+for normal collection.
+
 In production, file source paths must be written as paths visible inside the
 MCP container. `docker-compose.prod.yml` mounts host `/var/log` as
 `/host/var/log` and host `/etc/nginx/logs` as `/host/etc/nginx/logs`, so a host
@@ -278,6 +300,13 @@ log like `/var/log/app/app.jsonl` should be configured as
 absolute paths; date templates are not expanded. For dated log files, use a
 stable current path, a host-side symlink/logrotate convention, or update the
 manifest from the owning ops repository.
+
+Production scheduler provenance is read-only and bounded. The app mounts the
+host scheduler roots used by `inspect_project_scheduled_jobs` under `/host`,
+including `/host/etc/cron.d`, `/host/etc/cron.daily`,
+`/host/etc/cron.weekly`, `/host/var/spool/cron`, and
+`/host/etc/systemd/system`. Override `SCHEDULER_INSPECTION_ROOTS` only when the
+container-visible paths differ.
 
 The production MCP app keeps Docker access behind `docker-socket-app`, using
 the same Unix socket shape described above. On Linux hosts where the real Docker

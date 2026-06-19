@@ -13,9 +13,6 @@ Use it as the stable project-facing reference for:
 - current workflow flow
 - current local and production Docker paths
 
-This is different from `infra/docs/analysis/mcp_log_server_architecture.md`, which
-should be treated as a development/planning document for future direction.
-
 ## Current Repository Role
 
 This repository currently owns the FastMCP server used for:
@@ -52,6 +49,7 @@ The repository currently includes:
 - local Docker development and production compose paths
 - Docker access through a separate Unix-socket app instead of mounting
   `/var/run/docker.sock` into the MCP app
+- production OIDC/JWKS verification for Keycloak-issued machine-to-machine JWTs
 - local PostgreSQL runtime wiring
 - Tortoise ORM and Aerich migration configuration
 - database migrations generated through the local `uv run makemigrations` alias
@@ -66,39 +64,12 @@ The repository currently includes:
 
 Current next-step note:
 
-- Phase 6 is the MVP boundary for the repository implementation.
 - workflow/session artifact lookup is now DB-backed; upcoming work should build
   on the database contracts instead of adding filesystem metadata indexes.
 
-## Current Phase Status
+## Current Database And Auth Status
 
-Phase tracking lives in
-`infra/docs/analysis/mcp_log_server_architecture.md`. This document records only
-the current implemented status.
-
-Completed Phase 4 database-integration subphases:
-
-- Phase 4a. Database Runtime
-  Local/prod Postgres runtime wiring, database settings, Compose services, and
-  persistent volumes are in place.
-- Phase 4b. ORM And Models
-  Tortoise ORM, Aerich migrations, database lifecycle wiring, and model modules
-  are in place. Current models include `AgentCall`, `ProjectManifest`,
-  `CollectLogs`, and `CollectLogsSource`.
-- Phase 4c. Backup And Restore Policy Scripts
-  Backup, restore, build, and deploy scripts are in place and documented.
-- Phase 4d. Database Services
-  Database service modules exist for agent call and project manifest metadata,
-  with DB-marked service tests running against Compose Postgres.
-- Phase 4e. Service Integration
-  `collect_logs` writes DB metadata for saved artifacts, session ids are
-  resolved by MCP/runtime code, and agent-call audit rows are persisted from
-  middleware.
-- Phase 4f. Remaining Runtime Integration
-  Snapshot read/grep, analysis tools, project listing, API tests, and HTTP E2E
-  paths use DB-backed metadata.
-
-Current Phase 4 boundary:
+Current database boundary:
 
 - collect-log snapshot metadata models and migrations exist
 - real DB tests now prove `CollectLogs`, `CollectLogsSource`, enum fields, JSON
@@ -108,6 +79,17 @@ Current Phase 4 boundary:
 - workflow lookup is DB-only; no workflow inventory JSON is written or read
 - filesystem usage is limited to raw persisted log files referenced by DB file
   fields; do not add filesystem metadata fallback or bypass paths
+
+Current production auth boundary:
+
+- production MCP validates Keycloak-issued JWTs through JWKS
+- local HS256 development JWTs remain available for dev/test
+- Keycloak owns token issuance for `codex-agent` and `workflow-agent`
+- MCP keeps project authorization database-backed through caller rows and
+  project allowlists
+- live production verification succeeded with `codex-agent` against health,
+  project discovery, collection, snapshot, analysis, diagnostics, and session
+  close tools
 
 ## Current MCP Surface
 
@@ -349,5 +331,3 @@ Use these docs with the following intent:
   stable current-state reference
 - `infra/docs/repository_foundation.md`
   what the repository foundation delivered
-- `infra/docs/analysis/mcp_log_server_architecture.md`
-  development/planning direction, not the primary current-state document

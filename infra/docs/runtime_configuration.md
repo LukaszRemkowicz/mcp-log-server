@@ -120,11 +120,16 @@ Current example JWT capabilities:
   - `grep_log_snapshot`
   - `list_projects`
   - `read_project_manifest`
+  - `explain_project_source`
   - `inspect_live_fail2ban_activity`
   - `inspect_tls_certificate`
+  - `inspect_traefik_tls_configuration`
   - `inspect_vps_containers`
   - `inspect_vps_volumes`
   - `inspect_project_compose_state`
+  - `inspect_project_runtime`
+  - `inspect_project_deployment`
+  - `inspect_project_scheduled_jobs`
   - `inspect_containers_health`
   - `inspect_container_detail`
   - `stat_container_path`
@@ -149,11 +154,15 @@ Current example JWT capabilities:
   - `grep_log_snapshot`
   - `list_projects`
   - `read_project_manifest`
+  - `explain_project_source`
   - `get_mcp_service_status`
   - `get_mcp_health_check`
   - `inspect_vps_containers`
   - `inspect_vps_volumes`
   - `inspect_project_compose_state`
+  - `inspect_project_runtime`
+  - `inspect_project_deployment`
+  - `inspect_project_scheduled_jobs`
   - `inspect_containers_health`
   - `inspect_container_detail`
   - `stat_container_path`
@@ -225,6 +234,11 @@ Manifests and logs are intentionally separate:
   `/host/etc/nginx/logs`
 - manifest file targets are literal paths; dated filename templates are not
   expanded by MCP
+- production Compose mounts scheduler provenance roots read-only under `/host`:
+  `/host/etc/cron.d`, `/host/etc/cron.daily`, `/host/etc/cron.weekly`,
+  `/host/var/spool/cron`, and `/host/etc/systemd/system`
+- `SCHEDULER_INSPECTION_ROOTS` controls which container-visible scheduler roots
+  `inspect_project_scheduled_jobs` scans
 
 - `MCP_HOST`
   Host address the FastMCP service binds inside the running process.

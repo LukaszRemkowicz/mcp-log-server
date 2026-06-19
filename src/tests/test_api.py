@@ -36,6 +36,7 @@ from services.inspection_tools_service import (
     VpsVolumeInventory,
 )
 from services.tls_certificate_service import TlsCertificateInspection
+from services.traefik_tls_service import TraefikRouterTlsInspection, TraefikTlsInspectionResult
 from tests.conftest import (
     CustomJwtToken,
     FileBackedProjectContext,
@@ -73,6 +74,14 @@ CONTAINER_TOOL_CALLS: tuple[ToolCall, ...] = (
         {"project_name": "dockerpage"},
     ),
     (
+        "inspect_project_runtime",
+        {"project_name": "dockerpage"},
+    ),
+    (
+        "inspect_project_deployment",
+        {"project_name": "dockerpage"},
+    ),
+    (
         "inspect_containers_health",
         {"project_name": "dockerpage"},
     ),
@@ -97,13 +106,18 @@ HOST_PATH_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("stat_project_path", {"project_name": "landingpage", "source_key": "app_file"}),
     ("read_project_file", {"project_name": "landingpage", "source_key": "app_file"}),
     ("list_project_directory", {"project_name": "landingpage", "source_key": "app_file"}),
+    ("inspect_project_scheduled_jobs", {"project_name": "landingpage"}),
 )
 FAIL2BAN_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("inspect_live_fail2ban_activity", {"project_name": "landingpage"}),
 )
-TLS_TOOL_CALLS: tuple[ToolCall, ...] = (("inspect_tls_certificate", {}),)
+TLS_TOOL_CALLS: tuple[ToolCall, ...] = (
+    ("inspect_tls_certificate", {}),
+    ("inspect_traefik_tls_configuration", {}),
+)
 PROJECT_MANIFEST_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("read_project_manifest", {"project_name": "landingpage"}),
+    ("explain_project_source", {"project_name": "landingpage", "source_key": "app_file"}),
 )
 ANALYSIS_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("group_errors", {"project_name": "landingpage"}),
@@ -304,12 +318,15 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "inspect_tls_certificate",
                 "list_projects",
                 "read_project_manifest",
+                "explain_project_source",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
             },
             {
                 "inspect_containers_health",
                 "inspect_project_compose_state",
+                "inspect_project_runtime",
+                "inspect_project_deployment",
                 "inspect_vps_containers",
                 "inspect_vps_volumes",
                 "inspect_container_detail",
@@ -319,6 +336,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "stat_project_path",
                 "read_project_file",
                 "list_project_directory",
+                "inspect_project_scheduled_jobs",
                 "close_agent_session",
             },
         ),
@@ -346,8 +364,11 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "inspect_tls_certificate",
                 "list_projects",
                 "read_project_manifest",
+                "explain_project_source",
                 "inspect_containers_health",
                 "inspect_project_compose_state",
+                "inspect_project_runtime",
+                "inspect_project_deployment",
                 "inspect_vps_containers",
                 "inspect_vps_volumes",
                 "inspect_container_detail",
@@ -357,6 +378,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "stat_project_path",
                 "read_project_file",
                 "list_project_directory",
+                "inspect_project_scheduled_jobs",
                 "close_agent_session",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
@@ -472,10 +494,16 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert any(item["tool_name"] == "suggest_followup_window" for item in payload["tools"])
     assert any(item["tool_name"] == "list_projects" for item in payload["tools"])
     assert any(item["tool_name"] == "read_project_manifest" for item in payload["tools"])
+    assert any(item["tool_name"] == "explain_project_source" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_tls_certificate" for item in payload["tools"])
+    assert any(
+        item["tool_name"] == "inspect_traefik_tls_configuration" for item in payload["tools"]
+    )
     assert any(item["tool_name"] == "inspect_vps_containers" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_vps_volumes" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_project_compose_state" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_project_runtime" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_project_deployment" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_containers_health" for item in payload["tools"])
     assert any(item["tool_name"] == "inspect_container_detail" for item in payload["tools"])
     assert any(item["tool_name"] == "stat_container_path" for item in payload["tools"])
@@ -484,6 +512,7 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert any(item["tool_name"] == "stat_project_path" for item in payload["tools"])
     assert any(item["tool_name"] == "read_project_file" for item in payload["tools"])
     assert any(item["tool_name"] == "list_project_directory" for item in payload["tools"])
+    assert any(item["tool_name"] == "inspect_project_scheduled_jobs" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_service_status" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_health_check" for item in payload["tools"])
     collect_logs_tool = next(
@@ -647,7 +676,11 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
                 False,
             ),
         )
-    if tool_name == "inspect_project_compose_state":
+    if tool_name in {
+        "inspect_project_compose_state",
+        "inspect_project_runtime",
+        "inspect_project_deployment",
+    }:
         mocker.patch(
             "tools.container_inspection.inspection_tools_service.inspect_vps_containers",
             return_value=[
@@ -684,6 +717,58 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
                     triage_notes=[],
                 )
             ],
+        )
+    if tool_name == "inspect_project_runtime":
+        mocker.patch(
+            "tools.container_inspection.inspection_tools_service.inspect_container_detail",
+            return_value=ContainerDetail(
+                health=ContainerHealth(
+                    container_id="abc123def456",
+                    container_name="app-container",
+                    image="portfolio/backend:2026-05-16",
+                    docker_status="running",
+                    health_status="healthy",
+                    running=True,
+                    restarting=False,
+                    paused=False,
+                    dead=False,
+                    exit_code=0,
+                    error="",
+                    restart_count=0,
+                    started_at=None,
+                    finished_at=None,
+                ),
+                created_at=None,
+                env_var_names=["DATABASE_HOST", "DATABASE_PASSWORD"],
+                env_vars=[
+                    ContainerDetailEnvVar(
+                        name="DATABASE_HOST",
+                        value="db",
+                        value_redacted=False,
+                        secret=False,
+                    ),
+                    ContainerDetailEnvVar(
+                        name="DATABASE_PASSWORD",
+                        value=None,
+                        value_redacted=True,
+                        secret=True,
+                    ),
+                ],
+                label_keys=[],
+                compose_labels={},
+                restart_policy=ContainerRestartPolicy(
+                    name="unless-stopped",
+                    maximum_retry_count=0,
+                ),
+                command=[],
+                entrypoint=[],
+                working_dir=None,
+                user=None,
+                ports=[],
+                mounts=[],
+                networks=[],
+                health_log=[],
+            ),
         )
 
     request_data = {
@@ -751,6 +836,7 @@ async def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     assert project_payload["retry_tips"] == [
         "Retry with only source_keys returned by the manifest-backed project configuration."
     ]
+    assert project_payload["provenance_diagnostics"] == []
     assert project_payload["snapshot_dir"] == str(
         file_backed_project_context.logs_dir / "workflow" / "landingpage" / "latest"
     )
@@ -1932,7 +2018,11 @@ async def test_read_project_manifest_api_returns_authorized_manifest_contract(
     assert backend_source["retention_class"] == "short"
     assert backend_source["default_noise_profile"] == "backend_noise"
     assert backend_source["stream"] is None
+    assert backend_source["compose_project"] is None
+    assert backend_source["compose_service"] is None
     assert backend_source["inspect_path_prefixes"] == []
+    assert backend_source["expected_producer_type"] is None
+    assert backend_source["scheduler_patterns"] == []
     assert "id" not in payload
     assert "created_at" not in payload
     assert "updated_at" not in payload
@@ -2058,6 +2148,169 @@ async def test_read_project_manifest_api_returns_unknown_source_error(
             "traefik",
         ],
     }
+
+
+async def test_explain_project_source_api_returns_producer_and_scheduler_hints(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    tmp_path: Path,
+) -> None:
+    """Verify source explanation connects manifest metadata with scheduler evidence."""
+
+    log_file = tmp_path / "sitemap-analysis.log"
+    log_file.write_text("sitemap complete\n", encoding="utf-8")
+    manifests_dir = tmp_path / "manifests"
+    scheduler_root = tmp_path / "etc" / "cron.d"
+    manifests_dir.mkdir()
+    scheduler_root.mkdir(parents=True)
+    (scheduler_root / "agent-monitoring").write_text(
+        (
+            "15 2 * * * root /opt/agent-monitoring/sitemap-analysis "
+            ">> /var/log/devops/cron/agent-monitoring/sitemap-analysis.log 2>&1\n"
+        ),
+        encoding="utf-8",
+    )
+    (manifests_dir / "landingpage.json").write_text(
+        f"""
+        {{
+          "project_key": "landingpage",
+          "project_summary": "Temporary project.",
+          "sources": [
+            {{
+              "source_key": "cron_sitemap_analysis",
+              "source_type": "file",
+              "target": "{log_file}",
+              "description": "Sitemap analysis cron output.",
+              "required": true,
+              "parser_type": "plain_text",
+              "normalization_profile": "app_logs",
+              "retention_class": "short",
+              "default_noise_profile": "app_noise",
+              "inspect_path_prefixes": [],
+              "expected_producer_type": "cron",
+              "scheduler_patterns": ["agent-monitoring", "sitemap-analysis"]
+            }}
+          ]
+        }}
+        """,
+        encoding="utf-8",
+    )
+    await _seed_project_manifests(manifests_dir)
+    token: str = custom_jwt_token(
+        "workflow-agent",
+        [PROJECTS_READ_SCOPE],
+        "workflow-agent",
+        {"projects_access": "all"},
+    )
+
+    with override_settings(SCHEDULER_INSPECTION_ROOTS=[scheduler_root]):
+        response = await jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "explain-project-source",
+                "method": "tools/call",
+                "params": {
+                    "name": "explain_project_source",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_key": "cron_sitemap_analysis",
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "explain_project_source"
+    assert payload["project_name"] == "landingpage"
+    assert payload["source"]["target"] == log_file.as_posix()
+    assert payload["producer"] == {
+        "metadata_status": "configured",
+        "expected_producer_type": "cron",
+        "scheduler_patterns": ["agent-monitoring", "sitemap-analysis"],
+    }
+    assert payload["scheduler_hints"]["inspected_patterns"] == [
+        "agent-monitoring",
+        "sitemap-analysis",
+    ]
+    assert payload["scheduler_hints"]["matches"][0]["scheduler_type"] == "cron_d"
+    assert payload["scheduler_hints"]["matches"][0]["line_number"] == 1
+    assert payload["scheduler_hints"]["warnings"] == []
+    assert any("stat_project_path" in tip for tip in payload["next_step_tips"])
+
+
+async def test_explain_project_source_api_reports_missing_producer_metadata(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify source explanation is useful even when producer metadata is absent."""
+
+    token: str = custom_jwt_token(
+        "workflow-agent",
+        [PROJECTS_READ_SCOPE],
+        "workflow-agent",
+        {"projects_access": "all"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "explain-project-source-missing-producer",
+            "method": "tools/call",
+            "params": {
+                "name": "explain_project_source",
+                "arguments": {"project_name": "landingpage", "source_key": "app_file"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["producer"]["metadata_status"] == "missing"
+    assert payload["producer"]["expected_producer_type"] is None
+    assert payload["scheduler_hints"] is None
+    assert any("Producer metadata is not configured" in tip for tip in payload["next_step_tips"])
+
+
+async def test_explain_project_source_api_returns_unknown_source_error(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify source explanation reuses the manifest unknown-source contract."""
+
+    token: str = custom_jwt_token(
+        "workflow-agent",
+        [PROJECTS_READ_SCOPE],
+        "workflow-agent",
+        {"projects_access": "all"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "explain-project-source-missing",
+            "method": "tools/call",
+            "params": {
+                "name": "explain_project_source",
+                "arguments": {"project_name": "landingpage", "source_key": "missing"},
+            },
+        },
+    )
+
+    result = response.json()["result"]
+    payload = result["structuredContent"]
+
+    assert response.status_code == 200
+    assert result["isError"] is True
+    assert payload["error_code"] == "unknown_source_key"
+    assert payload["details"]["source_key"] == "missing"
 
 
 async def test_read_container_file_api_returns_file_contents(
@@ -2487,6 +2740,75 @@ async def test_inspect_tls_certificate_api_returns_configured_domain_summary(
     assert payload["inspections"][1]["warning_level"] == "expired"
 
 
+async def test_inspect_traefik_tls_configuration_api_returns_router_tls_facts(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify Traefik TLS inspection returns sanitized router resolver facts."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [MCP_STATUS_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+    mocker.patch(
+        "tools.tls.traefik_tls_service.inspect_router_tls",
+        return_value=TraefikTlsInspectionResult(
+            routers=[
+                TraefikRouterTlsInspection(
+                    router_name="portfolio-prod",
+                    container_name="portfolio-prod-nginx-1",
+                    rule="Host(`example.com`)",
+                    entrypoints=["websecure"],
+                    service="portfolio-prod",
+                    tls_enabled=True,
+                    cert_resolver="letsencrypt",
+                    certificate_source="acme_resolver",
+                )
+            ],
+            truncated=False,
+        ),
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-traefik-tls-configuration",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_traefik_tls_configuration",
+                "arguments": {},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_traefik_tls_configuration"
+    assert payload["inspection_status"] == "ok"
+    assert payload["router_count"] == 1
+    assert payload["truncated"] is False
+    assert payload["warnings"] == []
+    assert payload["routers"] == [
+        {
+            "router_name": "portfolio-prod",
+            "container_name": "portfolio-prod-nginx-1",
+            "rule": "Host(`example.com`)",
+            "entrypoints": ["websecure"],
+            "service": "portfolio-prod",
+            "tls_enabled": True,
+            "cert_resolver": "letsencrypt",
+            "certificate_source": "acme_resolver",
+        }
+    ]
+    assert "labels" not in payload["routers"][0]
+
+
 async def test_inspect_container_detail_api_returns_curated_container_metadata(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
@@ -2823,16 +3145,19 @@ async def test_inspect_project_compose_state_api_returns_comparison(
     }
     assert payload["running_containers"][0]["mounts"][0]["source_redacted"] is True
     assert payload["running_containers"][0]["volume_names"] == ["dockerpage_static"]
-    assert payload["warnings"] == []
+    assert [warning["warning_type"] for warning in payload["warnings"]] == [
+        "expected_service_not_running",
+        "expected_service_not_running",
+    ]
     assert "hidden" not in json.dumps(payload)
 
 
-async def test_inspect_project_compose_state_api_requires_expected_state(
+async def test_inspect_project_compose_state_api_reports_missing_running_services(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
 ) -> None:
-    """Verify compose-state inspection requires labelled target containers."""
+    """Verify compose-state inspection reports manifest services absent from runtime."""
 
     token: str = custom_jwt_token(
         "codex-agent",
@@ -2862,9 +3187,308 @@ async def test_inspect_project_compose_state_api_requires_expected_state(
     payload = result["structuredContent"]
 
     assert response.status_code == 200
-    assert result["isError"] is True
+    assert result["isError"] is False
     assert payload["action"] == "inspect_project_compose_state"
-    assert payload["error_code"] == "compose_expected_state_unavailable"
+    assert [warning["warning_type"] for warning in payload["warnings"]] == [
+        "expected_service_not_running",
+        "expected_service_not_running",
+        "expected_service_not_running",
+    ]
+
+
+async def test_inspect_project_deployment_api_returns_image_provenance(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify deployment inspection returns running image facts."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+    mocker.patch(
+        "tools.container_inspection.inspection_tools_service.inspect_vps_containers",
+        return_value=[
+            VpsContainerInventory(
+                container_id="abc123def4567890",
+                short_container_id="abc123def456",
+                container_name="app-container",
+                image="portfolio/backend:2026-05-17",
+                command=[],
+                command_preview="",
+                created_at="2026-05-17T10:00:00Z",
+                docker_status="running",
+                state="running",
+                health_status="healthy",
+                running=True,
+                restarting=False,
+                paused=False,
+                dead=False,
+                exit_code=0,
+                error="",
+                restart_count=0,
+                started_at="2026-05-17T10:01:00Z",
+                finished_at=None,
+                compose_labels={
+                    "com.docker.compose.project": "dockerpage",
+                    "com.docker.compose.service": "backend",
+                },
+                restart_policy=ContainerRestartPolicy(
+                    name="unless-stopped",
+                    maximum_retry_count=0,
+                ),
+                ports=[],
+                network_names=["dockerpage_default"],
+                triage_notes=[],
+                env_var_names=[],
+                mounts=[],
+            )
+        ],
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-project-deployment",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_project_deployment",
+                "arguments": {"project_name": "dockerpage"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_project_deployment"
+    assert payload["project_name"] == "dockerpage"
+    assert payload["compose_project"] == "dockerpage"
+    assert payload["current_tag"]["status"] == "not_configured"
+    assert payload["running_containers"][0]["image_repository"] == "portfolio/backend"
+    assert payload["running_containers"][0]["image_tag"] == "2026-05-17"
+    assert [warning["warning_code"] for warning in payload["warnings"]] == [
+        "expected_service_not_running",
+        "expected_service_not_running",
+        "current_tag_not_configured",
+    ]
+
+
+async def test_inspect_project_runtime_api_returns_sanitized_runtime(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify project runtime inspection returns sanitized env and DB shape."""
+
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["dockerpage"]},
+    )
+    mocker.patch(
+        "tools.container_inspection.inspection_tools_service.inspect_vps_containers",
+        return_value=[
+            VpsContainerInventory(
+                container_id="abc123def4567890",
+                short_container_id="abc123def456",
+                container_name="app-container",
+                image="portfolio/backend:2026-05-17",
+                command=[],
+                command_preview="",
+                created_at="2026-05-17T10:00:00Z",
+                docker_status="running",
+                state="running",
+                health_status="healthy",
+                running=True,
+                restarting=False,
+                paused=False,
+                dead=False,
+                exit_code=0,
+                error="",
+                restart_count=0,
+                started_at="2026-05-17T10:01:00Z",
+                finished_at=None,
+                compose_labels={
+                    "com.docker.compose.project": "dockerpage",
+                    "com.docker.compose.service": "backend",
+                },
+                restart_policy=ContainerRestartPolicy(
+                    name="unless-stopped",
+                    maximum_retry_count=0,
+                ),
+                ports=[],
+                network_names=["dockerpage_default"],
+                triage_notes=[],
+                env_var_names=[
+                    "DATABASE_HOST",
+                    "DATABASE_PORT",
+                    "DATABASE_NAME",
+                    "DATABASE_USER",
+                    "DATABASE_PASSWORD",
+                    "NODE_ENV",
+                    "CUSTOM_VALUE",
+                ],
+                mounts=[],
+            )
+        ],
+    )
+    mocker.patch(
+        "tools.container_inspection.inspection_tools_service.inspect_container_detail",
+        return_value=ContainerDetail(
+            health=ContainerHealth(
+                container_id="abc123def4567890",
+                container_name="app-container",
+                image="portfolio/backend:2026-05-17",
+                docker_status="running",
+                health_status="healthy",
+                running=True,
+                restarting=False,
+                paused=False,
+                dead=False,
+                exit_code=0,
+                error="",
+                restart_count=0,
+                started_at="2026-05-17T10:01:00Z",
+                finished_at=None,
+            ),
+            created_at="2026-05-17T10:00:00Z",
+            env_var_names=[
+                "DATABASE_HOST",
+                "DATABASE_PORT",
+                "DATABASE_NAME",
+                "DATABASE_USER",
+                "DATABASE_PASSWORD",
+                "NODE_ENV",
+                "CUSTOM_VALUE",
+            ],
+            env_vars=[
+                ContainerDetailEnvVar(
+                    name="DATABASE_HOST",
+                    value="db",
+                    value_redacted=False,
+                    secret=False,
+                ),
+                ContainerDetailEnvVar(
+                    name="DATABASE_PORT",
+                    value="5432",
+                    value_redacted=False,
+                    secret=False,
+                ),
+                ContainerDetailEnvVar(
+                    name="DATABASE_NAME",
+                    value="app",
+                    value_redacted=False,
+                    secret=False,
+                ),
+                ContainerDetailEnvVar(
+                    name="DATABASE_USER",
+                    value="app_user",
+                    value_redacted=False,
+                    secret=False,
+                ),
+                ContainerDetailEnvVar(
+                    name="DATABASE_PASSWORD",
+                    value=None,
+                    value_redacted=True,
+                    secret=True,
+                ),
+                ContainerDetailEnvVar(
+                    name="NODE_ENV",
+                    value="production",
+                    value_redacted=False,
+                    secret=False,
+                ),
+                ContainerDetailEnvVar(
+                    name="CUSTOM_VALUE",
+                    value=None,
+                    value_redacted=True,
+                    secret=False,
+                ),
+            ],
+            label_keys=[],
+            compose_labels={},
+            restart_policy=ContainerRestartPolicy(
+                name="unless-stopped",
+                maximum_retry_count=0,
+            ),
+            command=[],
+            entrypoint=[],
+            working_dir=None,
+            user=None,
+            ports=[],
+            mounts=[],
+            networks=[],
+            health_log=[],
+        ),
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-project-runtime",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_project_runtime",
+                "arguments": {"project_name": "dockerpage"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_project_runtime"
+    assert payload["compose_project"] == "dockerpage"
+    assert payload["containers"][0]["database"] == {
+        "host": "db",
+        "port": "5432",
+        "name": "app",
+        "user": "app_user",
+        "missing_keys": [],
+    }
+    assert payload["containers"][0]["secret_env_names"] == ["DATABASE_PASSWORD"]
+    assert payload["containers"][0]["selected_env"] == [
+        {
+            "name": "DATABASE_HOST",
+            "value": "db",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {
+            "name": "DATABASE_NAME",
+            "value": "app",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {
+            "name": "DATABASE_PORT",
+            "value": "5432",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {
+            "name": "DATABASE_USER",
+            "value": "app_user",
+            "value_redacted": False,
+            "secret": False,
+        },
+        {
+            "name": "NODE_ENV",
+            "value": "production",
+            "value_redacted": False,
+            "secret": False,
+        },
+    ]
+    assert "hidden" not in json.dumps(payload)
 
 
 @pytest.mark.parametrize(
@@ -3125,6 +3749,112 @@ async def test_stat_project_path_api_rejects_parent_traversal(
     assert payload["action"] == "stat_project_path"
     assert payload["error_code"] == "project_path_parent_traversal"
     assert payload["details"] == {"path": "../secret.txt"}
+
+
+async def test_inspect_project_scheduled_jobs_api_returns_scheduler_evidence(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    tmp_path: Path,
+) -> None:
+    """Verify scheduler provenance returns bounded cron/systemd evidence."""
+
+    cron_d = tmp_path / "etc" / "cron.d"
+    systemd = tmp_path / "etc" / "systemd" / "system"
+    cron_d.mkdir(parents=True)
+    systemd.mkdir(parents=True)
+    (cron_d / "agent-monitoring").write_text(
+        (
+            "15 2 * * * root /opt/agent-monitoring/sitemap-analysis "
+            ">> /var/log/devops/cron/agent-monitoring/sitemap-analysis.log 2>&1\n"
+        ),
+        encoding="utf-8",
+    )
+    (systemd / "agent-monitoring-sitemap.service").write_text(
+        "[Service]\nExecStart=/opt/agent-monitoring/sitemap-analysis --once\n",
+        encoding="utf-8",
+    )
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    with override_settings(SCHEDULER_INSPECTION_ROOTS=[cron_d, systemd]):
+        response = await jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "inspect-scheduled-jobs",
+                "method": "tools/call",
+                "params": {
+                    "name": "inspect_project_scheduled_jobs",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "patterns": ["agent-monitoring", "sitemap-analysis"],
+                    },
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+    scheduler_types = {match["scheduler_type"] for match in payload["matches"]}
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_project_scheduled_jobs"
+    assert payload["project_name"] == "landingpage"
+    assert payload["patterns"] == ["agent-monitoring", "sitemap-analysis"]
+    assert payload["scheduler_roots"] == [cron_d.as_posix(), systemd.as_posix()]
+    assert scheduler_types == {"cron_d", "systemd"}
+    assert any(
+        "/var/log/devops/cron/agent-monitoring/sitemap-analysis.log" in match["output_paths"]
+        for match in payload["matches"]
+    )
+    assert payload["warnings"] == []
+
+
+async def test_inspect_project_scheduled_jobs_api_reports_missing_root_warning(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    tmp_path: Path,
+) -> None:
+    """Verify missing scheduler roots are warnings, not arbitrary filesystem access."""
+
+    missing_root = tmp_path / "missing-cron.d"
+    token: str = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+        {"allowed_projects": ["landingpage"], "client_type": "codex"},
+    )
+
+    with override_settings(SCHEDULER_INSPECTION_ROOTS=[missing_root]):
+        response = await jsonrpc.post(
+            token=token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "inspect-scheduled-jobs-missing-root",
+                "method": "tools/call",
+                "params": {
+                    "name": "inspect_project_scheduled_jobs",
+                    "arguments": {"project_name": "landingpage"},
+                },
+            },
+        )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["matches"] == []
+    assert payload["warnings"] == [
+        {
+            "path": missing_root.as_posix(),
+            "warning_code": "scheduler_root_missing",
+            "message": "Configured scheduler inspection root was not found.",
+        }
+    ]
 
 
 async def test_list_projects_api_returns_multiple_manifest_backed_projects(

@@ -25,6 +25,14 @@ ANONYMOUS_VOLUME_NAME_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 SAFE_ENV_VALUE_NAMES = frozenset(
     {
         "APP_ENV",
+        "DATABASE_HOST",
+        "DATABASE_NAME",
+        "DATABASE_PORT",
+        "DATABASE_USER",
+        "DB_HOST",
+        "DB_NAME",
+        "DB_PORT",
+        "DB_USER",
         "DEBUG",
         "DJANGO_SETTINGS_MODULE",
         "ENV",
@@ -35,6 +43,10 @@ SAFE_ENV_VALUE_NAMES = frozenset(
         "LOG_LEVEL",
         "NODE_ENV",
         "PORT",
+        "POSTGRES_DB",
+        "POSTGRES_HOST",
+        "POSTGRES_PORT",
+        "POSTGRES_USER",
         "PYTHON_ENV",
         "TZ",
     }

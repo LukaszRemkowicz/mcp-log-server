@@ -76,6 +76,8 @@ def _write_manifest(manifests_dir, project_key: str) -> None:
       "source_key": "backend",
       "source_type": "docker",
       "target": "{project_key}-backend",
+      "compose_project": "{project_key}",
+      "compose_service": "backend",
       "description": "Backend logs.",
       "parser_type": "python_json",
       "normalization_profile": "backend_app",

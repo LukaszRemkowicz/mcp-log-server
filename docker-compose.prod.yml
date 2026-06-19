@@ -58,6 +58,11 @@ services:
       - fail2ban-socket-app-run:/run/fail2ban-socket-app
       - /var/log:/host/var/log:ro
       - /etc/nginx/logs:/host/etc/nginx/logs:ro
+      - /etc/cron.d:/host/etc/cron.d:ro
+      - /etc/cron.daily:/host/etc/cron.daily:ro
+      - /etc/cron.weekly:/host/etc/cron.weekly:ro
+      - /var/spool/cron:/host/var/spool/cron:ro
+      - /etc/systemd/system:/host/etc/systemd/system:ro
       - type: bind
         source: ${PROJECT_MANIFESTS_HOST_PATH}
         target: ${PROJECT_MANIFESTS_PATH:-/app/project-manifests}

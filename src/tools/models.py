@@ -59,6 +59,18 @@ class CollectedSourcePayload(BaseModel):
         return getattr(self, key)
 
 
+class SourceProvenanceDiagnosticPayload(BaseModel):
+    """Describe provenance follow-up guidance for one unavailable log source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_key: str
+    source_type: Literal["docker", "file"]
+    status: Literal["unavailable"]
+    summary: str
+    recommended_tools: list[str]
+
+
 class LogSnapshotFilePayload(BaseModel):
     """Describe one saved file entry inside a persisted log snapshot.
 
@@ -128,6 +140,7 @@ class ProjectCollectLogsPayload(BaseModel):
     retry_tips: list[str]
     unknown_requested_source_keys: list[str]
     resolved_source_keys: list[str]
+    provenance_diagnostics: list[SourceProvenanceDiagnosticPayload]
     collected_at: str
     sources: list[CollectedSourcePayload]
 
@@ -197,7 +210,11 @@ class ProjectManifestSourcePayload(BaseModel):
     retention_class: str
     default_noise_profile: str | None
     stream: Literal["stdout", "stderr"] | None
+    compose_project: str | None
+    compose_service: str | None
     inspect_path_prefixes: list[str]
+    expected_producer_type: Literal["cron", "systemd", "docker", "app"] | None
+    scheduler_patterns: list[str]
 
 
 class ReadProjectManifestPayload(BaseModel):
@@ -213,6 +230,42 @@ class ReadProjectManifestPayload(BaseModel):
     static_asset_paths: list[str]
     static_asset_extensions: list[str]
     sources: list[ProjectManifestSourcePayload]
+
+
+class SourceProducerPayload(BaseModel):
+    """Describe configured producer provenance for one manifest source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    metadata_status: Literal["configured", "missing"]
+    expected_producer_type: Literal["cron", "systemd", "docker", "app"] | None
+    scheduler_patterns: list[str]
+
+
+class SourceSchedulerHintsPayload(BaseModel):
+    """Describe scheduler evidence connected to one manifest source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    inspected_patterns: list[str]
+    matches: list[ScheduledJobMatchPayload]
+    warnings: list[ScheduledJobWarningPayload]
+    truncated: bool
+
+
+class ExplainProjectSourcePayload(BaseModel):
+    """Structured response returned by `explain_project_source`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["explain_project_source"]
+    project_name: str
+    project_summary: str
+    source_key: str
+    source: ProjectManifestSourcePayload
+    producer: SourceProducerPayload
+    scheduler_hints: SourceSchedulerHintsPayload | None
+    next_step_tips: list[str]
 
 
 class ProjectManifestList(RootModel[list[ProjectManifestSummary]]):
@@ -517,6 +570,34 @@ class InspectTlsCertificatePayload(BaseModel):
     configured_subdomains: list[str]
     inspection_status: Literal["ok", "warning", "unavailable"]
     inspections: list[TlsCertificateInspectionPayload]
+
+
+class TraefikRouterTlsPayload(BaseModel):
+    """Describe one sanitized Traefik router TLS inspection result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    router_name: str
+    container_name: str
+    rule: str | None
+    entrypoints: list[str]
+    service: str | None
+    tls_enabled: bool
+    cert_resolver: str | None
+    certificate_source: Literal["acme_resolver", "static_or_default", "not_tls"]
+
+
+class InspectTraefikTlsConfigurationPayload(BaseModel):
+    """Structured response returned by `inspect_traefik_tls_configuration`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_traefik_tls_configuration"]
+    inspection_status: Literal["ok", "unavailable"]
+    router_count: int
+    truncated: bool
+    routers: list[TraefikRouterTlsPayload]
+    warnings: list[str]
 
 
 class InspectProxyActivityPayload(BaseModel):
@@ -1075,3 +1156,52 @@ class ListProjectDirectoryPayload(BaseModel):
     path: str
     truncated: bool
     entries: list[ProjectPathMetadataPayload]
+
+
+class ScheduledJobMatchPayload(BaseModel):
+    """Describe one matched cron/systemd scheduler evidence item."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scheduler_type: Literal["cron_d", "cron_daily", "cron_weekly", "crontab", "systemd", "unknown"]
+    path: str
+    line_number: int | None
+    schedule_context: str | None
+    command_text: str
+    output_paths: list[str]
+    matched_patterns: list[str]
+    visibility_warnings: list[str]
+
+
+class ScheduledJobWarningPayload(BaseModel):
+    """Describe a skipped or degraded scheduler inspection path."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    path: str | None
+    warning_code: Literal[
+        "scheduler_root_not_absolute",
+        "scheduler_root_missing",
+        "scheduler_root_not_directory",
+        "scheduler_root_unreadable",
+        "scheduler_file_unreadable",
+        "scheduler_file_too_large",
+        "scheduler_scan_truncated",
+        "scheduler_pattern_ignored",
+    ]
+    message: str
+
+
+class InspectProjectScheduledJobsPayload(BaseModel):
+    """Structured success payload returned by `inspect_project_scheduled_jobs`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_project_scheduled_jobs"]
+    requested_project_name: str | None
+    project_name: str
+    patterns: list[str]
+    scheduler_roots: list[str]
+    truncated: bool
+    matches: list[ScheduledJobMatchPayload]
+    warnings: list[ScheduledJobWarningPayload]
