@@ -25,7 +25,7 @@ from database.schemas import (
 from database.services.agent_sessions import AgentSessionService as AgentSessionDBService
 from database.services.collect_logs import CollectLogsService as CollectLogsDBService
 from database.services.collect_logs import CollectLogsSourceService as CollectLogsSourceDBService
-from exception import InvalidTimeFilterError, MissingSessionIdError
+from exceptions import DockerSocketGatewayError, InvalidTimeFilterError, MissingSessionIdError
 from manifests.models import Manifest, SourceDefinition
 from tools.models import (
     CollectedSourcePayload,
@@ -40,7 +40,7 @@ from utils.log_snapshots import (
     COLLECTION_DIAGNOSTICS_SOURCE_KEY,
 )
 
-from .docker_socket_gateway import DockerSocketGatewayClient, DockerSocketGatewayError
+from .docker_socket_gateway import DockerSocketGatewayClient
 from .log_snapshots import LogSnapshotService
 from .session_ids import SESSION_ID_MAX_LENGTH, generate_session_id
 
@@ -1212,7 +1212,7 @@ class LogCollectionService:
         payload = self.docker_socket_client.request("vps_containers_inventory", {})
         containers = payload.get("containers", [])
         if not isinstance(containers, list):
-            raise DockerSocketGatewayError(message="Docker socket app returned invalid inventory.")
+            raise DockerSocketGatewayError(message="Socket app returned invalid inventory.")
         exact_matches = [
             container
             for container in containers
@@ -1255,7 +1255,7 @@ class LogCollectionService:
         payload = self.docker_socket_client.request("container_logs", params)
         logs = payload.get("logs", [])
         if not isinstance(logs, list):
-            raise DockerSocketGatewayError(message="Docker socket app returned invalid logs.")
+            raise DockerSocketGatewayError(message="Socket app returned invalid logs.")
         for line in logs:
             yield f"{line}\n".encode()
 

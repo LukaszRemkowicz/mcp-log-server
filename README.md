@@ -117,9 +117,9 @@ src/
 docker/
   app/
     Dockerfile
-  docker-socket-app/
+  socket-app/
     Dockerfile
-docker-socket-app/
+socket-app/
   src/
   tests/
   README.md
@@ -213,40 +213,61 @@ After a successful deploy records `current_tag`, host-side `uv run shell` and
 already set. Set `TAG=vX.Y.Z` explicitly to run a host-side command against a
 specific production image before or outside the recorded deployment state.
 
-## Docker Access
+## Socket App Access
 
 The MCP app does not mount `/var/run/docker.sock`.
 
-Docker reads go through a small separate container named `docker-socket-app`.
-That container is the only application container with the real Docker socket
+Docker-backed reads, CrowdSec diagnostics, and landingpage Django fixed
+operations go through one small separate container named `socket-app`. That
+container is the only application container with the real Docker socket
 mounted. The MCP app talks to it over a private Unix socket file shared by a
-Compose volume. There is no HTTP port and no TCP listener for Docker access.
+Compose volume. There is no HTTP port and no TCP listener for helper access.
 
 ```text
 MCP app
-  -> /run/docker-socket-app/gateway.sock
-  -> docker-socket-app
+  -> /run/socket-app/gateway.sock
+  -> socket-app
   -> Docker SDK
   -> /var/run/docker.sock
 ```
 
-The socket path is configured with `DOCKER_SOCKET_APP_SOCKET_PATH`. In Compose,
-both the MCP app and `docker-socket-app` receive the same value:
+Compose passes the same socket path to both the MCP app and `socket-app`:
 
 ```text
-/run/docker-socket-app/gateway.sock
+/run/socket-app/gateway.sock
 ```
 
-The named volume `docker-socket-app-run` makes that directory visible to both
-containers. The `docker-socket-app` process creates the socket file there. The
-MCP app only connects to that file.
+The named volume `socket-app-run` makes that directory visible to both
+containers. The `socket-app` process creates the socket file there. The MCP app
+only connects to that file.
 
-Inside the MCP code, Docker access is kept behind one transport client:
+Inside the MCP code, helper access is kept behind one transport client:
 `DockerSocketGatewayClient`. Current users are:
 
 - `LogCollectionService` for `collect_logs`
 - `InspectionToolsService` for container, volume, Compose-state, and file-read
   inspection tools
+- `CrowdSecService` for fixed `cscli` diagnostics inside the CrowdSec container
+- `LandingpageDjangoService` for fixed landingpage Django command discovery and
+  media inventory operations
+
+```text
+MCP app
+  -> /run/socket-app/gateway.sock
+  -> socket-app
+  -> docker exec into the landingpage backend container
+  -> uv run python manage.py mcp_list_commands --json
+  -> uv run python manage.py media_inventory --json
+  -> landingpage backend runtime
+```
+
+The landingpage Django discovery command is expected to return JSON describing
+the available fixed commands and their agent-facing descriptions. The media
+inventory command is expected to return JSON describing DB media references,
+disk files, missing references, and unreferenced delete candidates. Until
+landingpage provides those commands and the connector is pointed at the correct
+backend container, the MCP tools report a connector or command availability
+error rather than guessing from DB state.
 
 The Docker socket app accepts only fixed read-only operations such as
 `container_logs`, `container_health`, `container_file_read`, and
@@ -308,10 +329,10 @@ including `/host/etc/cron.d`, `/host/etc/cron.daily`,
 `/host/etc/systemd/system`. Override `SCHEDULER_INSPECTION_ROOTS` only when the
 container-visible paths differ.
 
-The production MCP app keeps Docker access behind `docker-socket-app`, using
-the same Unix socket shape described above. On Linux hosts where the real Docker
-socket group differs, pass `DOCKER_SOCKET_GID` so the `docker-socket-app`
-container can read `/var/run/docker.sock`; see
+The production MCP app keeps helper access behind `socket-app`, using the same
+Unix socket shape described above. On Linux hosts where the real Docker socket
+group differs, pass `DOCKER_SOCKET_GID` so the `socket-app` container can read
+`/var/run/docker.sock`; see
 [infra/docs/runtime_configuration.md](infra/docs/runtime_configuration.md).
 
 ## Quality Checks

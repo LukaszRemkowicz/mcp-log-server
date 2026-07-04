@@ -11,7 +11,7 @@ from database.fields import FileReference
 from database.fields import FileStorage as DBFileStorage
 from database.schemas import CollectLogsSourceOut, CollectLogsWithSourcesOut
 from database.services.collect_logs import CollectLogsService as CollectLogsDBService
-from exception import MissingSessionIdError
+from exceptions import MissingSessionIdError
 from services.log_snapshots import (
     LogSnapshotService,
     SnapshotContext,

@@ -105,6 +105,30 @@ def test_build_compose_command_runs_local_app_service_command() -> None:
     ]
 
 
+def test_build_compose_command_can_skip_service_dependencies() -> None:
+    command = utils.build_compose_command(
+        "local",
+        ["python", "-m", "cli.main", "upload-project-manifest", "--all"],
+        no_deps=True,
+    )
+
+    assert command == [
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.yml",
+        "run",
+        "--no-deps",
+        "--rm",
+        "app",
+        "python",
+        "-m",
+        "cli.main",
+        "upload-project-manifest",
+        "--all",
+    ]
+
+
 def test_build_compose_command_runs_prod_app_service_command(
     mocker: MockerFixture,
 ) -> None:
@@ -156,6 +180,22 @@ def test_build_compose_command_uses_explicit_prod_tag(monkeypatch) -> None:
         "--exp-time",
         "576",
     ]
+
+
+def test_resolve_compose_run_policy_marks_db_only_commands() -> None:
+    policy = utils.resolve_compose_run_policy(
+        ["python", "-m", "cli.main", "upload-project-manifest", "--all"]
+    )
+
+    assert policy.preflight_services == ("db",)
+    assert policy.no_deps is True
+
+
+def test_resolve_compose_run_policy_leaves_runtime_commands_unchanged() -> None:
+    policy = utils.resolve_compose_run_policy(["python", "-m", "cli.main", "--help"])
+
+    assert policy.preflight_services == ()
+    assert policy.no_deps is False
 
 
 def test_commands_compose_project_name_prefers_commands_env(
@@ -220,3 +260,46 @@ def test_should_bridge_to_compose_respects_disable_env(
     mocker.patch("cli.utils.is_running_in_container", return_value=False)
 
     assert utils.should_bridge_to_compose() is False
+
+
+def test_run_compose_command_starts_db_before_db_only_commands(
+    mocker: MockerFixture,
+) -> None:
+    run = mocker.patch(
+        "cli.utils.subprocess.run",
+        side_effect=[
+            mocker.Mock(returncode=0),
+            mocker.Mock(returncode=0),
+        ],
+    )
+    mocker.patch("cli.utils.get_current_environment", return_value="local")
+
+    result = utils.run_compose_command(
+        ["python", "-m", "cli.main", "upload-project-manifest", "--all"],
+    )
+
+    assert result == 0
+    assert run.call_args_list[0].args[0] == [
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.yml",
+        "up",
+        "-d",
+        "db",
+    ]
+    assert run.call_args_list[1].args[0] == [
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.yml",
+        "run",
+        "--no-deps",
+        "--rm",
+        "app",
+        "python",
+        "-m",
+        "cli.main",
+        "upload-project-manifest",
+        "--all",
+    ]

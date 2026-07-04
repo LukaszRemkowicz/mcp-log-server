@@ -13,7 +13,7 @@ from conf import settings
 from core.types import LogWorkspace
 from database.schemas import CollectLogsSourceOut
 from database.services.collect_logs import CollectLogsService as CollectLogsDBService
-from exception import MissingSessionIdError
+from exceptions import MissingSessionIdError
 from storage import LogFileStorage
 from storage import storage as default_storage
 from tools.models import (

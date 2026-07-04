@@ -55,6 +55,8 @@ repos:
 
       - id: pip-audit
         name: pip-audit
+        # TODO: remove this ignore when Safety no longer pulls vulnerable nltk
+        # or pip-audit reports a fixed nltk release for PYSEC-2026-597.
         entry: >-
           env UV_CACHE_DIR=/tmp/mcp-log-server-uv-cache
           bash -c 'requirements_file="$(mktemp)" &&
@@ -63,7 +65,8 @@ repos:
           uv export --frozen --no-emit-project --no-hashes > "$requirements_file" &&
           grep -v "^pip==" "$requirements_file" > "$requirements_file.filtered" &&
           mv "$requirements_file.filtered" "$requirements_file" &&
-          uv run pip-audit -r "$requirements_file" --no-deps --disable-pip'
+          uv run pip-audit -r "$requirements_file" --no-deps --disable-pip
+          --ignore-vuln PYSEC-2026-597'
         language: system
         pass_filenames: false
         files: ^(pyproject\.toml|uv\.lock)$

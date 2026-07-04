@@ -3,17 +3,44 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from docker_socket_app.adapters import DockerSdkAdapter
+from socket_app.adapters import DockerSdkAdapter
+
+
+class FakeExecResult:
+    def __init__(self, *, exit_code: int, output: bytes) -> None:
+        self.exit_code = exit_code
+        self.output = output
 
 
 class FakeContainer:
     def __init__(self, attrs: dict[str, Any] | None = None) -> None:
         self.attrs = attrs or {}
         self.log_kwargs: dict[str, Any] | None = None
+        self.exec_calls: list[list[str]] = []
+        self.exec_workdirs: list[str | None] = []
 
     def logs(self, **kwargs: Any) -> list[bytes]:
         self.log_kwargs = kwargs
         return [b"2026-06-17T21:00:00Z ready\n"]
+
+    def exec_run(
+        self,
+        command: list[str],
+        stdout: bool = True,
+        stderr: bool = True,
+        demux: bool = False,
+        tty: bool = False,
+        workdir: str | None = None,
+    ) -> FakeExecResult:
+        _ = (stdout, stderr, tty)
+        self.exec_calls.append(command)
+        self.exec_workdirs.append(workdir)
+        if demux:
+            if "mcp_list_commands" in command:
+                return FakeExecResult(exit_code=0, output=(b'{"commands":[]}', b""))
+            if "media_inventory" in command:
+                return FakeExecResult(exit_code=0, output=(b'{"summary":{"disk_files":1}}', b""))
+        return FakeExecResult(exit_code=0, output=f"{' '.join(command)} output".encode())
 
 
 class FakeContainers:
@@ -161,3 +188,50 @@ def test_traefik_router_tls_inventory_extracts_sanitized_router_labels() -> None
         ],
         "truncated": False,
     }
+
+
+def test_crowdsec_activity_runs_only_fixed_cscli_reads() -> None:
+    container = FakeContainer()
+    adapter = DockerSdkAdapter(client=FakeDockerClient(container))
+
+    result = adapter.crowdsec_activity(container_name="crowdsec")
+
+    assert container.exec_calls == [
+        ["cscli", "decisions", "list"],
+        ["cscli", "metrics", "show", "appsec"],
+        ["cscli", "bouncers", "list"],
+        ["cscli", "alerts", "list"],
+        ["cscli", "collections", "list"],
+    ]
+    assert result["container_name"] == "crowdsec"
+    assert result["sections"]["decisions"]["ok"] is True
+    assert result["sections"]["appsec_metrics"]["command"] == [
+        "cscli",
+        "metrics",
+        "show",
+        "appsec",
+    ]
+
+
+def test_landingpage_django_operations_run_only_fixed_commands() -> None:
+    container = FakeContainer()
+    adapter = DockerSdkAdapter(client=FakeDockerClient(container))
+
+    commands = adapter.landingpage_django_list_commands(
+        container_name="portfolio-dev-be-1",
+        base_command=["uv", "run", "python", "manage.py"],
+        cwd="/app",
+    )
+    inventory = adapter.landingpage_django_media_inventory(
+        container_name="portfolio-dev-be-1",
+        base_command=["uv", "run", "python", "manage.py"],
+        cwd="/app",
+    )
+
+    assert commands == {"commands": []}
+    assert inventory == {"summary": {"disk_files": 1}}
+    assert container.exec_calls == [
+        ["uv", "run", "python", "manage.py", "mcp_list_commands", "--json"],
+        ["uv", "run", "python", "manage.py", "media_inventory", "--json"],
+    ]
+    assert container.exec_workdirs == ["/app", "/app"]

@@ -10,6 +10,39 @@ from pydantic import BaseModel, Field, model_validator
 _PATH_SCHEME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 
 
+class SourceCommandRun(BaseModel):
+    """Describe how MCP may run fixed project commands in one source container."""
+
+    enabled: bool = True
+    base_command: list[str] = Field(min_length=1)
+    cwd: str
+
+    @model_validator(mode="after")
+    def validate_command_run_shape(self) -> SourceCommandRun:
+        """Require explicit command tokens and a clean absolute workdir."""
+
+        command = [part.strip() for part in self.base_command]
+        if any(not part or any(ord(character) < 32 for character in part) for part in command):
+            raise ValueError("command_run base_command must contain clean command tokens.")
+        self.base_command = command
+
+        normalized_cwd = self.cwd.replace("\\", "/")
+        path_parts = normalized_cwd.split("/")[1:]
+        invalid_cwd = (
+            not normalized_cwd
+            or not normalized_cwd.startswith("/")
+            or normalized_cwd.startswith("//")
+            or normalized_cwd.startswith("~")
+            or _PATH_SCHEME_PATTERN.match(normalized_cwd) is not None
+            or any(ord(character) < 32 for character in normalized_cwd)
+            or any(part in {"", ".", ".."} for part in path_parts)
+        )
+        if invalid_cwd:
+            raise ValueError("command_run cwd must be a clean absolute path.")
+        self.cwd = normalized_cwd
+        return self
+
+
 class SourceDefinition(BaseModel):
     """Describe a single log source that MCP can collect for a project."""
 
@@ -28,6 +61,7 @@ class SourceDefinition(BaseModel):
     inspect_path_prefixes: list[str] = Field(default_factory=list)
     expected_producer_type: Literal["cron", "systemd", "docker", "app"] | None = None
     scheduler_patterns: list[str] = Field(default_factory=list)
+    command_run: SourceCommandRun | None = None
 
     @model_validator(mode="after")
     def validate_source_shape(self) -> SourceDefinition:
@@ -44,6 +78,9 @@ class SourceDefinition(BaseModel):
             self.compose_service = compose_service
         elif self.compose_project is not None or self.compose_service is not None:
             raise ValueError("compose selectors are only valid for docker sources.")
+
+        if self.command_run is not None and self.source_type != "docker":
+            raise ValueError("command_run is only valid for docker sources.")
 
         if self.source_type != "file":
             return self

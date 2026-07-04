@@ -124,7 +124,7 @@ Currently implemented tools:
 - `stat_project_path`
 - `read_project_file`
 - `list_project_directory`
-- `inspect_live_fail2ban_activity`
+- `inspect_live_crowdsec_activity`
 - `inspect_tls_certificate`
 - `analyze_sitemap_bundle`
 
@@ -261,12 +261,12 @@ Characteristics:
 - bind-mounts `./src`
 - applies committed migrations with `uv run migrate`, then uses `watchfiles`
 - includes `app`, `db`, and `test` services
-- includes `docker-socket-app` for Docker-backed reads
+- includes `socket-app` for Docker-backed reads and fixed landingpage Django helpers
 - uses the official `postgres:18` image for the `db` service
 - persists local database data in the named `mcp-local_postgres-data` Docker volume
-- mounts `/var/run/docker.sock` only into `docker-socket-app`, not into `app`
-- shares `/run/docker-socket-app` between `app` and `docker-socket-app` through
-  the `docker-socket-app-run` named volume
+- mounts `/var/run/docker.sock` only into `socket-app`, not into `app`
+- shares `/run/socket-app` between `app` and `socket-app` through the
+  `socket-app-run` named volume
 - binds published service ports to `127.0.0.1` to avoid VPS-wide port exposure
 - uses host port `5437` for local MCP Postgres by default, leaving
   `landingpage`'s local `5436` binding separate
@@ -283,12 +283,12 @@ Characteristics:
 
 - no bind mounts
 - no file watching
-- runs `app`, `db`, and `docker-socket-app` services
+- runs `app`, `db`, and `socket-app` services
 - uses the official `postgres:18` image for the `db` service
 - persists database data in the Compose-managed `postgres-data` Docker volume
-- mounts `/var/run/docker.sock` only into `docker-socket-app`, not into `app`
-- shares `/run/docker-socket-app` between `app` and `docker-socket-app` through
-  the `docker-socket-app-run` named volume
+- mounts `/var/run/docker.sock` only into `socket-app`, not into `app`
+- shares `/run/socket-app` between `app` and `socket-app` through the
+  `socket-app-run` named volume
 - binds the MCP HTTP host port to `127.0.0.1`
 - starts with `uv run python -m main`
 

@@ -69,22 +69,31 @@ INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION = (
 )
 
 INSPECT_PROBE_BLOCKING_ACTIVITY_TOOL_DESCRIPTION = (
-    "Inspect collected fail2ban plus nginx/Traefik access snapshot sources for "
+    "Inspect collected CrowdSec plus nginx/Traefik access snapshot sources for "
     "deterministic probe-blocking correlation. Returns sensitive-path probe "
     "requests by IP, whether each IP should have crossed the configured retry "
-    "threshold, and whether historical fail2ban Ban or already-banned events "
-    "were observed. This tool reads snapshot files only and does not run live "
-    "fail2ban commands."
+    "threshold, and whether mitigation evidence was observed. This tool reads "
+    "snapshot files only and does not run live CrowdSec commands."
 )
 
-INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION = (
-    "Inspect live fail2ban runtime state for a project such as vps-security "
-    "through a fixed allowlist of fail2ban-client status commands. Returns "
-    "active jail names, per-jail ban counters, and currently banned IPs when "
-    "the fail2ban client and host socket are available to MCP. This tool does "
-    "not run caller-provided shell commands and does not collect historical "
-    "logs; use collect_logs plus the fail2ban source for historical incident "
+INSPECT_LIVE_CROWDSEC_ACTIVITY_TOOL_DESCRIPTION = (
+    "Inspect live CrowdSec runtime state for a project such as vps-security "
+    "through fixed allowlisted cscli reads inside the CrowdSec docker source "
+    "declared by the authorized project manifest. Returns decisions, AppSec "
+    "metrics, bouncer status, alerts, and collection status when the generic "
+    "socket app and CrowdSec container are available. This tool does not run "
+    "caller-provided shell commands and does not collect historical logs; use "
+    "collect_logs plus CrowdSec/Traefik sources for historical incident "
     "analysis."
+)
+
+LIST_LANDINGPAGE_DJANGO_COMMANDS_TOOL_DESCRIPTION = (
+    "List landingpage Django-backed commands available to the agent through "
+    "the fixed internal connector for one authorized project. Use this as "
+    "discovery before choosing a landingpage Django-backed action. This tool "
+    "returns descriptions and "
+    "parameter metadata only; it does not run arbitrary Django commands and "
+    "does not accept caller-provided command names."
 )
 
 INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION = (
@@ -253,6 +262,15 @@ INSPECT_PROJECT_DEPLOYMENT_TOOL_DESCRIPTION = (
     "ids, creation/start timestamps, deployment labels, and mismatch warnings "
     "without pulling, building, deploying, restarting, or exposing registry "
     "credentials."
+)
+
+INSPECT_LANDINGPAGE_MEDIA_INVENTORY_TOOL_DESCRIPTION = (
+    "Inspect landingpage media inventory through the fixed landingpage media "
+    "Unix-socket connector. Returns the Django-produced media report with DB "
+    "file references, disk inventory, missing references, and unreferenced "
+    "delete candidates when the connector and landingpage command are available. "
+    "This tool does not delete files, expose arbitrary shell access, or connect "
+    "directly to the landingpage database."
 )
 
 LOG_ANALYSIS_CAUTIONS = [

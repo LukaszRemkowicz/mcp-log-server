@@ -1,4 +1,4 @@
-"""Docker SDK adapter for the Docker socket app."""
+"""Docker SDK adapter for the generic socket app."""
 
 from __future__ import annotations
 
@@ -7,78 +7,17 @@ from datetime import UTC, datetime
 from pathlib import PurePosixPath
 from typing import Any
 
+import environ
 from docker import from_env
-from docker.errors import APIError, DockerException
+from docker.errors import DockerException
 from requests import exceptions as requests_exceptions
 
+from . import settings
+from .exceptions import DockerBackendError
 from .schemas import DockerBackend
+from .services import BackendCommandRunService, CrowdSecService, DockerService
 
-DOCKER_TIMEOUT_SECONDS = 15
-MAX_LOG_BYTES = 1_000_000
-MAX_FILE_BYTES = 200_000
-MAX_DIRECTORY_ENTRIES = 200
-MAX_VPS_CONTAINERS = 200
-MAX_VPS_VOLUMES = 200
-MAX_TRAEFIK_ROUTERS = 200
-TRAEFIK_ROUTER_LABEL_PREFIX = "traefik.http.routers."
-TRAEFIK_ROUTER_SAFE_PROPERTIES = frozenset(
-    {"entrypoints", "rule", "service", "tls", "tls.certresolver"}
-)
-TRUE_LABEL_VALUES = frozenset({"1", "on", "true", "yes"})
-ANONYMOUS_VOLUME_NAME_PATTERN = re.compile(r"^[0-9a-f]{64}$")
-SAFE_COMPOSE_LABEL_KEYS = frozenset(
-    {
-        "com.docker.compose.project",
-        "com.docker.compose.service",
-        "com.docker.compose.container-number",
-        "com.docker.compose.oneoff",
-        "com.docker.compose.volume",
-    }
-)
-SAFE_ENV_VALUE_NAMES = frozenset(
-    {
-        "APP_ENV",
-        "DATABASE_HOST",
-        "DATABASE_NAME",
-        "DATABASE_PORT",
-        "DATABASE_USER",
-        "DB_HOST",
-        "DB_NAME",
-        "DB_PORT",
-        "DB_USER",
-        "ENV",
-        "ENVIRONMENT",
-        "LOG_LEVEL",
-        "NODE_ENV",
-        "PORT",
-        "POSTGRES_DB",
-        "POSTGRES_HOST",
-        "POSTGRES_PORT",
-        "POSTGRES_USER",
-    }
-)
-SECRET_ENV_NAME_PARTS = frozenset(
-    {
-        "ACCESS_KEY",
-        "API_KEY",
-        "AUTH",
-        "BROKER_URL",
-        "CREDENTIAL",
-        "DATABASE_URL",
-        "DB_URL",
-        "DSN",
-        "KEY_FILE",
-        "PASSWORD",
-        "PRIVATE_KEY",
-        "REDIS_URL",
-        "SECRET",
-        "TOKEN",
-    }
-)
-
-
-class DockerBackendError(RuntimeError):
-    """Expected Docker SDK operation failure."""
+ANONYMOUS_VOLUME_NAME_PATTERN = re.compile(settings.ANONYMOUS_VOLUME_NAME_PATTERN)
 
 
 class DockerSdkAdapter(DockerBackend):
@@ -95,7 +34,10 @@ class DockerSdkAdapter(DockerBackend):
     """
 
     def __init__(self, client: Any | None = None) -> None:
-        self.client = client or from_env(timeout=DOCKER_TIMEOUT_SECONDS)
+        self.client = client or from_env(timeout=settings.DOCKER_TIMEOUT_SECONDS)
+        self.docker_service = DockerService(self.client)
+        self.crowdsec_service = CrowdSecService(self.docker_service)
+        self.backend_command_run_service = BackendCommandRunService(self.docker_service)
 
     def container_logs(
         self,
@@ -138,7 +80,7 @@ class DockerSdkAdapter(DockerBackend):
         for chunk in chunks:
             raw = chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8")
             total_bytes += len(raw)
-            if total_bytes > MAX_LOG_BYTES:
+            if total_bytes > settings.MAX_LOG_BYTES:
                 truncated = True
                 break
             lines.append(raw.decode("utf-8", errors="replace").rstrip("\n"))
@@ -161,13 +103,13 @@ class DockerSdkAdapter(DockerBackend):
     def container_health(self, *, container_name: str) -> dict[str, Any]:
         """Return bounded runtime state for one container."""
 
-        container = self._get_container(container_name)
+        container = self.docker_service.get_container(container_name)
         return self._parse_container_health(container.attrs, container_name)
 
     def container_detail(self, *, container_name: str) -> dict[str, Any]:
         """Return curated inspect-style metadata for one container."""
 
-        container = self._get_container(container_name)
+        container = self.docker_service.get_container(container_name)
         attrs = container.attrs if isinstance(container.attrs, dict) else {}
         config = attrs.get("Config") if isinstance(attrs.get("Config"), dict) else {}
         host_config = attrs.get("HostConfig") if isinstance(attrs.get("HostConfig"), dict) else {}
@@ -193,9 +135,9 @@ class DockerSdkAdapter(DockerBackend):
         """Return stat metadata for one regular file or directory inside a container."""
 
         normalized_path = self._normalize_container_path(path)
-        output = self._run_container_command(
-            container_name,
-            [
+        output = self.docker_service.run_text(
+            container_name=container_name,
+            command=[
                 "find",
                 normalized_path,
                 "-maxdepth",
@@ -229,7 +171,7 @@ class DockerSdkAdapter(DockerBackend):
     ) -> dict[str, Any]:
         """Read one bounded regular file inside a container."""
 
-        limit = max_bytes or MAX_FILE_BYTES
+        limit = max_bytes or settings.MAX_FILE_BYTES
         if limit < 1:
             raise DockerBackendError("max_bytes must be a positive integer.")
         path_stat = self.container_path_stat(container_name=container_name, path=path)
@@ -238,9 +180,20 @@ class DockerSdkAdapter(DockerBackend):
                 "Requested container path is a directory, not a readable regular file."
             )
         normalized_path = self._normalize_container_path(path)
-        output = self._run_container_command(
-            container_name,
-            ["find", normalized_path, "-maxdepth", "0", "-type", "f", "-exec", "cat", "{}", ";"],
+        output = self.docker_service.run_text(
+            container_name=container_name,
+            command=[
+                "find",
+                normalized_path,
+                "-maxdepth",
+                "0",
+                "-type",
+                "f",
+                "-exec",
+                "cat",
+                "{}",
+                ";",
+            ],
         )
         encoded = output.encode("utf-8")
         truncated = len(encoded) > limit
@@ -257,14 +210,14 @@ class DockerSdkAdapter(DockerBackend):
     ) -> dict[str, Any]:
         """List one directory or return one file stat."""
 
-        limit = max_entries or MAX_DIRECTORY_ENTRIES
+        limit = max_entries or settings.MAX_DIRECTORY_ENTRIES
         path_stat = self.container_path_stat(container_name=container_name, path=path)
         if not path_stat["is_dir"]:
             return {"path": path_stat["path"], "entries": [path_stat], "truncated": False}
 
-        output = self._run_container_command(
-            container_name,
-            [
+        output = self.docker_service.run_text(
+            container_name=container_name,
+            command=[
                 "find",
                 path_stat["path"],
                 "-mindepth",
@@ -307,8 +260,8 @@ class DockerSdkAdapter(DockerBackend):
         rows = [self._parse_container_inventory(container.attrs) for container in containers]
         rows.sort(key=lambda item: item["container_name"])
         return {
-            "containers": rows[:MAX_VPS_CONTAINERS],
-            "truncated": len(rows) > MAX_VPS_CONTAINERS,
+            "containers": rows[: settings.MAX_VPS_CONTAINERS],
+            "truncated": len(rows) > settings.MAX_VPS_CONTAINERS,
         }
 
     def vps_volumes_inventory(
@@ -341,7 +294,10 @@ class DockerSdkAdapter(DockerBackend):
                 continue
             rows.append(row)
         rows.sort(key=lambda item: item["volume_name"])
-        return {"volumes": rows[:MAX_VPS_VOLUMES], "truncated": len(rows) > MAX_VPS_VOLUMES}
+        return {
+            "volumes": rows[: settings.MAX_VPS_VOLUMES],
+            "truncated": len(rows) > settings.MAX_VPS_VOLUMES,
+        }
 
     def traefik_router_tls_inventory(self) -> dict[str, Any]:
         """Return bounded, sanitized Traefik HTTP router TLS inventory."""
@@ -358,39 +314,36 @@ class DockerSdkAdapter(DockerBackend):
             rows.extend(self._extract_traefik_router_tls_rows(container.attrs))
         rows.sort(key=lambda item: (item["router_name"], item["container_name"]))
         return {
-            "routers": rows[:MAX_TRAEFIK_ROUTERS],
-            "truncated": len(rows) > MAX_TRAEFIK_ROUTERS,
+            "routers": rows[: settings.MAX_TRAEFIK_ROUTERS],
+            "truncated": len(rows) > settings.MAX_TRAEFIK_ROUTERS,
         }
 
-    def _get_container(self, container_name: str) -> Any:
-        try:
-            return self.client.containers.get(container_name)
-        except APIError as error:
-            output = str(error).strip() or "Unknown docker error."
-            if "No such container" in output:
-                raise DockerBackendError(
-                    f"Configured container {container_name!r} is not available "
-                    "in the current runtime."
-                ) from error
-            raise DockerBackendError(output) from error
-        except requests_exceptions.Timeout as error:
-            raise DockerBackendError(
-                f"Timed out inspecting container {container_name!r}."
-            ) from error
-        except DockerException as error:
-            raise DockerBackendError(str(error).strip() or "Docker operation failed.") from error
+    def crowdsec_activity(self, *, container_name: str) -> dict[str, Any]:
+        """Return fixed read-only CrowdSec diagnostics from one container."""
 
-    def _run_container_command(self, container_name: str, command: list[str]) -> str:
-        container = self._get_container(container_name)
-        result = container.exec_run(command, stdout=True, stderr=True)
-        exit_code = 0 if result.exit_code is None else int(result.exit_code)
-        output = result.output.decode("utf-8", errors="replace")
-        if exit_code != 0:
-            normalized_output = output.strip()
-            if "No such file or directory" in normalized_output or not normalized_output:
-                raise DockerBackendError("Requested container path was not found.")
-            raise DockerBackendError(normalized_output)
-        return output
+        return self.crowdsec_service.inspect_activity(container_name=container_name)
+
+    def landingpage_django_list_commands(
+        self, *, container_name: str, base_command: list[str], cwd: str
+    ) -> dict[str, Any]:
+        """Return available fixed landingpage Django command metadata."""
+
+        return self.backend_command_run_service.list_landingpage_commands(
+            container_name=container_name,
+            base_command=base_command,
+            cwd=cwd,
+        )
+
+    def landingpage_django_media_inventory(
+        self, *, container_name: str, base_command: list[str], cwd: str
+    ) -> dict[str, Any]:
+        """Return landingpage media inventory from the fixed Django command."""
+
+        return self.backend_command_run_service.inspect_landingpage_media_inventory(
+            container_name=container_name,
+            base_command=base_command,
+            cwd=cwd,
+        )
 
     @staticmethod
     def _normalize_container_path(path: str) -> str:
@@ -476,7 +429,7 @@ class DockerSdkAdapter(DockerBackend):
             "compose_labels": {
                 str(key): str(value)
                 for key, value in labels.items()
-                if key in SAFE_COMPOSE_LABEL_KEYS and value is not None
+                if key in settings.SAFE_COMPOSE_LABEL_KEYS and value is not None
             },
             "option_keys": sorted(str(key) for key in options),
             "mountpoint_available": bool(attrs_dict.get("Mountpoint")),
@@ -498,14 +451,14 @@ class DockerSdkAdapter(DockerBackend):
             if raw_value is None:
                 continue
             key = str(raw_key)
-            if not key.startswith(TRAEFIK_ROUTER_LABEL_PREFIX):
+            if not key.startswith(settings.TRAEFIK_ROUTER_LABEL_PREFIX):
                 continue
-            remainder = key.removeprefix(TRAEFIK_ROUTER_LABEL_PREFIX)
+            remainder = key.removeprefix(settings.TRAEFIK_ROUTER_LABEL_PREFIX)
             router_name, separator, property_name = remainder.partition(".")
             if (
                 not separator
                 or not router_name
-                or property_name not in TRAEFIK_ROUTER_SAFE_PROPERTIES
+                or property_name not in settings.TRAEFIK_ROUTER_SAFE_PROPERTIES
             ):
                 continue
             routers.setdefault(router_name, {})[property_name] = str(raw_value)
@@ -544,7 +497,9 @@ class DockerSdkAdapter(DockerBackend):
         if properties.get("tls.certresolver"):
             return True
         tls_value = properties.get("tls")
-        return str(tls_value).strip().lower() in TRUE_LABEL_VALUES
+        if tls_value is None:
+            return False
+        return bool(environ.Env.parse_value(tls_value, bool))
 
     @staticmethod
     def _derive_traefik_certificate_source(
@@ -607,8 +562,8 @@ class DockerSdkAdapter(DockerBackend):
             if not isinstance(item, str) or "=" not in item:
                 continue
             name, raw_value = item.split("=", 1)
-            secret = any(part in name.upper() for part in SECRET_ENV_NAME_PARTS)
-            expose_value = not secret and name in SAFE_ENV_VALUE_NAMES
+            secret = any(part in name.upper() for part in settings.SECRET_ENV_NAME_PARTS)
+            expose_value = not secret and name in settings.SAFE_ENV_VALUE_NAMES
             results.append(
                 {
                     "name": name,
@@ -626,7 +581,7 @@ class DockerSdkAdapter(DockerBackend):
         return {
             str(key): str(label_value)
             for key, label_value in value.items()
-            if key in SAFE_COMPOSE_LABEL_KEYS and label_value is not None
+            if key in settings.SAFE_COMPOSE_LABEL_KEYS and label_value is not None
         }
 
     @staticmethod

@@ -15,10 +15,9 @@ from fastmcp.server.auth import AccessToken
 from conf import settings
 from core.types import LogWorkspace
 from database.services.collect_logs import CollectLogsService as CollectLogsDBService
-from exception import InvalidTimeFilterError
+from exceptions import DockerSocketGatewayError, InvalidTimeFilterError
 from manifests.loader import list_project_manifests, load_project_manifest
 from manifests.models import SourceDefinition
-from services.docker_socket_gateway import DockerSocketGatewayError
 from services.log_collection import DockerTimeFilters, LogCollectionService, SourceCollectionResult
 from services.project_authorization import ProjectAuthorizationError, ProjectAuthorizationService
 from services.project_manifest import ProjectManifestService

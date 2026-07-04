@@ -1,4 +1,4 @@
-"""Shared contracts and JSON-compatible shapes for the Docker socket app."""
+"""Shared contracts and JSON-compatible shapes for the generic socket app."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ class ErrorResponse(TypedDict):
 
 
 class SuccessResponse(TypedDict):
-    """JSON response returned when a fixed Docker operation succeeds."""
+    """JSON response returned when a fixed socket operation succeeds."""
 
     ok: Literal[True]
     result: dict[str, Any]
@@ -30,13 +30,13 @@ SocketResponse = SuccessResponse | ErrorResponse
 
 
 class DockerBackend(ABC):
-    """Abstract Docker operation backend used by the operation registry.
+    """Abstract operation backend used by the operation registry.
 
-    `DockerSocketService` owns request-level validation and operation
-    routing. The backend owns the actual Docker implementation, usually through
-    the Docker SDK. Keeping this contract explicit makes the socket app small:
-    clients can request only these methods, not arbitrary Docker API calls,
-    shell commands, or mutation operations.
+    `SocketOperationRegistry` owns request-level validation and operation
+    routing. The backend owns Docker-backed implementation details. Keeping
+    this contract explicit makes the socket app small: clients can request
+    only these methods, not arbitrary Docker API calls, shell commands, or
+    mutation operations.
 
     Implementations should return JSON-serializable dictionaries and raise
     regular exceptions for expected Docker/runtime failures. The Unix-socket
@@ -113,3 +113,19 @@ class DockerBackend(ABC):
     @abstractmethod
     def traefik_router_tls_inventory(self) -> dict[str, Any]:
         """Return bounded and sanitized Traefik router TLS inventory."""
+
+    @abstractmethod
+    def crowdsec_activity(self, *, container_name: str) -> dict[str, Any]:
+        """Return fixed read-only CrowdSec diagnostics from one container."""
+
+    @abstractmethod
+    def landingpage_django_list_commands(
+        self, *, container_name: str, base_command: list[str], cwd: str
+    ) -> dict[str, Any]:
+        """Return available fixed landingpage Django command metadata."""
+
+    @abstractmethod
+    def landingpage_django_media_inventory(
+        self, *, container_name: str, base_command: list[str], cwd: str
+    ) -> dict[str, Any]:
+        """Return landingpage media inventory from the fixed Django command."""

@@ -71,7 +71,7 @@ WORKSPACE_AGNOSTIC_TOOLS = frozenset(
         "explain_project_source",
         "inspect_container_detail",
         "inspect_containers_health",
-        "inspect_live_fail2ban_activity",
+        "inspect_live_crowdsec_activity",
         "inspect_project_compose_state",
         "inspect_project_deployment",
         "inspect_project_scheduled_jobs",

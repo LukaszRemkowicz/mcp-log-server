@@ -121,7 +121,7 @@ Current example JWT capabilities:
   - `list_projects`
   - `read_project_manifest`
   - `explain_project_source`
-  - `inspect_live_fail2ban_activity`
+  - `inspect_live_crowdsec_activity`
   - `inspect_tls_certificate`
   - `inspect_traefik_tls_configuration`
   - `inspect_vps_containers`
@@ -278,16 +278,25 @@ Manifests and logs are intentionally separate:
 
   Without that header FastMCP can reject the request as not acceptable.
 
-- `DOCKER_SOCKET_APP_SOCKET_PATH`
-  Unix socket file used by the MCP app for Docker-backed reads.
-  Default: `/run/docker-socket-app/gateway.sock`
+- `SOCKET_APP_SOCKET_PATH`
+  Unix socket file used by the MCP app for Docker-backed reads and fixed
+  landingpage Django helper operations.
+  Default: `/run/socket-app/gateway.sock`
 
   Compose sets this to:
 
-  - `/run/docker-socket-app/gateway.sock`
+  - `/run/socket-app/gateway.sock`
 
-  The same value is passed to `docker-socket-app`, which creates the socket
-  file. The MCP app connects to it.
+  The same value is passed to `socket-app`, which creates the socket file. The
+  MCP app connects to it through the shared `socket-app-run` volume.
+
+- `DOCKER_SOCKET_APP_TIMEOUT_SECONDS`
+  Timeout for one MCP app request waiting for the generic socket app response.
+  Default: `60`
+
+  The default is intentionally longer than lightweight Docker metadata reads so
+  fixed backend commands such as landingpage media inventory can finish without
+  the MCP client closing the Unix socket early.
 
 Run the service through Docker Compose with Doppler:
 
@@ -304,22 +313,22 @@ The local Compose stack also starts a `db` service and stores its data in the
 named `postgres-data` volume.
 
 Docker-backed MCP tools do not mount `/var/run/docker.sock` into the MCP app.
-The Compose stack starts a separate `docker-socket-app` service for Docker
-reads. The MCP app connects to that service through the Unix socket path in
-`DOCKER_SOCKET_APP_SOCKET_PATH`.
+The Compose stack starts a separate `socket-app` service for Docker reads,
+CrowdSec diagnostics, and fixed landingpage Django helper operations. The MCP
+app connects to that service through `SOCKET_APP_SOCKET_PATH`.
 
 ```text
-app -> /run/docker-socket-app/gateway.sock -> docker-socket-app -> /var/run/docker.sock
+app -> /run/socket-app/gateway.sock -> socket-app -> /var/run/docker.sock
 ```
 
-The `docker-socket-app-run` named volume is mounted into both containers at
-`/run/docker-socket-app`. The `docker-socket-app` process creates the socket
-file there; the MCP app only connects to it. The Docker socket app accepts a
-fixed set of read-only Docker operations and has no HTTP or TCP port.
+The `socket-app-run` named volume is mounted into both containers at
+`/run/socket-app`. The `socket-app` process creates the socket file there; the
+MCP app only connects to it. The socket app accepts a fixed set of read-only
+Docker-backed operations and has no HTTP or TCP port.
 
-Only the `docker-socket-app` service mounts `/var/run/docker.sock`. On Linux,
-Compose adds the `docker-socket-app` container process to the Docker socket's
-group through `DOCKER_SOCKET_GID`.
+Only the `socket-app` service mounts `/var/run/docker.sock`. On Linux, Compose
+adds the `socket-app` container process to the Docker socket's group through
+`DOCKER_SOCKET_GID`.
 
 On Linux hosts where `/var/run/docker.sock` is not group-readable by group `0`,
 discover the socket group id with:
@@ -353,34 +362,28 @@ Docker volume. The release scripts do not require a host data directory or
 `POSTGRES_DATA_DIR` override. Keep database backups current before Docker volume
 cleanup or host maintenance.
 
-The production deploy script starts the fail2ban Unix-socket app by default, so
-the normal VPS path is:
+The production deploy script starts the socket app and uses it for bounded
+CrowdSec diagnostics, so the normal VPS path is:
 
 ```bash
 doppler run -- TAG=v1.2.3 infra/scripts/release/deploy.sh
 ```
 
-Then verify that the fail2ban socket app container is running:
+Then verify that the socket app and CrowdSec container are running:
 
 ```bash
-docker compose -f docker-compose.prod.yml ps fail2ban-socket-app
+docker compose -f docker-compose.prod.yml ps socket-app
+docker ps --filter name=crowdsec
 ```
 
-`inspect_live_fail2ban_activity` checks only the configured `FAIL2BAN_JAILS`
-allowlist. By default MCP inspects:
-
-- `portfolio-nginx-probes`
-- `portfolio-traefik-probes`
-- `portfolio-keycloak-token`
-
-The host fail2ban configuration must define all configured jails. If
-`portfolio-keycloak-token` or another configured jail is not deployed and
-reloaded on the host, the live diagnostics payload reports a jail-status error
-for that missing jail.
+`inspect_live_crowdsec_activity` uses the socket app to run fixed
+read-only `cscli` diagnostics inside the CrowdSec docker source declared by the
+authorized project manifest. It returns decisions, AppSec metrics, bouncers,
+alerts, and collection status.
 
 Production compose differences:
 
-- runs the `app`, `db`, `docker-socket-app`, and `fail2ban-socket-app` services
+- runs the `app`, `db`, and `socket-app` services
 - does not mount the local source tree
 - does not use `watchfiles`
 - stores Postgres data in the Compose-managed `postgres-data` Docker volume

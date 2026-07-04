@@ -1,4 +1,4 @@
-"""Unix-domain socket server for the Docker socket app."""
+"""Unix-domain socket server for the generic socket app."""
 
 from __future__ import annotations
 
@@ -12,15 +12,20 @@ from pathlib import Path
 
 from .dispatcher import dispatch_request
 from .exceptions import ProtocolException
-from .services import DockerSocketService
+from .services import SocketOperationRegistry
 
 
 class DockerSocketServer:
     """Serve one JSON request per line over a Unix-domain socket."""
 
-    def __init__(self, *, socket_path: Path, service: DockerSocketService) -> None:
+    def __init__(
+        self,
+        *,
+        socket_path: Path,
+        operation_registry: SocketOperationRegistry,
+    ) -> None:
         self.socket_path = socket_path
-        self.service = service
+        self.operation_registry = operation_registry
         self._server: asyncio.AbstractServer | None = None
 
     async def start(self) -> None:
@@ -86,7 +91,7 @@ class DockerSocketServer:
             decoded = json.loads(raw_line.decode("utf-8"))
             if not isinstance(decoded, dict):
                 raise ProtocolException("Request must be a JSON object.")
-            response = dispatch_request(decoded, self.service)
+            response = dispatch_request(decoded, self.operation_registry)
         except (json.JSONDecodeError, ProtocolException) as error:
             response = {"ok": False, "error": {"message": str(error)}}
         except Exception as error:  # pragma: no cover - defensive service boundary
