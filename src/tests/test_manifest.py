@@ -30,24 +30,31 @@ def test_manifest_loads_into_valid_source_manifest() -> None:
 
 
 def test_vps_security_manifest_declares_host_security_file_sources() -> None:
-    """Verify the host-security manifest uses collectable file sources."""
+    """Verify the host-security manifest declares CrowdSec plus proxy log sources."""
 
     manifest = load_manifest(TEST_MANIFESTS_DIR / "vps-security.json")
 
     assert manifest.project_key == "vps-security"
     assert [source.source_key for source in manifest.sources] == [
-        "fail2ban",
+        "crowdsec_runtime",
         "nginx_access",
         "nginx_runtime",
         "traefik_access",
     ]
-    assert {source.source_type for source in manifest.sources} == {"file"}
+    assert [source.source_type for source in manifest.sources] == [
+        "docker",
+        "file",
+        "file",
+        "file",
+    ]
     assert [source.target for source in manifest.sources] == [
-        "/app/src/tests/fixtures/logs/vps-security/fail2ban.log",
+        "crowdsec",
         "/app/src/tests/fixtures/logs/vps-security/nginx_access.log",
         "/app/src/tests/fixtures/logs/vps-security/nginx_runtime.log",
         "/app/src/tests/fixtures/logs/vps-security/traefik_access.log",
     ]
+    assert manifest.sources[0].compose_project == "crowdsec"
+    assert manifest.sources[0].compose_service == "crowdsec"
 
 
 def test_container_source_lookup_requires_manifest_source_key() -> None:

@@ -1,4 +1,4 @@
-# Docker Socket App
+# Socket App
 
 Small standalone app that owns Docker daemon access and exposes a fixed set of
 read-only Docker operations over a Unix domain socket.
@@ -21,19 +21,18 @@ This app is not an HTTP service and does not expose a TCP port.
 ```text
 consumer app
   -> shared Unix socket
-  -> docker-socket-app
+  -> socket-app
   -> Docker SDK
   -> /var/run/docker.sock
 ```
 
-The socket path comes from `DOCKER_SOCKET_APP_SOCKET_PATH`. In this repository's
-Compose files, both the MCP app and this app use:
+The socket path defaults to:
 
 ```text
-/run/docker-socket-app/gateway.sock
+/run/socket-app/gateway.sock
 ```
 
-The socket file is created by `docker-socket-app`. A consuming app only needs
+The socket file is created by `socket-app`. A consuming app only needs
 the shared directory that contains that socket file.
 
 ## Protocol
@@ -178,18 +177,19 @@ uv run ruff check .
 Build the container image from the repository root:
 
 ```bash
-docker build -f docker/docker-socket-app/Dockerfile -t docker-socket-app .
+docker build -f docker/socket-app/Dockerfile -t socket-app .
 ```
 
-Run locally with an explicit socket path:
+Run locally with the default socket path, or override it for an ad hoc local
+session:
 
 ```bash
-DOCKER_SOCKET_APP_SOCKET_PATH=/tmp/docker-socket-app.sock \
-  uv run python -m docker_socket_app.main
+SOCKET_APP_SOCKET_PATH=/tmp/socket-app.sock \
+  uv run python -m socket_app.main
 ```
 
 Send a request:
 
 ```bash
-python -c 'import socket; s=socket.socket(socket.AF_UNIX); s.connect("/tmp/docker-socket-app.sock"); s.sendall(b"{\"operation\":\"vps_containers_inventory\",\"params\":{}}\n"); print(s.recv(4096).decode(), end="")'
+python -c 'import socket; s=socket.socket(socket.AF_UNIX); s.connect("/tmp/socket-app.sock"); s.sendall(b"{\"operation\":\"vps_containers_inventory\",\"params\":{}}\n"); print(s.recv(4096).decode(), end="")'
 ```

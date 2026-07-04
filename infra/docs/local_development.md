@@ -10,9 +10,9 @@ Doppler.
 Reference variables are listed in [.env.example](../../.env.example), but the
 runtime path should be Doppler rather than `env_file`.
 
-Most settings have development defaults in code. The Docker and fail2ban socket
-app paths default to the same Unix socket paths that Docker Compose uses for
-normal local and production runs.
+Most settings have development defaults in code. The Docker socket app path
+defaults to the same Unix socket path that Docker Compose uses for normal local
+and production runs.
 
 Production startup rejects known local placeholder secrets.
 
@@ -86,32 +86,10 @@ are reviewed and approved.
   PostgreSQL application password.
   Default: `mcp-log-server-local-password`
 
-- `FAIL2BAN_SOCKET_APP_SOCKET_PATH`
-  Path where the MCP app connects to the internal fail2ban socket app.
-  Default in Compose: `/run/fail2ban-socket-app/gateway.sock`
-
-- `FAIL2BAN_SOCKET_PATH`
-  Path where the fail2ban socket app expects the host fail2ban Unix socket
-  inside its own container.
-  Default in Compose: `/var/run/fail2ban/fail2ban.sock`
-
-- `FAIL2BAN_JAILS`
-  Comma-separated fail2ban jail names that `inspect_live_fail2ban_activity`
-  should inspect.
-  Default: `portfolio-nginx-probes,portfolio-traefik-probes,portfolio-keycloak-token`
-
-  The host fail2ban configuration must define all configured jails. If
-  `portfolio-keycloak-token` is not installed or fail2ban has not been reloaded,
-  live fail2ban diagnostics correctly report a jail-status error.
-
-Live `inspect_live_fail2ban_activity` diagnostics call fixed operations through
-the fail2ban socket app. The MCP app does not mount the host fail2ban socket or
-run `fail2ban-client` directly.
-
-- `FAIL2BAN_SOCKET_DIR_HOST`
-  Host path to the fail2ban Unix socket directory mounted into the fail2ban
-  socket app container.
-  Default: `/var/run/fail2ban`
+Live `inspect_live_crowdsec_activity` diagnostics call fixed operations through
+the Docker socket app against the CrowdSec docker source declared by the
+authorized project manifest. The MCP app does not mount the Docker socket
+directly and does not accept caller-provided shell commands.
 
 The Compose files run PostgreSQL through the official `postgres:18` image.
 Local database files are stored in the named `mcp-local_postgres-data` Docker

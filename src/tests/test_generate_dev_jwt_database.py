@@ -95,3 +95,28 @@ async def test_generate_dev_jwt_uses_default_claims_without_creating_callers_whe
     assert "allowed_projects" not in codex_claims
     assert await McpCaller.objects.filter(workspace=LogWorkspace.WORKFLOW).count() == 0
     assert await McpCaller.objects.filter(workspace=LogWorkspace.SESSION).count() == 0
+
+
+@pytest.mark.anyio
+async def test_generate_dev_jwt_prefers_canonical_default_caller_when_workspace_has_multiple_rows(
+    db: None,  # noqa: ARG001
+) -> None:
+    await McpCaller.all().delete()
+    await McpCallerFactory.save_to_db(
+        client_id="codex-local",
+        client_type="codex",
+        workspace=LogWorkspace.SESSION,
+        allowed_projects=["landingpage"],
+    )
+    await McpCallerFactory.save_to_db(
+        client_id="codex-agent",
+        client_type="codex",
+        workspace=LogWorkspace.SESSION,
+        allowed_projects=["landingpage"],
+    )
+
+    payload = await build_example_token_response()
+    codex_claims = _decode_jwt_payload(payload["codex_agent"])
+
+    assert codex_claims["client_id"] == "codex-agent"
+    assert codex_claims["client_type"] == "codex"

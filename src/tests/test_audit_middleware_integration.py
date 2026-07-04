@@ -862,7 +862,7 @@ async def test_audit_middleware_authorizes_container_file_tools_as_session_tools
 
 @pytest.mark.anyio
 @pytest.mark.usefixtures("db")
-@pytest.mark.parametrize("tool_name", ["list_projects", "inspect_live_fail2ban_activity"])
+@pytest.mark.parametrize("tool_name", ["list_projects", "inspect_live_crowdsec_activity"])
 async def test_audit_middleware_authorizes_workspace_agnostic_tools_for_session_callers(
     mocker: MockerFixture,
     tool_name: str,

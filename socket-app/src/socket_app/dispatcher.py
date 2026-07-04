@@ -6,18 +6,18 @@ from typing import Any
 
 from .exceptions import ProtocolException
 from .schemas import SuccessResponse
-from .services import DockerSocketService
+from .services import SocketOperationRegistry
 
 
 def dispatch_request(
     request: dict[str, Any],
-    service: DockerSocketService,
+    operation_registry: SocketOperationRegistry,
 ) -> SuccessResponse:
     """Validate a decoded request object and run the requested operation.
 
     This function works on already-decoded JSON. It checks the common envelope
-    shape, then delegates operation-specific parameter validation to
-    `DockerSocketService`.
+    shape, then delegates operation-specific parameter validation to the
+    operation registry.
     """
 
     operation = request.get("operation")
@@ -28,4 +28,4 @@ def dispatch_request(
     if not isinstance(params, dict):
         raise ProtocolException("Request field 'params' must be an object.")
 
-    return {"ok": True, "result": service.dispatch(operation, params)}
+    return {"ok": True, "result": operation_registry.dispatch(operation, params)}

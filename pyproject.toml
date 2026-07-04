@@ -15,7 +15,7 @@ dependencies = [
   "factory-boy>=3.3.3",
   "fastmcp>=3.4.2",
   "ipython>=9.0.0",
-  "joserfc>=1.4.0",
+  "joserfc>=1.7.2",
   "pydantic>=2.9.0",
   "tortoise-orm[asyncpg]>=0.25.1",
   "typer>=0.24.0",
@@ -33,13 +33,13 @@ test = "cli.test:test"
 dev = [
   "black>=26.5.1",
   "mypy>=1.13.0",
-  "pip-audit>=2.9.0",
+  "pip-audit>=2.10.0",
   "pre-commit>=4.6.0",
   "pytest>=8.3.0",
   "pytest-asyncio>=1.4.0",
   "pytest-mock>=3.15.1",
   "ruff>=0.15.17",
-  "safety>=3.8.0",
+  "safety>=3.8.1",
 ]
 
 [tool.black]

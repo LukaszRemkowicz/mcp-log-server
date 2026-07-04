@@ -3,11 +3,12 @@ requires = ["hatchling>=1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "docker-socket-app"
+name = "socket-app"
 version = "0.1.0"
-description = "Internal Unix-socket app for fixed Docker operations"
+description = "Internal Unix-socket app for fixed MCP helper operations"
 requires-python = ">=3.12"
 dependencies = [
+  "django-environ>=0.13.0",
   "docker>=7.1.0",
 ]
 
@@ -19,7 +20,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/docker_socket_app"]
+packages = ["src/socket_app"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

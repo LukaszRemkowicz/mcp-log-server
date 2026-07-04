@@ -19,18 +19,10 @@ def test_settings_expose_uppercase_fields() -> None:
     assert runtime_settings.WORKFLOW_ARCHIVE_RETENTION == "14d"
     assert runtime_settings.LOG_SNAPSHOT_RETENTION == "7d"
     assert (
-        runtime_settings.FAIL2BAN_SOCKET_APP_SOCKET_PATH.as_posix()
-        == settings_module.FAIL2BAN_SOCKET_APP_SOCKET_PATH.as_posix()
+        runtime_settings.SOCKET_APP_SOCKET_PATH.as_posix()
+        == settings_module.SOCKET_APP_SOCKET_PATH.as_posix()
     )
-    assert (
-        runtime_settings.DOCKER_SOCKET_APP_SOCKET_PATH.as_posix()
-        == settings_module.DOCKER_SOCKET_APP_SOCKET_PATH.as_posix()
-    )
-    assert runtime_settings.FAIL2BAN_JAILS == [
-        "portfolio-nginx-probes",
-        "portfolio-traefik-probes",
-        "portfolio-keycloak-token",
-    ]
+    assert runtime_settings.DOCKER_SOCKET_APP_TIMEOUT_SECONDS == 60
     assert runtime_settings.JWT_JWKS_URI == ""
     assert runtime_settings.SITE_DOMAIN == settings_module.SITE_DOMAIN
     assert runtime_settings.TLS_CERTIFICATE_SUBDOMAINS == ["admin", "stage", "mcp"]

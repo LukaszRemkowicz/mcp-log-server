@@ -11,8 +11,9 @@ from typing import Any, Protocol, cast
 
 from pydantic import BaseModel
 
+from exceptions import DockerSocketGatewayError
 from manifests.models import SourceDefinition
-from services.docker_socket_gateway import DockerSocketGatewayClient, DockerSocketGatewayError
+from services.docker_socket_gateway import DockerSocketGatewayClient
 
 DOCKER_INSPECTION_TIMEOUT_SECONDS = 15
 MAX_CONTAINER_FILE_BYTES = 200_000
@@ -417,9 +418,7 @@ class InspectionToolsService:
             return InspectionToolsServiceError(message=str(error))
         content = payload.get("content")
         if not isinstance(content, str):
-            return InspectionToolsServiceError(
-                message="Docker socket app returned invalid file content."
-            )
+            return InspectionToolsServiceError(message="Socket app returned invalid file content.")
         return content, bool(payload.get("truncated", False))
 
     def list_container_directory(
@@ -453,7 +452,7 @@ class InspectionToolsService:
         raw_entries = payload.get("entries")
         if not isinstance(raw_entries, list):
             return InspectionToolsServiceError(
-                message="Docker socket app returned invalid directory list."
+                message="Socket app returned invalid directory list."
             )
         entries = [
             self._container_path_stat_from_payload(entry)
@@ -783,9 +782,7 @@ class InspectionToolsService:
             return InspectionToolsServiceError(message=str(error))
         raw_containers = payload.get("containers")
         if not isinstance(raw_containers, list):
-            return InspectionToolsServiceError(
-                message="Docker socket app returned invalid inventory."
-            )
+            return InspectionToolsServiceError(message="Socket app returned invalid inventory.")
         results = [
             self._vps_container_inventory_from_payload(container)
             for container in raw_containers
@@ -816,7 +813,7 @@ class InspectionToolsService:
         raw_volumes = payload.get("volumes")
         if not isinstance(raw_volumes, list):
             return InspectionToolsServiceError(
-                message="Docker socket app returned invalid volume inventory."
+                message="Socket app returned invalid volume inventory."
             )
         results = [
             self._vps_volume_inventory_from_payload(volume)
