@@ -72,6 +72,7 @@ WORKSPACE_AGNOSTIC_TOOLS = frozenset(
         "inspect_container_detail",
         "inspect_containers_health",
         "inspect_live_crowdsec_activity",
+        "inspect_landingpage_media_inventory",
         "inspect_project_compose_state",
         "inspect_project_deployment",
         "inspect_project_scheduled_jobs",
@@ -80,6 +81,7 @@ WORKSPACE_AGNOSTIC_TOOLS = frozenset(
         "inspect_traefik_tls_configuration",
         "inspect_vps_containers",
         "inspect_vps_volumes",
+        "list_landingpage_django_commands",
         "list_container_directory",
         "list_projects",
         "list_project_directory",
@@ -255,10 +257,20 @@ def _client_not_authorized_error(
 
     return build_agent_tool_error_result(
         error_code="mcp_client_not_authorized",
-        message="Authenticated MCP client is not allowed to call tools.",
+        message=(
+            "Authenticated MCP token is valid, but this token identity is not allowlisted "
+            "for the requested MCP workspace."
+        ),
         retry_tips=[
-            "Ask an administrator to add this client_id and client_type to mcp_callers.",
-            "Retry with a JWT for an allowed MCP client.",
+            (
+                "Do not change client_id, client_type, or workspace in tool arguments; "
+                "they come from the JWT."
+            ),
+            "Refresh the configured MCP bearer token if it is stale or points at the wrong client.",
+            (
+                "Ask an administrator to allowlist this JWT identity in mcp_callers "
+                "for the requested workspace."
+            ),
         ],
         details={
             "client_id": client_id,
