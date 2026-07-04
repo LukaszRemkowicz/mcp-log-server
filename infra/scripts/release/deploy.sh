@@ -14,8 +14,7 @@
 #   - validates Compose configuration and required production secrets
 #   - prevents concurrent deploys with a lock
 #   - verifies the tagged app image exists locally
-#   - verifies the tagged Docker socket app image exists locally
-#   - verifies the tagged fail2ban socket app image exists locally
+#   - verifies the tagged generic socket app image exists locally
 #   - runs a pre-deploy database backup unless SKIP_BACKUP=true
 #   - applies migrations unless SKIP_MIGRATE=true
 #   - recreates the socket app and MCP app containers with the selected tag
@@ -56,8 +55,7 @@ validate_tag "$TAG"
 COMPOSE_FILE="${COMPOSE_FILE:-$(get_compose_file "$PROJECT_DIR" "$ENVIRONMENT")}"
 COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-$(get_compose_project_name "$ENVIRONMENT")}"
 IMAGE_NAME="${ENVIRONMENT}-mcp-log-server:${TAG}"
-DOCKER_SOCKET_APP_IMAGE_NAME="${ENVIRONMENT}-mcp-docker-socket-app:${TAG}"
-FAIL2BAN_SOCKET_APP_IMAGE_NAME="${ENVIRONMENT}-mcp-fail2ban-socket-app:${TAG}"
+SOCKET_APP_IMAGE_NAME="mcp-socket:${TAG}"
 STATE_DIR="$(get_state_dir "$ENVIRONMENT")"
 LOCK_DIR="$STATE_DIR/deploy.lock"
 
@@ -73,7 +71,6 @@ JWT_ISSUER="${JWT_ISSUER:?JWT_ISSUER is required}"
 JWT_AUDIENCE="${JWT_AUDIENCE:?JWT_AUDIENCE is required}"
 SITE_DOMAIN="${SITE_DOMAIN:?SITE_DOMAIN is required for Traefik MCP routing}"
 DOCKER_SOCKET_GID="${DOCKER_SOCKET_GID:?DOCKER_SOCKET_GID is required}"
-FAIL2BAN_LOG_GID="${FAIL2BAN_LOG_GID:?FAIL2BAN_LOG_GID is required}"
 PROJECT_MANIFESTS_HOST_PATH="${PROJECT_MANIFESTS_HOST_PATH:?PROJECT_MANIFESTS_HOST_PATH is required}"
 PROJECT_MANIFESTS_PATH="${PROJECT_MANIFESTS_PATH:-/app/project-manifests}"
 
@@ -89,7 +86,6 @@ export \
     JWT_AUDIENCE \
     SITE_DOMAIN \
     DOCKER_SOCKET_GID \
-    FAIL2BAN_LOG_GID \
     PROJECT_MANIFESTS_HOST_PATH \
     PROJECT_MANIFESTS_PATH
 
@@ -114,10 +110,8 @@ printf "⚙️  Environment: %s\n" "$ENVIRONMENT"
 printf "🏷️  Release tag: %s\n" "$TAG"
 printf "📦 Compose project: %s\n" "$COMPOSE_PROJECT_NAME"
 printf "🧾 Compose file: %s\n" "$COMPOSE_FILE"
-printf "🐳 Docker socket app image: %s\n" "$DOCKER_SOCKET_APP_IMAGE_NAME"
-printf "🐳 Fail2ban socket app image: %s\n" "$FAIL2BAN_SOCKET_APP_IMAGE_NAME"
+printf "🐳 Socket app image: %s\n" "$SOCKET_APP_IMAGE_NAME"
 printf "🐳 Docker socket GID: %s\n" "$DOCKER_SOCKET_GID"
-printf "🧾 Fail2ban log GID: %s\n" "$FAIL2BAN_LOG_GID"
 printf "📁 Project manifests host path: %s\n" "$PROJECT_MANIFESTS_HOST_PATH"
 if [[ "$EMERGENCY" == "true" ]]; then
     log_warn "Emergency mode enabled; deploy state and health checks still run normally."
@@ -180,19 +174,13 @@ if ! docker image inspect "$IMAGE_NAME" >/dev/null 2>&1; then
     log_info "Build it first with TAG=$TAG infra/scripts/release/build.sh"
     exit 1
 fi
-if ! docker image inspect "$DOCKER_SOCKET_APP_IMAGE_NAME" >/dev/null 2>&1; then
-    log_error "Image not found locally: $DOCKER_SOCKET_APP_IMAGE_NAME"
-    log_info "Build it first with TAG=$TAG infra/scripts/release/build.sh"
-    exit 1
-fi
-if ! docker image inspect "$FAIL2BAN_SOCKET_APP_IMAGE_NAME" >/dev/null 2>&1; then
-    log_error "Image not found locally: $FAIL2BAN_SOCKET_APP_IMAGE_NAME"
+if ! docker image inspect "$SOCKET_APP_IMAGE_NAME" >/dev/null 2>&1; then
+    log_error "Image not found locally: $SOCKET_APP_IMAGE_NAME"
     log_info "Build it first with TAG=$TAG infra/scripts/release/build.sh"
     exit 1
 fi
 printf "✅ Release image found: %s\n" "$IMAGE_NAME"
-printf "✅ Release image found: %s\n" "$DOCKER_SOCKET_APP_IMAGE_NAME"
-printf "✅ Release image found: %s\n" "$FAIL2BAN_SOCKET_APP_IMAGE_NAME"
+printf "✅ Release image found: %s\n" "$SOCKET_APP_IMAGE_NAME"
 
 deploy_step "⚠️" 4 9 "Confirm deploy"
 confirm_continue "Type yes to deploy $IMAGE_NAME to $ENVIRONMENT."
@@ -231,10 +219,8 @@ fi
 
 # Step 8: start or update the Docker-backed application containers with the selected tag.
 deploy_step "🚀" 8 9 "Start application containers"
-docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans docker-socket-app
-printf "✅ Docker socket app container recreated\n"
-docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans fail2ban-socket-app
-printf "✅ Fail2ban socket app container recreated\n"
+docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans socket-app
+printf "✅ Socket app container recreated\n"
 docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans app
 printf "✅ Application container recreated\n"
 

@@ -426,8 +426,8 @@ curl -sS \
       "name":"grep_log_snapshot",
       "arguments":{
         "project_name":"landingpage",
-        "grep":"Ban|wp-login|502",
-        "source_keys":["fail2ban","nginx_access","traefik_access"],
+        "grep":"crowdsec|wp-login|502|/.env",
+        "source_keys":["crowdsec_runtime","nginx_access","traefik_access"],
         "max_matches":100
       }
     }

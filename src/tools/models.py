@@ -268,6 +268,32 @@ class ExplainProjectSourcePayload(BaseModel):
     next_step_tips: list[str]
 
 
+class InspectLandingpageMediaInventoryPayload(BaseModel):
+    """Structured response returned by `inspect_landingpage_media_inventory`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["inspect_landingpage_media_inventory"]
+    requested_project_name: str
+    project_name: str
+    connector_status: Literal["ok"]
+    report: dict[str, object]
+    next_step_tips: list[str]
+
+
+class ListLandingpageDjangoCommandsPayload(BaseModel):
+    """Structured response returned by `list_landingpage_django_commands`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["list_landingpage_django_commands"]
+    requested_project_name: str
+    project_name: str
+    connector_status: Literal["ok"]
+    report: dict[str, object]
+    next_step_tips: list[str]
+
+
 class ProjectManifestList(RootModel[list[ProjectManifestSummary]]):
     """Collection wrapper for manifest-backed project summaries."""
 
@@ -490,45 +516,33 @@ class InspectProbeBlockingActivityPayload(BaseModel):
     suspicious_ips: list[ProbeBlockingIpPayload]
 
 
-class Fail2banServiceStatusPayload(BaseModel):
-    """Structured output from `fail2ban-client status`."""
+class CrowdSecSectionPayload(BaseModel):
+    """Structured output from one fixed CrowdSec diagnostic command."""
 
     model_config = ConfigDict(extra="forbid")
 
+    name: str
     inspection_status: Literal["ok", "error", "unavailable"]
-    jail_count: int | None
-    jails: list[str]
+    command: list[str]
+    exit_code: int | None
+    output: str
+    truncated: bool
     error: str | None
 
 
-class Fail2banJailStatusPayload(BaseModel):
-    """Structured output from one allowlisted fail2ban jail status command."""
+class InspectLiveCrowdSecActivityPayload(BaseModel):
+    """Structured response returned by `inspect_live_crowdsec_activity`."""
 
     model_config = ConfigDict(extra="forbid")
 
-    jail: str
-    inspection_status: Literal["ok", "error", "unavailable"]
-    currently_failed: int | None
-    total_failed: int | None
-    currently_banned: int | None
-    total_banned: int | None
-    banned_ips: list[str]
-    error: str | None
-
-
-class InspectLiveFail2banActivityPayload(BaseModel):
-    """Structured response returned by `inspect_live_fail2ban_activity`."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    action: Literal["inspect_live_fail2ban_activity"]
+    action: Literal["inspect_live_crowdsec_activity"]
     project_name: str
     inspection_status: Literal["ok", "error", "unavailable"]
+    container_name: str
     error_code: str | None
     message: str | None
     retry_tips: list[str]
-    service: Fail2banServiceStatusPayload
-    jails: list[Fail2banJailStatusPayload]
+    sections: list[CrowdSecSectionPayload]
 
 
 class TlsCertificateInspectionPayload(BaseModel):

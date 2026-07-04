@@ -19,13 +19,17 @@ from cli.commands.upload_project_manifest import (
 )
 from cli.utils import (
     build_compose_command,
+    build_compose_up_command,
+    ensure_compose_services_started,
     get_current_environment,
+    resolve_compose_run_policy,
     run_compose_command,
     should_bridge_to_compose,
 )
 
 DRY_RUN_FLAGS = frozenset({"--dry-run", "-n"})
 HELP_FLAGS = frozenset({"--help", "-h"})
+HOST_DB_BOOTSTRAP_COMMANDS = frozenset({"generate-dev-jwt"})
 
 app = typer.Typer(
     help=(
@@ -178,12 +182,41 @@ def _run(command_args: list[str]) -> None:
     """Run the project command app with explicit command args."""
 
     command_args, dry_run = _extract_dry_run(command_args)
+    if command_args and command_args[0] in HOST_DB_BOOTSTRAP_COMMANDS:
+        if should_bridge_to_compose() and not HELP_FLAGS.intersection(command_args):
+            environment = get_current_environment()
+            if dry_run:
+                print(shlex.join(build_compose_up_command(environment, ("db",))))
+                raise SystemExit(0)
+            exit_code = ensure_compose_services_started(environment, ("db",))
+            if exit_code != 0:
+                raise SystemExit(exit_code)
+        app()
+        return
     if should_bridge_to_compose() and not HELP_FLAGS.intersection(command_args):
         compose_command = ["python", "-m", "cli.main", *command_args]
+        policy = resolve_compose_run_policy(compose_command)
         if dry_run:
-            print(shlex.join(build_compose_command(get_current_environment(), compose_command)))
+            if policy.preflight_services:
+                print(
+                    shlex.join(
+                        build_compose_up_command(
+                            get_current_environment(),
+                            policy.preflight_services,
+                        )
+                    )
+                )
+            print(
+                shlex.join(
+                    build_compose_command(
+                        get_current_environment(),
+                        compose_command,
+                        no_deps=policy.no_deps,
+                    )
+                )
+            )
             raise SystemExit(0)
-        raise SystemExit(run_compose_command(compose_command))
+        raise SystemExit(run_compose_command(compose_command, policy=policy))
     app()
 
 

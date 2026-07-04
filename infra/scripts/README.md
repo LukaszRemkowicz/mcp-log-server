@@ -111,8 +111,7 @@ working tree.
 Build behavior:
 
 - builds only prod-style tagged images:
-  `prod-mcp-log-server:<TAG>`, `prod-mcp-docker-socket-app:<TAG>`, and
-  `prod-mcp-fail2ban-socket-app:<TAG>`
+  `prod-mcp-log-server:<TAG>`, `mcp-socket:<TAG>`
 - refuses to build with uncommitted changes unless `EMERGENCY=true` or
   `--emergency` is passed
 - supports `NO_CACHE=true` when a full rebuild is required
@@ -177,12 +176,11 @@ migrations, health checks, or `current_tag` recording.
 
 Deploy behavior:
 
-- verifies the local MCP app, Docker socket app, and fail2ban socket app images
-  exist for the selected tag
+- verifies the local MCP app and generic socket app images exist for the selected tag
 - exposes the MCP HTTP endpoint through the existing Traefik stack at
   `https://mcp.${SITE_DOMAIN}/mcp`
-- starts the internal Docker and fail2ban Unix-socket app containers before the
-  MCP app, so MCP does not mount privileged host sockets directly
+- starts the internal generic socket app before the MCP app, so MCP does not
+  mount privileged host sockets directly
 - asks for confirmation before mutating the target stack unless
   `AUTO_APPROVE=true`
 - creates a database backup unless `SKIP_BACKUP=true`

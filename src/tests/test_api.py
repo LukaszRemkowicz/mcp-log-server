@@ -22,7 +22,7 @@ from auth.scopes import (
 )
 from core.types import LogWorkspace
 from database.models import McpCaller
-from services.fail2ban_service import Fail2banActivity, Fail2banJailStatus, Fail2banServiceStatus
+from services.crowdsec_service import CrowdSecActivity, CrowdSecSection
 from services.inspection_tools_service import (
     ContainerDetail,
     ContainerDetailEnvVar,
@@ -34,6 +34,11 @@ from services.inspection_tools_service import (
     ContainerRestartPolicy,
     VpsContainerInventory,
     VpsVolumeInventory,
+)
+from services.landingpage_django import (
+    CommandRunTarget,
+    LandingpageDjangoCommands,
+    LandingpageMediaInventory,
 )
 from services.tls_certificate_service import TlsCertificateInspection
 from services.traefik_tls_service import TraefikRouterTlsInspection, TraefikTlsInspectionResult
@@ -108,8 +113,12 @@ HOST_PATH_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("list_project_directory", {"project_name": "landingpage", "source_key": "app_file"}),
     ("inspect_project_scheduled_jobs", {"project_name": "landingpage"}),
 )
-FAIL2BAN_TOOL_CALLS: tuple[ToolCall, ...] = (
-    ("inspect_live_fail2ban_activity", {"project_name": "landingpage"}),
+CROWDSEC_TOOL_CALLS: tuple[ToolCall, ...] = (
+    ("inspect_live_crowdsec_activity", {"project_name": "vps-security"}),
+)
+LANDINGPAGE_DJANGO_TOOL_CALLS: tuple[ToolCall, ...] = (
+    ("list_landingpage_django_commands", {"project_name": "landingpage"}),
+    ("inspect_landingpage_media_inventory", {"project_name": "landingpage"}),
 )
 TLS_TOOL_CALLS: tuple[ToolCall, ...] = (
     ("inspect_tls_certificate", {}),
@@ -141,7 +150,8 @@ PROJECT_PROTECTED_TOOL_CALL_ARGUMENTS: tuple[ToolCall, ...] = (
     + ANALYSIS_TOOL_CALLS
     + CONTAINER_TOOL_CALLS
     + HOST_PATH_TOOL_CALLS
-    + FAIL2BAN_TOOL_CALLS
+    + CROWDSEC_TOOL_CALLS
+    + LANDINGPAGE_DJANGO_TOOL_CALLS
 )
 CALLER_CONTEXT_LOG_TOOL_NAMES = {
     "collect_logs",
@@ -255,6 +265,20 @@ CALLER_CONTEXT_TOOL_CALLS: tuple[CallerContextToolCall, ...] = (
         ["landingpage"],
         False,
     ),
+    (
+        "list_landingpage_django_commands",
+        {"project_name": "landingpage"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["landingpage"],
+        False,
+    ),
+    (
+        "inspect_landingpage_media_inventory",
+        {"project_name": "landingpage"},
+        [CONTAINER_FILES_READ_SCOPE],
+        ["landingpage"],
+        False,
+    ),
 )
 PROJECT_PROTECTED_LOG_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [LOGS_COLLECT_SCOPE]) for tool_name, arguments in COLLECT_LOGS_TOOL_CALLS
@@ -270,23 +294,25 @@ PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
 )
 PROJECT_PROTECTED_CONTAINER_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
     (tool_name, arguments, [CONTAINER_FILES_READ_SCOPE])
-    for tool_name, arguments in CONTAINER_TOOL_CALLS + HOST_PATH_TOOL_CALLS
+    for tool_name, arguments in (
+        CONTAINER_TOOL_CALLS + HOST_PATH_TOOL_CALLS + LANDINGPAGE_DJANGO_TOOL_CALLS
+    )
 )
-PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
-    (tool_name, arguments, [MCP_STATUS_READ_SCOPE]) for tool_name, arguments in FAIL2BAN_TOOL_CALLS
+PROJECT_PROTECTED_CROWDSEC_TOOL_CALLS: tuple[ProtectedToolCall, ...] = tuple(
+    (tool_name, arguments, [MCP_STATUS_READ_SCOPE]) for tool_name, arguments in CROWDSEC_TOOL_CALLS
 )
 PROJECT_PROTECTED_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
     PROJECT_PROTECTED_LOG_TOOL_CALLS
     + PROJECT_PROTECTED_MANIFEST_TOOL_CALLS
     + PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS
     + PROJECT_PROTECTED_CONTAINER_TOOL_CALLS
-    + PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS
+    + PROJECT_PROTECTED_CROWDSEC_TOOL_CALLS
 )
 PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
     PROJECT_PROTECTED_MANIFEST_TOOL_CALLS
     + PROJECT_PROTECTED_SNAPSHOT_TOOL_CALLS
     + PROJECT_PROTECTED_CONTAINER_TOOL_CALLS
-    + PROJECT_PROTECTED_FAIL2BAN_TOOL_CALLS
+    + PROJECT_PROTECTED_CROWDSEC_TOOL_CALLS
 )
 
 
@@ -337,6 +363,8 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "read_project_file",
                 "list_project_directory",
                 "inspect_project_scheduled_jobs",
+                "list_landingpage_django_commands",
+                "inspect_landingpage_media_inventory",
                 "close_agent_session",
             },
         ),
@@ -379,6 +407,8 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "read_project_file",
                 "list_project_directory",
                 "inspect_project_scheduled_jobs",
+                "list_landingpage_django_commands",
+                "inspect_landingpage_media_inventory",
                 "close_agent_session",
                 "get_mcp_service_status",
                 "get_mcp_health_check",
@@ -447,6 +477,8 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
         },
     )
 
+    assert "result" in response.json(), response.json()
+    assert "structuredContent" in response.json()["result"], response.json()["result"]
     payload = response.json()["result"]["structuredContent"]
     content = response.json()["result"]["content"]
 
@@ -554,7 +586,7 @@ async def test_service_status_api_does_not_report_project_access(
     payload = response.json()["result"]["structuredContent"]
 
     assert response.status_code == 200
-    assert response.json()["result"]["isError"] is False
+    assert response.json()["result"]["isError"] is False, response.json()
     assert payload["client_id"] == "status-no-project-client"
     assert payload["client_type"] == "codex"
     assert "allowed_projects" not in payload
@@ -676,6 +708,52 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
                 False,
             ),
         )
+    if tool_name == "list_landingpage_django_commands":
+        mocker.patch(
+            "tools.landingpage_django._resolve_landingpage_django_command_run",
+            return_value=CommandRunTarget(
+                container_name="portfolio-dev-be-1",
+                base_command=("uv", "run", "python", "manage.py"),
+                cwd="/app",
+            ),
+        )
+        mocker.patch(
+            "tools.landingpage_django.landingpage_django_service.list_commands",
+            return_value=LandingpageDjangoCommands(
+                report={
+                    "commands": [
+                        {
+                            "name": "media_inventory",
+                            "description": "Inspect DB image references and media files on disk.",
+                            "read_only": True,
+                            "params": {},
+                        }
+                    ]
+                }
+            ),
+        )
+    if tool_name == "inspect_landingpage_media_inventory":
+        mocker.patch(
+            "tools.landingpage_django._resolve_landingpage_django_command_run",
+            return_value=CommandRunTarget(
+                container_name="portfolio-dev-be-1",
+                base_command=("uv", "run", "python", "manage.py"),
+                cwd="/app",
+            ),
+        )
+        mocker.patch(
+            "tools.landingpage_django.landingpage_django_service.inspect_media_inventory",
+            return_value=LandingpageMediaInventory(
+                report={
+                    "schema_version": 1,
+                    "summary": {
+                        "db_files_found_on_disk": 2,
+                        "disk_files_total": 3,
+                        "disk_files_not_referenced_in_db": 1,
+                    },
+                }
+            ),
+        )
     if tool_name in {
         "inspect_project_compose_state",
         "inspect_project_runtime",
@@ -791,7 +869,7 @@ async def test_mcp_tools_api_use_database_caller_context_for_project_access(
         response = await jsonrpc.post(token=token, data=request_data)
 
     assert response.status_code == 200
-    assert response.json()["result"]["isError"] is False
+    assert response.json()["result"]["isError"] is False, response.json()
     payload = response.json()["result"]["structuredContent"]
     if tool_name == "list_projects":
         assert [project["project_name"] for project in payload["result"]] == allowed_projects
@@ -1961,6 +2039,136 @@ async def test_list_projects_api_returns_manifest_backed_projects(
     landingpage = next(item for item in payload if item["project_name"] == "landingpage")
     assert landingpage["project_summary"] == "Landingpage project for analysis tests."
     assert "backend" in landingpage["source_keys"]
+
+
+async def test_list_landingpage_django_commands_api_returns_connector_commands(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify landingpage Django command discovery returns connector metadata."""
+
+    list_commands = mocker.patch(
+        "tools.landingpage_django.landingpage_django_service.list_commands",
+        return_value=LandingpageDjangoCommands(
+            report={
+                "commands": [
+                    {
+                        "name": "media_inventory",
+                        "description": "Inspect DB image references and media files on disk.",
+                        "read_only": True,
+                        "params": {},
+                    }
+                ]
+            }
+        ),
+    )
+    mocker.patch(
+        "tools.landingpage_django._resolve_landingpage_django_command_run",
+        return_value=CommandRunTarget(
+            container_name="portfolio-dev-be-1",
+            base_command=("uv", "run", "python", "manage.py"),
+            cwd="/app",
+        ),
+    )
+    token: str = custom_jwt_token(
+        "workflow-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "workflow-agent",
+        {"projects_access": "all"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "list-landingpage-django-commands",
+            "method": "tools/call",
+            "params": {
+                "name": "list_landingpage_django_commands",
+                "arguments": {"project_name": "landingpage"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "list_landingpage_django_commands"
+    assert payload["project_name"] == "landingpage"
+    assert payload["report"]["commands"][0]["name"] == "media_inventory"
+    list_commands.assert_called_once_with(
+        command_run=CommandRunTarget(
+            container_name="portfolio-dev-be-1",
+            base_command=("uv", "run", "python", "manage.py"),
+            cwd="/app",
+        )
+    )
+
+
+async def test_inspect_landingpage_media_inventory_api_returns_connector_report(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    mocker: MockerFixture,
+) -> None:
+    """Verify landingpage media inventory returns the connector report."""
+
+    inspect_media_inventory = mocker.patch(
+        "tools.landingpage_django.landingpage_django_service.inspect_media_inventory",
+        return_value=LandingpageMediaInventory(
+            report={
+                "schema_version": 1,
+                "summary": {
+                    "db_files_found_on_disk": 2,
+                    "disk_files_total": 3,
+                    "disk_files_not_referenced_in_db": 1,
+                },
+            }
+        ),
+    )
+    mocker.patch(
+        "tools.landingpage_django._resolve_landingpage_django_command_run",
+        return_value=CommandRunTarget(
+            container_name="portfolio-dev-be-1",
+            base_command=("uv", "run", "python", "manage.py"),
+            cwd="/app",
+        ),
+    )
+    token: str = custom_jwt_token(
+        "workflow-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "workflow-agent",
+        {"projects_access": "all"},
+    )
+
+    response = await jsonrpc.post(
+        token=token,
+        data={
+            "jsonrpc": "2.0",
+            "id": "inspect-landingpage-media-inventory",
+            "method": "tools/call",
+            "params": {
+                "name": "inspect_landingpage_media_inventory",
+                "arguments": {"project_name": "landingpage"},
+            },
+        },
+    )
+
+    payload = response.json()["result"]["structuredContent"]
+
+    assert response.status_code == 200
+    assert response.json()["result"]["isError"] is False
+    assert payload["action"] == "inspect_landingpage_media_inventory"
+    assert payload["project_name"] == "landingpage"
+    assert payload["report"]["summary"]["disk_files_not_referenced_in_db"] == 1
+    inspect_media_inventory.assert_called_once_with(
+        command_run=CommandRunTarget(
+            container_name="portfolio-dev-be-1",
+            base_command=("uv", "run", "python", "manage.py"),
+            cwd="/app",
+        )
+    )
 
 
 async def test_read_project_manifest_api_returns_authorized_manifest_contract(
@@ -3895,46 +4103,44 @@ async def test_list_projects_api_returns_multiple_manifest_backed_projects(
     assert payload[1]["source_keys"] == ["app_file"]
 
 
-async def test_inspect_live_fail2ban_activity_api_returns_live_status(
+async def test_inspect_live_crowdsec_activity_api_returns_live_status(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
     mocker: MockerFixture,
 ) -> None:
-    """Verify fail2ban diagnostics expose structured allowlisted live status."""
+    """Verify CrowdSec diagnostics expose structured allowlisted live status."""
 
+    await McpCaller.objects.create(
+        client_id="crowdsec-client",
+        client_type="codex",
+        workspace=LogWorkspace.SESSION,
+        allowed_projects=["vps-security"],
+    )
     token: str = custom_jwt_token(
-        "agent",
+        "crowdsec-client",
         [MCP_STATUS_READ_SCOPE],
-        "agent",
-        {"allowed_projects": ["landingpage"]},
+        "crowdsec-client",
+        {"allowed_projects": ["vps-security"], "client_type": "codex"},
     )
     mocker.patch(
-        "tools.fail2ban.fail2ban_service.inspect_activity",
-        return_value=Fail2banActivity(
+        "tools.crowdsec.crowdsec_service.inspect_activity",
+        return_value=CrowdSecActivity(
             inspection_status="ok",
-            service=Fail2banServiceStatus(
-                inspection_status="ok",
-                jail_count=2,
-                jails=["portfolio-nginx-probes", "portfolio-traefik-probes"],
-            ),
-            jails=[
-                Fail2banJailStatus(
-                    jail="portfolio-nginx-probes",
+            container_name="crowdsec",
+            sections=[
+                CrowdSecSection(
+                    name="decisions",
                     inspection_status="ok",
-                    currently_failed=4,
-                    total_failed=11,
-                    currently_banned=2,
-                    total_banned=3,
-                    banned_ips=["203.0.113.10", "198.51.100.2"],
+                    command=["cscli", "decisions", "list"],
+                    exit_code=0,
+                    output="No active decisions",
                 ),
-                Fail2banJailStatus(
-                    jail="portfolio-traefik-probes",
+                CrowdSecSection(
+                    name="appsec_metrics",
                     inspection_status="ok",
-                    currently_failed=0,
-                    total_failed=5,
-                    currently_banned=0,
-                    total_banned=1,
-                    banned_ips=[],
+                    command=["cscli", "metrics", "show", "appsec"],
+                    exit_code=0,
+                    output="Processed 11",
                 ),
             ],
         ),
@@ -3944,11 +4150,11 @@ async def test_inspect_live_fail2ban_activity_api_returns_live_status(
         token=token,
         data={
             "jsonrpc": "2.0",
-            "id": "inspect-live-fail2ban-activity",
+            "id": "inspect-live-crowdsec-activity",
             "method": "tools/call",
             "params": {
-                "name": "inspect_live_fail2ban_activity",
-                "arguments": {"project_name": "landingpage"},
+                "name": "inspect_live_crowdsec_activity",
+                "arguments": {"project_name": "vps-security"},
             },
         },
     )
@@ -3957,12 +4163,12 @@ async def test_inspect_live_fail2ban_activity_api_returns_live_status(
 
     assert response.status_code == 200
     assert response.json()["result"]["isError"] is False
-    assert payload["action"] == "inspect_live_fail2ban_activity"
-    assert payload["project_name"] == "landingpage"
+    assert payload["action"] == "inspect_live_crowdsec_activity"
+    assert payload["project_name"] == "vps-security"
     assert payload["inspection_status"] == "ok"
-    assert payload["service"]["jail_count"] == 2
-    assert payload["jails"][0]["jail"] == "portfolio-nginx-probes"
-    assert payload["jails"][0]["banned_ips"] == ["203.0.113.10", "198.51.100.2"]
+    assert payload["container_name"] == "crowdsec"
+    assert payload["sections"][0]["name"] == "decisions"
+    assert payload["sections"][0]["output"] == "No active decisions"
 
 
 async def test_collect_logs_api_returns_agent_error_for_project_mismatch(

@@ -26,7 +26,7 @@ from tools.agent_hints import (
     GROUP_ERRORS_TOOL_DESCRIPTION,
     INSPECT_CONTAINER_DETAIL_TOOL_DESCRIPTION,
     INSPECT_CONTAINERS_HEALTH_TOOL_DESCRIPTION,
-    INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION,
+    INSPECT_LIVE_CROWDSEC_ACTIVITY_TOOL_DESCRIPTION,
     INSPECT_PROJECT_COMPOSE_STATE_TOOL_DESCRIPTION,
     INSPECT_PROJECT_DEPLOYMENT_TOOL_DESCRIPTION,
     INSPECT_PROJECT_RUNTIME_TOOL_DESCRIPTION,
@@ -95,7 +95,7 @@ def test_application_registers_expected_mcp_components(
         assert "list_project_directory" in tool_names
         assert "inspect_project_scheduled_jobs" in tool_names
         assert "close_agent_session" in tool_names
-        assert "inspect_live_fail2ban_activity" in tool_names
+        assert "inspect_live_crowdsec_activity" in tool_names
         assert "inspect_tls_certificate" in tool_names
         assert "inspect_traefik_tls_configuration" in tool_names
         assert "get_mcp_service_status" in tool_names
@@ -192,7 +192,7 @@ def test_application_registers_expected_mcp_components(
             item["tool_name"] == "suggest_followup_window" for item in bootstrap_text["tools"]
         )
         assert any(
-            item["tool_name"] == "inspect_live_fail2ban_activity"
+            item["tool_name"] == "inspect_live_crowdsec_activity"
             for item in bootstrap_text["tools"]
         )
         assert any(
@@ -339,10 +339,10 @@ def test_application_registers_expected_mcp_components(
         )
         assert "project_name" in app_scheduled_jobs_tool.parameters["properties"]
         assert "patterns" not in app_scheduled_jobs_tool.parameters.get("required", [])
-        app_fail2ban_tool = next(
-            tool for tool in tools if tool.name == "inspect_live_fail2ban_activity"
+        app_crowdsec_tool = next(
+            tool for tool in tools if tool.name == "inspect_live_crowdsec_activity"
         )
-        assert app_fail2ban_tool.description == INSPECT_LIVE_FAIL2BAN_ACTIVITY_TOOL_DESCRIPTION
+        assert app_crowdsec_tool.description == INSPECT_LIVE_CROWDSEC_ACTIVITY_TOOL_DESCRIPTION
         app_tls_tool = next(tool for tool in tools if tool.name == "inspect_tls_certificate")
         assert app_tls_tool.description == INSPECT_TLS_CERTIFICATE_TOOL_DESCRIPTION
         app_traefik_tls_tool = next(

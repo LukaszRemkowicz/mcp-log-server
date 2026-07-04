@@ -6,7 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-from services.docker_socket_gateway import DockerSocketGatewayClient, DockerSocketGatewayError
+from exceptions import DockerSocketGatewayError
+from services.docker_socket_gateway import DockerSocketGatewayClient
 
 TraefikCertificateSource = Literal["acme_resolver", "static_or_default", "not_tls"]
 
@@ -64,7 +65,7 @@ class TraefikTlsService:
         raw_routers = payload.get("routers")
         if not isinstance(raw_routers, list):
             return TraefikTlsInspectionError(
-                message="Docker socket app returned invalid Traefik router inventory.",
+                message="Socket app returned invalid Traefik router inventory.",
                 error_code="invalid_traefik_router_inventory",
             )
         routers: list[TraefikRouterTlsInspection] = []

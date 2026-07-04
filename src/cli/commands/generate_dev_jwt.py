@@ -59,6 +59,19 @@ async def _get_token_caller(token_name: str, workspace: LogWorkspace) -> TokenCa
     callers = await McpCaller.objects.filter(workspace=workspace).order_by("id")
     if not callers:
         return DEFAULT_TOKEN_CALLERS[token_name]
+    expected_caller = DEFAULT_TOKEN_CALLERS[token_name]
+    matching_default_callers = [
+        caller
+        for caller in callers
+        if caller.client_id == expected_caller.client_id
+        and caller.client_type == expected_caller.client_type
+    ]
+    if len(matching_default_callers) == 1:
+        caller = matching_default_callers[0]
+        return TokenCaller(
+            client_id=caller.client_id,
+            client_type=caller.client_type,
+        )
     if len(callers) > 1:
         caller_names = ", ".join(f"{caller.client_id}/{caller.client_type}" for caller in callers)
         raise RuntimeError(
