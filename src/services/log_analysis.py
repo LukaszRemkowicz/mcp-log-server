@@ -88,6 +88,10 @@ _FAIL2BAN_ALREADY_BANNED_PATTERN = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s+\S+\s+\[\d+\]:"
     r"\s+\w+\s+\[(?P<jail>[^\]]+)\]\s+(?P<ip>\S+)\s+already banned$"
 )
+_CROWDSEC_BAN_PATTERN = re.compile(
+    r'\btime="(?P<timestamp>[^"]+)".*\bmsg="[^"]*\bby ip (?P<ip>\S+) '
+    r'[^"]*:\s+[^"]*\bban on Ip (?P=ip)\b'
+)
 
 
 class StructuredLogField(StrEnum):
@@ -382,7 +386,7 @@ class ProxyActivityAnalysis:
 
 @dataclass(slots=True)
 class ProbeBlockingRecord:
-    """Mutable probe/fail2ban correlation state for one IP and jail."""
+    """Mutable probe-blocking correlation state for one IP and policy."""
 
     ip: str
     jail: str
@@ -585,7 +589,7 @@ class LogAnalysisService:
         requested_project_name: str | None,
         project_name: str,
     ) -> InspectProbeBlockingActivityPayload:
-        """Correlate sensitive-path proxy probes with historical fail2ban events."""
+        """Correlate sensitive-path proxy probes with blocking engine events."""
 
         selected_sources = self._select_snapshot_files(
             requested_source_keys,
@@ -598,7 +602,11 @@ class LogAnalysisService:
         for source in selected_sources:
             source_key = source.source_key
             searched_source_keys.append(source_key)
-            if source_key not in {"fail2ban", *_PROBE_ACCESS_SOURCE_TO_JAIL.keys()}:
+            if source_key not in {
+                "crowdsec_runtime",
+                "fail2ban",
+                *_PROBE_ACCESS_SOURCE_TO_JAIL.keys(),
+            }:
                 continue
             file_ref = cast(FileReference, source.file)
             try:
@@ -607,6 +615,9 @@ class LogAnalysisService:
                         line = raw_line.rstrip("\n")
                         if source_key == "fail2ban":
                             self._add_fail2ban_probe_events(line, records)
+                            continue
+                        if source_key == "crowdsec_runtime":
+                            self._add_crowdsec_probe_events(line, records)
                             continue
                         payload = self._parse_json_line(line)
                         if payload is None:
@@ -932,6 +943,25 @@ class LogAnalysisService:
             ip = already_match.group("ip")
             record = records.setdefault((ip, jail), ProbeBlockingRecord(ip, jail))
             record.already_banned_count += 1
+
+    @staticmethod
+    def _add_crowdsec_probe_events(
+        line: str,
+        records: dict[tuple[str, str], ProbeBlockingRecord],
+    ) -> None:
+        """Add CrowdSec ban facts to probe records correlated by source IP."""
+
+        ban_match = _CROWDSEC_BAN_PATTERN.search(line)
+        if ban_match is None:
+            return
+
+        ip = ban_match.group("ip")
+        timestamp = ban_match.group("timestamp")
+        for jail in _PROBE_ACCESS_SOURCE_TO_JAIL.values():
+            record = records.setdefault((ip, jail), ProbeBlockingRecord(ip, jail))
+            record.sources.add("crowdsec_runtime")
+            record.ban_count += 1
+            record.last_ban_at = timestamp
 
     @staticmethod
     def _select_proxy_snapshot_files(
