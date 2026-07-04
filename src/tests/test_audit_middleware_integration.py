@@ -463,6 +463,21 @@ async def test_audit_middleware_rejects_tool_call_for_unregistered_client(
     assert mcp_result.isError is True
     assert mcp_result.structuredContent is not None
     assert mcp_result.structuredContent["error_code"] == "mcp_client_not_authorized"
+    assert mcp_result.structuredContent["message"] == (
+        "Authenticated MCP token is valid, but this token identity is not allowlisted "
+        "for the requested MCP workspace."
+    )
+    assert mcp_result.structuredContent["retry_tips"] == [
+        (
+            "Do not change client_id, client_type, or workspace in tool arguments; "
+            "they come from the JWT."
+        ),
+        "Refresh the configured MCP bearer token if it is stale or points at the wrong client.",
+        (
+            "Ask an administrator to allowlist this JWT identity in mcp_callers "
+            "for the requested workspace."
+        ),
+    ]
     assert mcp_result.structuredContent["details"] == {
         "client_id": "unknown-client",
         "client_type": "codex",
@@ -862,10 +877,19 @@ async def test_audit_middleware_authorizes_container_file_tools_as_session_tools
 
 @pytest.mark.anyio
 @pytest.mark.usefixtures("db")
-@pytest.mark.parametrize("tool_name", ["list_projects", "inspect_live_crowdsec_activity"])
+@pytest.mark.parametrize(
+    ("tool_name", "arguments"),
+    [
+        ("list_projects", {}),
+        ("inspect_live_crowdsec_activity", {"project_name": "vps-security"}),
+        ("list_landingpage_django_commands", {"project_name": "landingpage"}),
+        ("inspect_landingpage_media_inventory", {"project_name": "landingpage"}),
+    ],
+)
 async def test_audit_middleware_authorizes_workspace_agnostic_tools_for_session_callers(
     mocker: MockerFixture,
     tool_name: str,
+    arguments: dict[str, object],
 ) -> None:
     """Verify no-workspace utility tools use the caller's actual DB workspace."""
 
@@ -887,7 +911,9 @@ async def test_audit_middleware_authorizes_workspace_agnostic_tools_for_session_
     mocker.patch("middleware.audit.get_access_token", return_value=token)
     request = SimpleNamespace(state=SimpleNamespace())
     mocker.patch("middleware.audit.get_http_request", return_value=request)
-    context = MiddlewareContext(message=mt.CallToolRequestParams(name=tool_name, arguments={}))
+    context = MiddlewareContext(
+        message=mt.CallToolRequestParams(name=tool_name, arguments=arguments)
+    )
     middleware = AccessAuditMiddleware()
     call_next = mocker.AsyncMock(
         return_value=ToolResult(content=[], structured_content={"ok": True})

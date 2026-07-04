@@ -28,6 +28,25 @@ def _proxy_source(path: Path, *, source_key: str = "nginx") -> CollectLogsSource
     )
 
 
+def _plain_source(path: Path, *, source_key: str) -> CollectLogsSourceOut:
+    return CollectLogsSourceOut(
+        id=1,
+        source_key=source_key,
+        source_type="file",
+        target=path.as_posix(),
+        description="plain text security log",
+        stream=None,
+        parser_type="plain_text",
+        normalization_profile="security_events",
+        default_noise_profile=None,
+        status="collected",
+        file=FileReference(name=path.as_posix()),
+        line_count=1,
+        error=None,
+        retry_tips=[],
+    )
+
+
 def _metadata(path: Path) -> LogSnapshotMetadata:
     return LogSnapshotMetadata(
         project_name="landingpage",
@@ -214,6 +233,59 @@ def test_proxy_activity_marks_distinct_route_count_as_estimated_after_candidate_
     assert payload.distinct_route_group_count > payload.returned_route_group_count
     assert payload.top_routes[0].path == "/late-api"
     assert payload.top_routes[0].count == 3
+
+
+def test_probe_blocking_activity_correlates_crowdsec_bans_before_access_logs(
+    tmp_path: Path,
+) -> None:
+    """CrowdSec runtime ban logs should mark later correlated probe records observed."""
+
+    crowdsec_log = tmp_path / "crowdsec.log"
+    crowdsec_log.write_text(
+        (
+            '2026-07-04T00:06:46.322183975Z time="2026-07-04T02:06:46+02:00" '
+            'level=info msg="(localhost/crowdsec) portfolio/http-sensitive-probes '
+            'by ip 198.51.100.20 (PL/29314) : 876000h ban on Ip 198.51.100.20" '
+            "module=db\n"
+        ),
+        encoding="utf-8",
+    )
+    access_log = tmp_path / "traefik.jsonl"
+    access_log.write_text(
+        "\n".join(
+            [
+                (
+                    '{"time":"2026-07-04T00:05:00Z","ClientHost":"198.51.100.20",'
+                    '"RequestHost":"lukaszremkowicz.com","RequestPath":"/.env",'
+                    '"DownstreamStatus":403}'
+                ),
+                (
+                    '{"time":"2026-07-04T00:05:01Z","ClientHost":"198.51.100.20",'
+                    '"RequestHost":"lukaszremkowicz.com","RequestPath":"/.git/config",'
+                    '"DownstreamStatus":403}'
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = LogAnalysisService().inspect_probe_blocking_activity(
+        _metadata(access_log),
+        sources=[
+            _plain_source(crowdsec_log, source_key="crowdsec_runtime"),
+            _proxy_source(access_log, source_key="traefik_access"),
+        ],
+        requested_source_keys=None,
+        requested_project_name="vps-security",
+        project_name="vps-security",
+    )
+
+    assert payload.observed_ban_ip_count == 1
+    assert payload.suspicious_ips[0].ip == "198.51.100.20"
+    assert payload.suspicious_ips[0].jail == "portfolio-traefik-probes"
+    assert payload.suspicious_ips[0].observed_ban is True
+    assert payload.suspicious_ips[0].ban_count == 1
+    assert payload.suspicious_ips[0].last_ban_at == "2026-07-04T02:06:46+02:00"
 
 
 def test_proxy_activity_maps_traefik_downstream_status_fields(tmp_path: Path) -> None:

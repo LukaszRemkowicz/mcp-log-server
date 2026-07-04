@@ -4888,7 +4888,8 @@ async def test_tool_call_api_rejects_jwt_for_unregistered_client(
 
     assert response.status_code == 200
     assert result["isError"] is True
-    assert "Authenticated MCP client is not allowed to call tools." in error_text
+    assert "Authenticated MCP token is valid" in error_text
+    assert "not allowlisted for the requested MCP workspace" in error_text
 
 
 @pytest.mark.parametrize(
@@ -4927,4 +4928,7 @@ async def test_discovery_api_rejects_jwt_for_unregistered_client(
     payload = response.json()["error"]
 
     assert response.status_code == 200
-    assert "Authenticated MCP client is not allowed to call tools." in payload["message"]
+    assert payload["message"] == (
+        "Authenticated MCP token is valid, but this token identity is not allowlisted "
+        "for the requested MCP workspace."
+    )
