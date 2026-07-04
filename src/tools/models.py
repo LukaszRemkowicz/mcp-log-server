@@ -195,6 +195,16 @@ class ProjectManifestSummary(BaseModel):
         return getattr(self, key)
 
 
+class ProjectManifestCommandRunPayload(BaseModel):
+    """Fixed backend command runner contract for one Docker manifest source."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    base_command: list[str]
+    cwd: str
+
+
 class ProjectManifestSourcePayload(BaseModel):
     """Detailed source contract returned by `read_project_manifest`."""
 
@@ -215,6 +225,7 @@ class ProjectManifestSourcePayload(BaseModel):
     inspect_path_prefixes: list[str]
     expected_producer_type: Literal["cron", "systemd", "docker", "app"] | None
     scheduler_patterns: list[str]
+    command_run: ProjectManifestCommandRunPayload | None
 
 
 class ReadProjectManifestPayload(BaseModel):

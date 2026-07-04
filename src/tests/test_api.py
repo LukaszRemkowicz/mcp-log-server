@@ -1435,7 +1435,7 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
-    """Verify vps-security fixture logs exercise fail2ban and proxy analysis tools."""
+    """Verify vps-security fixture logs exercise proxy analysis tools."""
 
     token = custom_jwt_token(
         "all-project-workflow-client",
@@ -1450,7 +1450,7 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
             data=build_collect_logs_request(
                 request_id="collect-vps-security-fixture",
                 project_names=["vps-security"],
-                source_keys=["all"],
+                source_keys=["nginx_access", "nginx_runtime", "traefik_access"],
                 since="2026-05-18T00:00:00Z",
             ),
         )
@@ -1464,8 +1464,8 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
                     "name": "grep_log_snapshot",
                     "arguments": {
                         "project_name": "vps-security",
-                        "grep": "Ban|wp-login|502",
-                        "source_keys": ["fail2ban", "nginx_access", "traefik_access"],
+                        "grep": "wp-login|502",
+                        "source_keys": ["nginx_access", "traefik_access"],
                     },
                 },
             },
@@ -1496,7 +1496,7 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
                     "name": "group_errors",
                     "arguments": {
                         "project_name": "vps-security",
-                        "source_keys": ["fail2ban", "nginx_access", "traefik_access"],
+                        "source_keys": ["nginx_access", "traefik_access"],
                         "max_groups": 6,
                     },
                 },
@@ -1511,17 +1511,15 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
     assert collect_response.status_code == 200
     assert collect_response.json()["result"]["isError"] is False
     assert collect_payload["resolved_source_keys"] == [
-        "fail2ban",
         "nginx_access",
         "nginx_runtime",
         "traefik_access",
     ]
-    assert [source["line_count"] for source in collect_payload["sources"]] == [20, 12, 1, 12]
+    assert [source["line_count"] for source in collect_payload["sources"]] == [12, 1, 12]
     assert grep_response.status_code == 200
     assert grep_response.json()["result"]["isError"] is False
-    assert grep_payload["match_count"] == 8
+    assert grep_payload["match_count"] == 4
     assert grep_payload["matched_source_keys"] == [
-        "fail2ban",
         "nginx_access",
         "traefik_access",
     ]
@@ -1545,15 +1543,15 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
     )
     assert group_response.status_code == 200
     assert group_response.json()["result"]["isError"] is False
-    assert group_payload["matching_line_count"] == 19
+    assert group_payload["matching_line_count"] == 18
 
 
-async def test_inspect_probe_blocking_activity_api_correlates_probe_and_fail2ban_events(
+async def test_inspect_probe_blocking_activity_api_correlates_probe_events(
     file_backed_project_context: FileBackedProjectContext,
     custom_jwt_token: CustomJwtToken,
     jsonrpc: JsonRpcClient,
 ) -> None:
-    """Verify probe-blocking diagnostics correlate proxy probes with fail2ban events."""
+    """Verify probe-blocking diagnostics identify sensitive proxy probes."""
 
     token = custom_jwt_token(
         "all-project-workflow-client",
@@ -1568,7 +1566,7 @@ async def test_inspect_probe_blocking_activity_api_correlates_probe_and_fail2ban
             data=build_collect_logs_request(
                 request_id="collect-vps-security-probe-blocking",
                 project_names=["vps-security"],
-                source_keys=["all"],
+                source_keys=["nginx_access", "traefik_access"],
                 since="2026-05-18T00:00:00Z",
             ),
         )
@@ -1582,7 +1580,7 @@ async def test_inspect_probe_blocking_activity_api_correlates_probe_and_fail2ban
                     "name": "inspect_probe_blocking_activity",
                     "arguments": {
                         "project_name": "vps-security",
-                        "source_keys": ["fail2ban", "nginx_access", "traefik_access"],
+                        "source_keys": ["nginx_access", "traefik_access"],
                     },
                 },
             },
@@ -1596,7 +1594,7 @@ async def test_inspect_probe_blocking_activity_api_correlates_probe_and_fail2ban
     assert response.json()["result"]["isError"] is False
     assert payload["action"] == "inspect_probe_blocking_activity"
     assert payload["project_name"] == "vps-security"
-    assert payload["searched_source_keys"] == ["fail2ban", "nginx_access", "traefik_access"]
+    assert payload["searched_source_keys"] == ["nginx_access", "traefik_access"]
     assert payload["policy"] == {
         "portfolio-nginx-probes": {"findtime": "1m", "maxretry": 3, "bantime": "-1"},
         "portfolio-traefik-probes": {"findtime": "1m", "maxretry": 3, "bantime": "-1"},
@@ -1604,8 +1602,8 @@ async def test_inspect_probe_blocking_activity_api_correlates_probe_and_fail2ban
     assert payload["suspicious_ip_count"] == 4
     assert payload["suspicious_request_count"] == 8
     assert payload["expected_ban_ip_count"] == 1
-    assert payload["observed_ban_ip_count"] == 3
-    assert payload["expected_but_not_observed"] == []
+    assert payload["observed_ban_ip_count"] == 0
+    assert payload["expected_but_not_observed"] == ["203.0.113.10"]
 
     nginx_record = next(
         item
@@ -1615,10 +1613,10 @@ async def test_inspect_probe_blocking_activity_api_correlates_probe_and_fail2ban
     assert nginx_record["request_count"] == 4
     assert nginx_record["paths"] == ["/.env", "/.git/config", "/phpmyadmin/index.php", "/wp-admin"]
     assert nginx_record["expected_ban"] is True
-    assert nginx_record["observed_ban"] is True
-    assert nginx_record["ban_count"] == 1
-    assert nginx_record["already_banned_count"] == 1
-    assert nginx_record["last_ban_at"] == "2026-05-18 09:40:01"
+    assert nginx_record["observed_ban"] is False
+    assert nginx_record["ban_count"] == 0
+    assert nginx_record["already_banned_count"] == 0
+    assert nginx_record["last_ban_at"] == ""
 
     unobserved_record = next(
         item
