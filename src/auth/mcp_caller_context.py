@@ -12,7 +12,16 @@ MCP_CALLER_REQUEST_STATE_ATTR = "caller"
 
 @dataclass(frozen=True, slots=True)
 class AuthenticatedMcpCaller:
-    """Database-backed MCP caller allowed to use tools for one workspace."""
+    """Database-backed MCP caller allowed to use tools for one workspace.
+
+    `client_id` is the external authenticated identity from the JWT and is useful
+    for logs, diagnostics, and matching token claims, for example
+    `"workflow-agent"` or `"codex-agent-123"`.
+
+    `caller_id` is the internal `mcp_callers.id` primary key and should be used
+    for database ownership checks such as task, session, and audit-row filtering,
+    for example `tasks.caller_id = 42`.
+    """
 
     client_id: str
     client_type: str

@@ -16,11 +16,12 @@ Current groups in this file:
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, RootModel
 
 from core.types import LogWorkspace
+from database.types import TaskStatus, TaskType
 
 SnapshotWorkspace = LogWorkspace
 
@@ -169,6 +170,47 @@ class CollectLogsPayload(BaseModel):
     requested_project_names: list[str]
     next_step_tips: list[str]
     projects: list[ProjectCollectLogsPayload]
+
+    def __getitem__(self, key: str) -> object:
+        """Allow concise dict-style assertions while keeping a typed model contract."""
+
+        return getattr(self, key)
+
+
+class LogCollectionProjectTaskStatusPayload(BaseModel):
+    """Status for one project-scoped log-collection task."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_name: str | None
+    status: TaskStatus
+    created_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    result: dict[str, Any] | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+
+    def __getitem__(self, key: str) -> object:
+        """Allow concise dict-style assertions while keeping a typed model contract."""
+
+        return getattr(self, key)
+
+
+class LogCollectionTaskStatusPayload(BaseModel):
+    """Structured response returned by `get_log_collection_status`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["get_log_collection_status"]
+    task_type: TaskType
+    workspace: SnapshotWorkspace
+    session_id: str
+    task_count: int
+    created_at: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    tasks: list[LogCollectionProjectTaskStatusPayload]
 
     def __getitem__(self, key: str) -> object:
         """Allow concise dict-style assertions while keeping a typed model contract."""

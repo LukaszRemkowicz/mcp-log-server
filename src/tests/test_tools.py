@@ -69,6 +69,8 @@ def test_application_registers_expected_mcp_components(
         assert "analyze_daily_log_bundle" in tool_names
         assert "analyze_sitemap_bundle" in tool_names
         assert "collect_logs" in tool_names
+        assert "start_log_collection" in tool_names
+        assert "get_log_collection_status" in tool_names
         assert "list_log_snapshot_files" in tool_names
         assert "read_log_snapshot_file" in tool_names
         assert "grep_log_snapshot" in tool_names
@@ -174,7 +176,11 @@ def test_application_registers_expected_mcp_components(
             item["skill_name"] != "application_monitoring"
             for item in bootstrap_text["optional_skills"]
         )
-        assert any(item["tool_name"] == "collect_logs" for item in bootstrap_text["tools"])
+        assert not any(item["tool_name"] == "collect_logs" for item in bootstrap_text["tools"])
+        assert any(item["tool_name"] == "start_log_collection" for item in bootstrap_text["tools"])
+        assert not any(
+            item["tool_name"] == "get_log_collection_status" for item in bootstrap_text["tools"]
+        )
         assert any(
             item["tool_name"] == "list_log_snapshot_files" for item in bootstrap_text["tools"]
         )
@@ -239,29 +245,20 @@ def test_application_registers_expected_mcp_components(
             item["tool_name"] == "inspect_project_scheduled_jobs"
             for item in bootstrap_text["tools"]
         )
-        collect_logs_tool = next(
-            item for item in bootstrap_text["tools"] if item["tool_name"] == "collect_logs"
-        )
-        assert all(argument["name"] != "workspace" for argument in collect_logs_tool["arguments"])
         assert any(item["tool_name"] == "list_projects" for item in bootstrap_text["tools"])
         assert any(
             item["tool_name"] == "get_mcp_service_status" for item in bootstrap_text["tools"]
         )
-        collect_logs_tool = next(
-            item for item in bootstrap_text["tools"] if item["tool_name"] == "collect_logs"
-        )
-        assert collect_logs_tool["description"]
-        assert any(
-            argument["name"] == "project_names" for argument in collect_logs_tool["arguments"]
-        )
-        assert any(argument["name"] == "session_id" for argument in collect_logs_tool["arguments"])
-        since_argument = next(
-            argument for argument in collect_logs_tool["arguments"] if argument["name"] == "since"
-        )
-        assert since_argument["default"] == "24h"
         app_collect_tool = next(tool for tool in tools if tool.name == "collect_logs")
         assert app_collect_tool.description == COLLECT_LOGS_TOOL_DESCRIPTION
         assert "workspace" not in app_collect_tool.parameters["properties"]
+        assert app_collect_tool.parameters["properties"]["since"]["default"] == "24h"
+        app_start_collection_tool = next(
+            tool for tool in tools if tool.name == "start_log_collection"
+        )
+        assert "workspace" not in app_start_collection_tool.parameters["properties"]
+        app_status_tool = next(tool for tool in tools if tool.name == "get_log_collection_status")
+        assert "session_id" in app_status_tool.parameters["properties"]
         app_incident_bundle_tool = next(
             tool for tool in tools if tool.name == "build_incident_bundle"
         )

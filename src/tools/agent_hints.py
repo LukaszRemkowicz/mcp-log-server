@@ -22,6 +22,15 @@ COLLECT_LOGS_TOOL_DESCRIPTION = (
     "call the recommended project-scoped provenance tools before interpreting "
     "the source as healthy, idle, or empty."
 )
+START_LOG_COLLECTION_TOOL_DESCRIPTION = (
+    "Start deterministic log collection in the background for one or more projects. "
+    "Use this when synchronous collect_logs may take too long for one MCP call. "
+    "The result returns session_id; poll get_log_collection_status with that session_id."
+)
+GET_LOG_COLLECTION_STATUS_TOOL_DESCRIPTION = (
+    "Return the latest background log collection status for the authenticated MCP caller "
+    "and session_id."
+)
 
 CLOSE_AGENT_SESSION_TOOL_DESCRIPTION = (
     "Close one interactive investigation session after the agent is done with "

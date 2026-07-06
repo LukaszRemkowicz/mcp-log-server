@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Callable
@@ -21,7 +22,7 @@ from auth.scopes import (
     WORKFLOW_SKILLS_READ_SCOPE,
 )
 from core.types import LogWorkspace
-from database.models import McpCaller
+from database.models import McpCaller, Task
 from services.crowdsec_service import CrowdSecActivity, CrowdSecSection
 from services.inspection_tools_service import (
     ContainerDetail,
@@ -515,7 +516,7 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
         if item["resource_uri"] == "skill://workflow/bot_detection"
     )
     assert "scanner/probe-heavy traffic" in bot_detection["when_useful"]
-    assert any(item["tool_name"] == "collect_logs" for item in payload["tools"])
+    assert not any(item["tool_name"] == "collect_logs" for item in payload["tools"])
     assert any(item["tool_name"] == "list_log_snapshot_files" for item in payload["tools"])
     assert any(item["tool_name"] == "read_log_snapshot_file" for item in payload["tools"])
     assert any(item["tool_name"] == "grep_log_snapshot" for item in payload["tools"])
@@ -547,13 +548,6 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert any(item["tool_name"] == "inspect_project_scheduled_jobs" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_service_status" for item in payload["tools"])
     assert any(item["tool_name"] == "get_mcp_health_check" for item in payload["tools"])
-    collect_logs_tool = next(
-        item for item in payload["tools"] if item["tool_name"] == "collect_logs"
-    )
-    assert any(argument["name"] == "project_names" for argument in collect_logs_tool["arguments"])
-    assert any(argument["name"] == "source_keys" for argument in collect_logs_tool["arguments"])
-    assert any(argument["name"] == "session_id" for argument in collect_logs_tool["arguments"])
-    assert all(argument["name"] != "workspace" for argument in collect_logs_tool["arguments"])
 
 
 async def test_service_status_api_does_not_report_project_access(
@@ -905,7 +899,7 @@ async def test_collect_logs_api_returns_requested_and_resolved_file_sources(
     assert project_payload["project_name"] == "landingpage"
     assert project_payload["requested_source_keys"] == ["app_file", "missing_source"]
     assert project_payload["requested_since"] == "24h"
-    assert project_payload["requested_until"] is None
+    assert "requested_until" not in project_payload
     assert project_payload["unknown_requested_source_keys"] == ["missing_source"]
     assert project_payload["resolved_source_keys"] == ["app_file"]
     assert project_payload["warnings"] == [
@@ -925,6 +919,69 @@ async def test_collect_logs_api_returns_requested_and_resolved_file_sources(
         "workflow/landingpage/latest/app_file.log"
     )
     assert project_payload["sources"][0]["line_count"] == 3
+
+
+async def test_start_log_collection_api_queues_service_task_and_status_uses_session_id(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify async log collection tools queue the task function, not a service method."""
+
+    start_request = build_collect_logs_request(
+        request_id="start-logs-1",
+        source_keys=["app_file"],
+    )
+    start_request["params"]["name"] = "start_log_collection"
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        start_response = await jsonrpc.post(token=valid_jwt_token, data=start_request)
+
+        start_payload = start_response.json()["result"]["structuredContent"]
+        session_id = start_payload["session_id"]
+        saved_task = await Task.objects.get(session_id=session_id)
+        for _ in range(20):
+            if saved_task.status.value in {"completed", "failed"}:
+                break
+            await asyncio.sleep(0.05)
+            saved_task = await Task.objects.get(id=saved_task.id)
+        status_request = {
+            "jsonrpc": "2.0",
+            "id": "status-logs-1",
+            "method": "tools/call",
+            "params": {
+                "name": "get_log_collection_status",
+                "arguments": {"session_id": session_id},
+            },
+        }
+        status_response = await jsonrpc.post(token=valid_jwt_token, data=status_request)
+
+    status_payload = status_response.json()["result"]["structuredContent"]
+
+    assert start_response.status_code == 200
+    assert start_response.json()["result"]["isError"] is False
+    assert start_payload["action"] == "start_log_collection"
+    assert start_payload["status"] == "started"
+    assert start_payload["session_id"] == session_id
+    assert "task_type" not in start_payload
+    assert "requested_project_names" not in start_payload
+    assert "projects" not in start_payload
+    assert saved_task.arguments["args"] == []
+    assert saved_task.project_name == "landingpage"
+    assert "project_name" not in saved_task.arguments["kwargs"]
+    assert saved_task.arguments["kwargs"]["session_id"] == session_id
+    assert saved_task.arguments["kwargs"]["source_keys"] == ["app_file"]
+    assert status_response.status_code == 200
+    assert status_response.json()["result"]["isError"] is False
+    assert status_payload["action"] == "get_log_collection_status"
+    assert status_payload["session_id"] == session_id
+    assert status_payload["task_type"] == "log_collection"
+    assert "status" not in status_payload
+    assert status_payload["task_count"] == 1
+    assert status_payload["tasks"][0]["project_name"] == "landingpage"
+    assert status_payload["tasks"][0]["status"] == "completed"
+    assert "error_code" not in status_payload["tasks"][0]
+    assert "error_message" not in status_payload["tasks"][0]
 
 
 async def test_collect_logs_api_errors_when_all_requested_sources_are_unknown(
@@ -2479,8 +2536,8 @@ async def test_explain_project_source_api_reports_missing_producer_metadata(
     assert response.status_code == 200
     assert response.json()["result"]["isError"] is False
     assert payload["producer"]["metadata_status"] == "missing"
-    assert payload["producer"]["expected_producer_type"] is None
-    assert payload["scheduler_hints"] is None
+    assert "expected_producer_type" not in payload["producer"]
+    assert "scheduler_hints" not in payload
     assert any("Producer metadata is not configured" in tip for tip in payload["next_step_tips"])
 
 

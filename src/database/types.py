@@ -40,3 +40,18 @@ class CollectLogsSourceStatus(StrEnum):
 
     COLLECTED = "collected"
     UNAVAILABLE = "unavailable"
+
+
+class TaskStatus(StrEnum):
+    """Known persisted async task lifecycle states."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class TaskType(StrEnum):
+    """Known persisted async task kinds."""
+
+    LOG_COLLECTION = "log_collection"
