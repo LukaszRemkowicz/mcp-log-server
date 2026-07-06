@@ -10,8 +10,22 @@ from tortoise import Tortoise
 from tortoise.models import Model
 
 from core.types import LogWorkspace
-from database.models import AgentSession, CollectLogs, CollectLogsSource, McpCaller, ProjectManifest
-from database.types import AgentSessionStatus, CollectLogsSourceStatus, LogSourceType, LogStream
+from database.models import (
+    AgentSession,
+    CollectLogs,
+    CollectLogsSource,
+    McpCaller,
+    ProjectManifest,
+    Task,
+)
+from database.types import (
+    AgentSessionStatus,
+    CollectLogsSourceStatus,
+    LogSourceType,
+    LogStream,
+    TaskStatus,
+    TaskType,
+)
 from services.session_ids import generate_session_id
 
 Tortoise.init_models(["database.models"], "models")
@@ -125,6 +139,54 @@ class ProjectManifestFactory(TortoiseModelFactory):
             static_asset_extensions=obj.static_asset_extensions,
             deployment=obj.deployment,
             sources=obj.sources,
+        )
+
+
+class TaskFactory(TortoiseModelFactory):
+    """Build async task model instances without persisting them."""
+
+    class Meta:
+        model = Task
+
+    task_type = TaskType.LOG_COLLECTION
+    status = TaskStatus.QUEUED
+    workspace = LogWorkspace.SESSION
+    caller = factory.SubFactory(McpCallerFactory)
+    session_id = factory.LazyFunction(generate_session_id)
+    project_name = "mcp"
+    arguments = factory.LazyFunction(dict)
+    result = None
+    error_code = None
+    error_message = None
+    started_at = None
+    completed_at = None
+    expires_at = None
+
+    @classmethod
+    async def save_to_db(
+        cls,
+        *,
+        caller: McpCaller | None = None,
+        **kwargs: Any,
+    ) -> Task:
+        """Create a real async task row in the test database."""
+
+        task_caller = caller or await McpCallerFactory.save_to_db()
+        obj = cls.build(caller=task_caller, **kwargs)
+        return await Task.objects.create(
+            task_type=obj.task_type,
+            status=obj.status,
+            workspace=obj.workspace,
+            caller=task_caller,
+            session_id=obj.session_id,
+            project_name=obj.project_name,
+            arguments=obj.arguments,
+            result=obj.result,
+            error_code=obj.error_code,
+            error_message=obj.error_message,
+            started_at=obj.started_at,
+            completed_at=obj.completed_at,
+            expires_at=obj.expires_at,
         )
 
 

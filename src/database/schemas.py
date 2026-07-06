@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from core.types import LogWorkspace
 from database.fields import FileReference
-from database.types import AgentSessionStatus
+from database.types import AgentSessionStatus, TaskStatus, TaskType
 from services.session_ids import SESSION_ID_MAX_LENGTH
 
 
@@ -68,6 +68,74 @@ class AgentSessionOut(BaseModel):
     caller_id: int
     status: AgentSessionStatus
     closed_at: datetime | None = None
+
+
+class TaskCreate(BaseModel):
+    """Validated payload for creating one async task row."""
+
+    task_type: TaskType
+    status: TaskStatus = TaskStatus.QUEUED
+    workspace: LogWorkspace
+    caller_id: int
+    session_id: str | None = Field(default=None, max_length=SESSION_ID_MAX_LENGTH)
+    project_name: str | None = None
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    started_at: datetime | None = None
+    expires_at: datetime | None = None
+
+
+class TaskUpdate(BaseModel):
+    """Validated payload for updating one async task row."""
+
+    status: TaskStatus | None = None
+    result: dict[str, Any] | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    expires_at: datetime | None = None
+
+
+class AsyncTaskResult(BaseModel):
+    """Celery-like handle returned after an async task is queued."""
+
+    id: UUID
+    task_type: TaskType
+    status: TaskStatus
+    session_id: str | None = None
+    project_name: str | None = None
+
+    def __repr__(self) -> str:
+        return f"<AsyncTaskResult: {self.id}>"
+
+    def __str__(self) -> str:
+        return repr(self)
+
+
+class TaskOut(BaseModel):
+    """Pydantic representation of one async task row."""
+
+    id: UUID
+    created_at: datetime
+    task_type: TaskType
+    status: TaskStatus
+    workspace: LogWorkspace
+    caller_id: int
+    session_id: str | None = None
+    project_name: str | None = None
+    arguments: dict[str, Any]
+    result: dict[str, Any] | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    expires_at: datetime | None = None
+
+
+class TaskListOut(BaseModel):
+    """Pydantic representation of async task rows."""
+
+    tasks: list[TaskOut]
 
 
 class ProjectManifestCreate(BaseModel):

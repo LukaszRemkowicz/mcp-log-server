@@ -41,6 +41,7 @@ from auth.mcp_caller_context import (
     set_request_mcp_caller,
 )
 from core.types import LogWorkspace
+from database.models import McpCaller
 from database.services.agent_sessions import AgentSessionService as AgentSessionDBService
 from database.services.mcp_callers import McpCallerService
 from database.services.project_manifests import ProjectManifestService as ProjectManifestDBService
@@ -59,6 +60,8 @@ agent_session_db_service = AgentSessionDBService()
 
 WORKFLOW_AGENT_CLIENT_ID = "workflow-agent"
 WORKFLOW_AGENT_CLIENT_TYPE = "workflow_agent"
+LOG_COLLECTION_START_TOOL_NAME = "start_log_collection"
+LOG_COLLECTION_SESSION_TOOLS = frozenset({"collect_logs", LOG_COLLECTION_START_TOOL_NAME})
 SESSION_WORKSPACE_TOOLS = frozenset(
     {
         "close_agent_session",
@@ -67,6 +70,7 @@ SESSION_WORKSPACE_TOOLS = frozenset(
 WORKSPACE_AGNOSTIC_TOOLS = frozenset(
     {
         "get_mcp_health_check",
+        "get_log_collection_status",
         "get_mcp_service_status",
         "explain_project_source",
         "inspect_container_detail",
@@ -378,7 +382,7 @@ def _resolve_tool_workspace(
 
     if tool_name in SESSION_WORKSPACE_TOOLS:
         return LogWorkspace.SESSION
-    if tool_name == "collect_logs":
+    if tool_name in LOG_COLLECTION_SESSION_TOOLS:
         try:
             return LogWorkspace(str(arguments.get("workspace", LogWorkspace.WORKFLOW)))
         except ValueError:
@@ -397,7 +401,7 @@ async def _authorize_mcp_client(
 ) -> AuthenticatedMcpCaller | AgentToolErrorResult | None:
     """Return the DB-backed caller when a matching allowlist row exists."""
 
-    caller = await caller_service.get_allowed(
+    caller: McpCaller | None = await caller_service.get_allowed(
         client_id=client_id,
         client_type=client_type,
         workspace=workspace,
@@ -491,7 +495,6 @@ async def _authenticate_mcp_caller(
     *,
     token: AccessToken,
     workspace: LogWorkspace,
-    tool_name: str,
     allow_any_workspace: bool = False,
 ) -> AuthenticatedMcpCaller | AgentToolErrorResult:
     """Authorize the JWT caller against DB allowlist and attach request state."""
@@ -576,7 +579,6 @@ class AccessAuditMiddleware(Middleware):
             caller_result = await _authenticate_mcp_caller(
                 token=token,
                 workspace=LogWorkspace.WORKFLOW,
-                tool_name="mcp_discovery",
                 allow_any_workspace=True,
             )
             if isinstance(caller_result, AgentToolErrorResult):
@@ -606,7 +608,6 @@ class AccessAuditMiddleware(Middleware):
             caller_result = await _authenticate_mcp_caller(
                 token=token,
                 workspace=LogWorkspace.WORKFLOW,
-                tool_name="mcp_discovery",
                 allow_any_workspace=True,
             )
             if isinstance(caller_result, AgentToolErrorResult):
@@ -636,7 +637,6 @@ class AccessAuditMiddleware(Middleware):
             caller_result = await _authenticate_mcp_caller(
                 token=token,
                 workspace=LogWorkspace.WORKFLOW,
-                tool_name="mcp_discovery",
                 allow_any_workspace=True,
             )
             if isinstance(caller_result, AgentToolErrorResult):
@@ -667,7 +667,6 @@ class AccessAuditMiddleware(Middleware):
             caller_result = await _authenticate_mcp_caller(
                 token=token,
                 workspace=LogWorkspace.WORKFLOW,
-                tool_name="mcp_discovery",
                 allow_any_workspace=True,
             )
             if isinstance(caller_result, AgentToolErrorResult):
@@ -703,16 +702,15 @@ class AccessAuditMiddleware(Middleware):
         started_at = perf_counter()
         tool_name = context.message.name
         arguments: dict[str, Any] = dict(context.message.arguments or {})
-        if tool_name == "collect_logs" and "workspace" in arguments:
+        if tool_name in LOG_COLLECTION_SESSION_TOOLS and "workspace" in arguments:
             return _collect_logs_workspace_argument_error()
         workspace = _resolve_tool_workspace(tool_name=tool_name, arguments=arguments)
         allow_any_workspace = tool_name in WORKSPACE_AGNOSTIC_TOOLS or (
-            tool_name == "collect_logs" and "workspace" not in arguments
+            tool_name in LOG_COLLECTION_SESSION_TOOLS and "workspace" not in arguments
         )
         caller_result = await _authenticate_mcp_caller(
             token=token,
             workspace=workspace,
-            tool_name=tool_name,
             allow_any_workspace=allow_any_workspace,
         )
         if isinstance(caller_result, AgentToolErrorResult):
@@ -720,7 +718,7 @@ class AccessAuditMiddleware(Middleware):
 
         workspace = caller_result.workspace
         session_id = None
-        if tool_name == "collect_logs":
+        if tool_name in LOG_COLLECTION_SESSION_TOOLS:
             session_id = _prepare_collect_logs_arguments(context, workspace=workspace)
         elif isinstance(arguments.get("session_id"), str):
             session_id = arguments["session_id"]
@@ -732,7 +730,7 @@ class AccessAuditMiddleware(Middleware):
                 session_id=session_id,
             )
             if isinstance(agent_session_result, AgentToolErrorResult):
-                if tool_name == "collect_logs":
+                if tool_name in LOG_COLLECTION_SESSION_TOOLS:
                     return agent_session_result
             else:
                 request_agent_session = agent_session_result

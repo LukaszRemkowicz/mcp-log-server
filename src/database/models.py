@@ -16,6 +16,8 @@ from database.types import (
     CollectLogsSourceStatus,
     LogSourceType,
     LogStream,
+    TaskStatus,
+    TaskType,
 )
 from storage import storage as log_storage
 
@@ -174,6 +176,87 @@ class AgentCall(DatabaseModel):
 
     class Meta:
         table = "agent_calls"
+
+
+class Task(DatabaseModel):
+    """One persisted async MCP task, such as a background log collection."""
+
+    objects: ClassVar[ObjectsManager[Task]]
+
+    id = fields.UUIDField(
+        primary_key=True,
+        description="Stable task id returned to MCP clients for polling.",
+    )
+    created_at = fields.DatetimeField(
+        auto_now_add=True,
+        description="UTC timestamp when this async task row was created.",
+    )
+    updated_at = fields.DatetimeField(
+        auto_now=True,
+        description="UTC timestamp when this async task row was last updated.",
+    )
+    task_type = fields.CharEnumField(
+        TaskType,
+        description="Async task kind, for example log_collection.",
+    )
+    status = fields.CharEnumField(
+        TaskStatus,
+        default=TaskStatus.QUEUED,
+        description="Async task lifecycle status.",
+    )
+    workspace = fields.CharEnumField(
+        LogWorkspace,
+        description="MCP workspace this task runs within.",
+    )
+    caller: fields.ForeignKeyRelation[McpCaller] = fields.ForeignKeyField(
+        "models.McpCaller",
+        related_name="tasks",
+        on_delete=fields.CASCADE,
+        description="Allowed MCP caller that created this async task.",
+    )
+    session_id = fields.CharField(
+        max_length=24,
+        null=True,
+        description="Human-readable session_id associated with this async task.",
+    )
+    project_name = fields.CharField(
+        max_length=128,
+        null=True,
+        description="Project associated with this async task, when project-scoped.",
+    )
+    arguments: fields.Field[dict[str, Any]] = fields.JSONField(
+        default=dict,
+        description="Sanitized task input arguments.",
+    )
+    result: fields.Field[dict[str, Any] | None] = fields.JSONField(
+        null=True,
+        description="Structured task result payload after successful completion.",
+    )
+    error_code = fields.CharField(
+        max_length=128,
+        null=True,
+        description="Stable error code for failed tasks, when available.",
+    )
+    error_message = fields.TextField(
+        null=True,
+        description="Human-readable failure detail for failed tasks.",
+    )
+    started_at = fields.DatetimeField(
+        null=True,
+        description="UTC timestamp when task execution started.",
+    )
+    completed_at = fields.DatetimeField(
+        null=True,
+        description="UTC timestamp when task execution reached a terminal state.",
+    )
+    expires_at = fields.DatetimeField(
+        null=True,
+        description="UTC timestamp after which this task may be cleaned up.",
+    )
+
+    class Meta:
+        table = "tasks"
+        ordering = ["-created_at"]
 
 
 class CollectLogs(DatabaseModel):

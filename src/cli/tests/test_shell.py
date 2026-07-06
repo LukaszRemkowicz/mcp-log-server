@@ -35,14 +35,19 @@ def test_developer_shell_bootstraps_project_namespace(
     assert result == 0
     assert calls == [f"init:{shell.TORTOISE_ORM['connections']['default']}", "close"]
     assert "McpCaller" in namespace
+    assert "Task" in namespace
+    assert "collect_logs_task" in namespace
     assert "Preloaded imports:" in output
     assert (
         "from database.models import McpCaller, AgentCall, CollectLogs, "
-        "CollectLogsSource, ProjectManifest" in output
+        "CollectLogsSource, ProjectManifest, Task" in output
     )
     assert "from core.types import LogWorkspace" in output
     assert "from database.types import AgentCallEvent, CollectLogsSourceStatus" in output
+    assert "TaskStatus, TaskType" in output
     assert "from database.services.project_manifests import ProjectManifestService" in output
+    assert "from database.services.tasks import TaskService" in output
+    assert "from tasks import task, collect_logs_task" in output
 
 
 def test_developer_shell_reexecs_inside_running_prod_app_container(
