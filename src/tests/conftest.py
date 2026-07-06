@@ -33,6 +33,7 @@ from database.models import (
     CollectLogsSource,
     McpCaller,
     ProjectManifest,
+    Task,
 )
 from database.schemas import ProjectManifestCreate, ProjectManifestUpdate
 from database.services.project_manifests import ProjectManifestService as ProjectManifestDBService
@@ -269,6 +270,7 @@ async def _flush_database_tables() -> None:
     ordered_models: list[type[DatabaseModel]] = [
         CollectLogsSource,
         CollectLogs,
+        Task,
         AgentCall,
         AgentSession,
         McpCaller,

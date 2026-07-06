@@ -24,6 +24,7 @@ from database.models import (
     CollectLogsSource,
     McpCaller,
     ProjectManifest,
+    Task,
 )
 from database.types import (
     AgentCallEvent,
@@ -31,6 +32,8 @@ from database.types import (
     CollectLogsSourceStatus,
     LogSourceType,
     LogStream,
+    TaskStatus,
+    TaskType,
 )
 from tests.conftest import override_settings
 
@@ -541,11 +544,49 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
     assert AgentCall.objects is not ProjectManifest.objects
     assert CollectLogs.objects is not CollectLogsSource.objects
 
+    assert Task.Meta.table == "tasks"
+    task_fields = set(Task._meta.fields_map)
+    task_fields.discard("caller_id")
+    assert task_fields == {
+        "id",
+        "created_at",
+        "updated_at",
+        "task_type",
+        "status",
+        "workspace",
+        "caller",
+        "session_id",
+        "project_name",
+        "arguments",
+        "result",
+        "error_code",
+        "error_message",
+        "started_at",
+        "completed_at",
+        "expires_at",
+    }
+    assert cast(Any, Task._meta.fields_map["task_type"]).enum_type is TaskType
+    assert cast(Any, Task._meta.fields_map["status"]).enum_type is TaskStatus
+    assert cast(Any, Task._meta.fields_map["workspace"]).enum_type is LogWorkspace
+    assert Task._meta.fields_map["caller"].description == (
+        "Allowed MCP caller that created this async task."
+    )
+    assert Task._meta.fields_map["session_id"].description == (
+        "Human-readable session_id associated with this async task."
+    )
+    assert Task._meta.fields_map["project_name"].description == (
+        "Project associated with this async task, when project-scoped."
+    )
+    assert Task._meta.fields_map["arguments"].description == "Sanitized task input arguments."
+    assert Task.objects is not None
+    assert Task.objects._model is Task
+
     assert McpCaller.Meta.table == "mcp_callers"
     assert get_mcp_caller_model() is McpCaller
     mcp_caller_fields = set(McpCaller._meta.fields_map)
     mcp_caller_fields.discard("agent_calls")
     mcp_caller_fields.discard("agent_sessions")
+    mcp_caller_fields.discard("tasks")
     assert mcp_caller_fields == {
         "id",
         "created_at",

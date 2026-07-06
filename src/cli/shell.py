@@ -129,31 +129,61 @@ if _loaded_from_shell_entrypoint():
 from core.types import LogWorkspace
 from database.config import TORTOISE_ORM
 from database.lifecycle import close_database, initialize_database
-from database.models import AgentCall, CollectLogs, CollectLogsSource, McpCaller, ProjectManifest
-from database.schemas import AgentCallCreate, AgentCallFilter, AgentCallUpdate
+from database.models import (
+    AgentCall,
+    CollectLogs,
+    CollectLogsSource,
+    McpCaller,
+    ProjectManifest,
+    Task,
+)
+from database.schemas import (
+    AgentCallCreate,
+    AgentCallFilter,
+    AgentCallUpdate,
+    AsyncTaskResult,
+    TaskCreate,
+    TaskListOut,
+    TaskOut,
+    TaskUpdate,
+)
 from database.services.agent_calls import AgentCallService
 from database.services.project_manifests import ProjectManifestService
-from database.types import AgentCallEvent, CollectLogsSourceStatus, LogSourceType, LogStream
+from database.services.tasks import TaskService
+from database.types import (
+    AgentCallEvent,
+    CollectLogsSourceStatus,
+    LogSourceType,
+    LogStream,
+    TaskStatus,
+    TaskType,
+)
 from services.agent_calls import AgentCallAuditService, AgentCallCreateError
 from services.log_collection import LogCollectionService
+from tasks import collect_logs_task, task
 
 SHELL_IMPORT_LINES = [
     "from conf import settings",
     "from database.config import TORTOISE_ORM",
     (
         "from database.models import McpCaller, AgentCall, CollectLogs, "
-        "CollectLogsSource, ProjectManifest"
+        "CollectLogsSource, ProjectManifest, Task"
     ),
-    "from database.schemas import AgentCallCreate, AgentCallFilter, AgentCallUpdate",
+    (
+        "from database.schemas import AgentCallCreate, AgentCallFilter, AgentCallUpdate, "
+        "AsyncTaskResult, TaskCreate, TaskUpdate, TaskOut, TaskListOut"
+    ),
     "from core.types import LogWorkspace",
     (
         "from database.types import AgentCallEvent, CollectLogsSourceStatus, "
-        "LogSourceType, LogStream"
+        "LogSourceType, LogStream, TaskStatus, TaskType"
     ),
     "from database.services.agent_calls import AgentCallService",
     "from database.services.project_manifests import ProjectManifestService",
+    "from database.services.tasks import TaskService",
     "from services.agent_calls import AgentCallAuditService, AgentCallCreateError",
     "from services.log_collection import LogCollectionService",
+    "from tasks import task, collect_logs_task",
 ]
 
 
@@ -181,6 +211,17 @@ def build_shell_namespace() -> dict[str, Any]:
         "LogWorkspace": LogWorkspace,
         "ProjectManifest": ProjectManifest,
         "ProjectManifestService": ProjectManifestService,
+        "Task": Task,
+        "TaskCreate": TaskCreate,
+        "TaskListOut": TaskListOut,
+        "TaskOut": TaskOut,
+        "TaskService": TaskService,
+        "TaskStatus": TaskStatus,
+        "TaskType": TaskType,
+        "TaskUpdate": TaskUpdate,
+        "AsyncTaskResult": AsyncTaskResult,
+        "collect_logs_task": collect_logs_task,
+        "task": task,
     }
 
 
