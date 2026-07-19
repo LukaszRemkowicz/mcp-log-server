@@ -167,8 +167,12 @@ class DockerSocketServer:
     ) -> None:
         """Log bounded request metadata at a level useful to MCP analysis."""
 
+        operation_label, derived_unsupported_operation = DockerSocketServer._operation_log_label(
+            operation
+        )
+        unsupported_operation = unsupported_operation or derived_unsupported_operation
         fields: dict[str, object] = {
-            "operation": operation,
+            "operation": operation_label,
             "ok": ok,
             "duration_ms": duration_ms,
         }
@@ -185,7 +189,7 @@ class DockerSocketServer:
             )
             logger.error("socket_request_completed", extra=fields)
             return
-        if operation == "service_health":
+        if operation_label == "service_health":
             logger.debug("socket_request_completed", extra=fields)
             return
         logger.info("socket_request_completed", extra=fields)

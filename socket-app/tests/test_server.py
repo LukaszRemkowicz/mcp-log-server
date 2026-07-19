@@ -195,6 +195,27 @@ def test_backend_failure_logs_sanitized_error_fields(monkeypatch: pytest.MonkeyP
     assert "credentials" not in repr(recording_logger.calls)
 
 
+def test_log_request_outcome_sanitizes_operation_at_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recording_logger = RecordingLogger()
+    monkeypatch.setattr(server_module, "logger", recording_logger)
+    secret_operation = "Bearer-secret-token-" * 10_000
+
+    DockerSocketServer._log_request_outcome(
+        operation=secret_operation,
+        unsupported_operation=False,
+        ok=True,
+        request_error=None,
+        duration_ms=1.0,
+    )
+
+    level, _, fields = recording_logger.calls[0]
+    assert level == "info"
+    assert fields["operation"] == "unsupported"
+    assert secret_operation not in repr(recording_logger.calls)
+
+
 def test_unknown_operation_is_logged_as_fixed_sentinel(monkeypatch: pytest.MonkeyPatch) -> None:
     recording_logger = RecordingLogger()
     monkeypatch.setattr(server_module, "logger", recording_logger)
