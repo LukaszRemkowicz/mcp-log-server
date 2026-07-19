@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from core.types import LogWorkspace
 from database.fields import FileReference
 from database.schemas import CollectLogsSourceOut
@@ -178,3 +180,115 @@ def test_filtered_view_sample_mode_spreads_lines_across_sources(tmp_path: Path) 
         ("traefik", 2),
     ]
     assert payload.view_mode == "sample"
+
+
+@pytest.mark.parametrize(
+    ("source_context", "raw_snapshot", "expected_cleaned_lines", "exclusion_reason"),
+    [
+        (
+            SourceNoiseContext(
+                source_key="nginx",
+                parser_type="nginx_json",
+                normalization_profile="proxy_access",
+                default_noise_profile="web_noise",
+            ),
+            (
+                b'{"status": 200, "request": "GET /healthz HTTP/1.1"}\n'
+                b'{"status": 204, "request": "GET /healthz HTTP/1.1"}\n'
+                b'{"status": 400, "request": "GET /healthz HTTP/1.1"}\n'
+                b'{"status": 404, "request": "GET /healthz HTTP/1.1"}\n'
+                b'{"status": 503, "request": "GET /healthz HTTP/1.1"}\n'
+                b'{"request": "GET /healthz HTTP/1.1"}\n'
+                b'{"status": 200, "request": "GET /pricing HTTP/1.1"}\n'
+            ),
+            [
+                '{"status": 400, "request": "GET /healthz HTTP/1.1"}',
+                '{"status": 404, "request": "GET /healthz HTTP/1.1"}',
+                '{"status": 503, "request": "GET /healthz HTTP/1.1"}',
+                '{"request": "GET /healthz HTTP/1.1"}',
+                '{"status": 200, "request": "GET /pricing HTTP/1.1"}',
+            ],
+            "health_check_request",
+        ),
+        (
+            SourceNoiseContext(
+                source_key="nginx",
+                parser_type="traefik_json",
+                normalization_profile="proxy_access",
+                default_noise_profile="proxy_noise",
+            ),
+            (
+                b'2026-07-19T10:00:00Z {"DownstreamStatus":200,"RequestPath":"/healthz"}\n'
+                b'2026-07-19T10:00:01Z {"DownstreamStatus":200,"RequestPath":"/healthz"}\n'
+                b'2026-07-19T10:00:02Z {"DownstreamStatus":404,"RequestPath":"/healthz"}\n'
+                b'2026-07-19T10:00:02Z {"DownstreamStatus":503,"RequestPath":"/healthz"}\n'
+                b'2026-07-19T10:00:02Z {"RequestPath":"/healthz"}\n'
+                b'2026-07-19T10:00:03Z {"DownstreamStatus":200,"RequestPath":"/dashboard"}\n'
+            ),
+            [
+                '2026-07-19T10:00:02Z {"DownstreamStatus":404,"RequestPath":"/healthz"}',
+                '2026-07-19T10:00:02Z {"DownstreamStatus":503,"RequestPath":"/healthz"}',
+                '2026-07-19T10:00:02Z {"RequestPath":"/healthz"}',
+                '2026-07-19T10:00:03Z {"DownstreamStatus":200,"RequestPath":"/dashboard"}',
+            ],
+            "proxy_health_check_request",
+        ),
+        (
+            SourceNoiseContext(
+                source_key="nginx",
+                parser_type="python_json",
+                normalization_profile="backend_app",
+                default_noise_profile="backend_noise",
+            ),
+            (
+                b'{"level":"info","status_code":200,"path":"/healthz"}\n'
+                b'{"level":"debug","status_code":200,"path":"/healthz"}\n'
+                b'{"level":"info","status_code":404,"path":"/healthz"}\n'
+                b'{"level":"info","status_code":503,"path":"/healthz"}\n'
+                b'{"level":"error","status_code":503,"path":"/healthz"}\n'
+                b'{"level":"info","path":"/healthz"}\n'
+                b'{"level":"info","message":"worker ready"}\n'
+            ),
+            [
+                '{"level":"info","status_code":404,"path":"/healthz"}',
+                '{"level":"info","status_code":503,"path":"/healthz"}',
+                '{"level":"error","status_code":503,"path":"/healthz"}',
+                '{"level":"info","path":"/healthz"}',
+                '{"level":"info","message":"worker ready"}',
+            ],
+            "application_health_check_log",
+        ),
+    ],
+    ids=("nginx-json", "traefik-json", "backend-json"),
+)
+def test_filtered_view_removes_successful_healthz_noise_without_mutating_raw_snapshot(
+    tmp_path: Path,
+    source_context: SourceNoiseContext,
+    raw_snapshot: bytes,
+    expected_cleaned_lines: list[str],
+    exclusion_reason: str,
+) -> None:
+    """Verify health noise filtering derives a view without rewriting raw logs."""
+
+    log_file = tmp_path / "raw.log"
+    log_file.write_bytes(raw_snapshot)
+
+    payload = LogFilteringService().create_filtered_view(
+        _metadata(log_file),
+        sources=[_source(log_file)],
+        source_contexts={"nginx": source_context},
+        source_keys=None,
+        max_lines=10,
+        requested_project_name="landingpage",
+        project_name="landingpage",
+        view_mode="head",
+        next_step_tips=[],
+    )
+
+    assert not isinstance(payload, CreateFilteredViewError)
+    assert log_file.read_bytes() == raw_snapshot
+    assert [item.line for item in payload.cleaned_lines] == expected_cleaned_lines
+    assert payload.total_line_count == len(raw_snapshot.splitlines())
+    assert payload.kept_line_count == len(expected_cleaned_lines)
+    assert payload.excluded_line_count == 2
+    assert payload.source_summaries[0].top_exclusion_reasons == [exclusion_reason]

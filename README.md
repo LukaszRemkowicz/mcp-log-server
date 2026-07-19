@@ -81,6 +81,7 @@ documentation categories, not auth scopes.
 | Container inspection | `inspect_containers_health`, `inspect_container_detail`, `inspect_project_compose_state`, `inspect_project_runtime`, `inspect_project_deployment`, `stat_container_path`, `read_container_file`, `list_container_directory` | Inspect approved manifest-bounded containers, runtime Compose-labelled state, sanitized runtime env shape, deployment image provenance, and paths without mutating container state. |
 | Host path inspection | `stat_project_path`, `read_project_file`, `list_project_directory` | Inspect approved manifest-bounded host file sources without arbitrary filesystem access or mutation. |
 | Scheduler provenance | `inspect_project_scheduled_jobs` | Inspect configured read-only cron/systemd roots for project scheduler evidence without running or editing jobs. |
+| Backup inspection | `inspect_project_backups` | Report bounded backup-file metadata to Codex session callers without reading backup contents or claiming integrity verification. |
 | VPS and edge diagnostics | `inspect_tls_certificate`, `inspect_traefik_tls_configuration` | Inspect the configured `SITE_DOMAIN` TLS certificate and sanitized Traefik router TLS state without accepting arbitrary hostnames, ports, raw Docker labels, or mutation requests. |
 | MCP service diagnostics | `get_mcp_service_status`, `get_mcp_health_check` | Check MCP server/runtime health during development and operations. |
 
@@ -102,7 +103,10 @@ session area in `LOGS_DIR` and old session folders are cleaned according to
 `LOG_SNAPSHOT_RETENTION` when new session snapshots are prepared.
 
 Filtered views, grouped errors, incident bundles, and proxy activity reports are
-derived responses built from those raw snapshots. Collection diagnostics are
+derived responses built from those raw snapshots. `inspect_proxy_activity`
+excludes known health paths only when they have an explicit 2xx status, reports
+the number as `excluded_health_check_count`, and leaves failed, unknown-status,
+and raw lines intact. Collection diagnostics are
 saved inside the same snapshot directory, so they follow the same cleanup
 behavior as the logs they describe.
 
@@ -270,9 +274,16 @@ backend container, the MCP tools report a connector or command availability
 error rather than guessing from DB state.
 
 The Docker socket app accepts only fixed read-only operations such as
-`container_logs`, `container_health`, `container_file_read`, and
+`service_health`, `container_logs`, `container_health`, `container_file_read`, and
 `vps_containers_inventory`. It does not accept arbitrary shell commands,
 arbitrary Docker API calls, or mutation operations.
+
+Compose starts the MCP app after the `socket-app` service has started. There is
+no separate `socket-ready` container and no recurring socket health probe; the
+first Docker-backed tool call handles any short socket startup race. Socket
+lifecycle and request outcome logs are emitted as JSON Lines on stdout so the dedicated
+`socket_app` manifest source can collect them without mixing them into MCP HTTP
+application logs.
 
 ## Production Notes
 
@@ -315,9 +326,8 @@ for normal collection.
 
 In production, file source paths must be written as paths visible inside the
 MCP container. `docker-compose.prod.yml` mounts host `/var/log` as
-`/host/var/log` and host `/etc/nginx/logs` as `/host/etc/nginx/logs`, so a host
-log like `/var/log/app/app.jsonl` should be configured as
-`/host/var/log/app/app.jsonl` in the manifest. Manifest targets are literal
+`/host/var/log`, so a host log like `/var/log/app/app.jsonl` should be
+configured as `/host/var/log/app/app.jsonl` in the manifest. Manifest targets are literal
 absolute paths; date templates are not expanded. For dated log files, use a
 stable current path, a host-side symlink/logrotate convention, or update the
 manifest from the owning ops repository.

@@ -3,9 +3,17 @@
 from __future__ import annotations
 
 import re
+import tempfile
+from base64 import b64encode
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import PurePosixPath
-from typing import Any
+from pathlib import Path, PurePosixPath
+from threading import RLock
+from time import monotonic
+from time import time as wall_time
+from typing import Any, Literal
+from uuid import uuid4
 
 import environ
 from docker import from_env
@@ -18,6 +26,209 @@ from .schemas import DockerBackend
 from .services import BackendCommandRunService, CrowdSecService, DockerService
 
 ANONYMOUS_VOLUME_NAME_PATTERN = re.compile(settings.ANONYMOUS_VOLUME_NAME_PATTERN)
+
+
+@dataclass(slots=True)
+class _LogTransfer:
+    transfer_id: str
+    container_name: str
+    spool_path: Path
+    byte_count: int
+    next_offset: int
+    last_accessed_at: float
+
+
+@dataclass(frozen=True, slots=True)
+class LogTransferPage:
+    transfer_id: str | None
+    container_name: str
+    content: bytes
+    offset: int
+    byte_limit: int
+    truncated: bool
+    next_offset: int | None
+
+    @property
+    def returned_bytes(self) -> int:
+        return len(self.content)
+
+    def to_payload(self) -> dict[str, Any]:
+        """Return the JSON-serializable socket response payload."""
+
+        return {
+            "transfer_id": self.transfer_id,
+            "container_name": self.container_name,
+            "logs_base64": b64encode(self.content).decode("ascii"),
+            "offset": self.offset,
+            "returned_bytes": self.returned_bytes,
+            "byte_limit": self.byte_limit,
+            "truncated": self.truncated,
+            "next_offset": self.next_offset,
+        }
+
+
+class LogTransferSpool:
+    """Own temporary Docker-log transfer files and paging cursors."""
+
+    def __init__(
+        self,
+        *,
+        directory: Path,
+        ttl_seconds: float,
+        max_bytes: int,
+        clock: Callable[[], float] = monotonic,
+    ) -> None:
+        self.directory = directory
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self.ttl_seconds = ttl_seconds
+        self.max_bytes = max_bytes
+        if self.max_bytes < 1:
+            raise ValueError("max_bytes must be a positive integer.")
+        self._clock = clock
+        self._transfers: dict[str, _LogTransfer] = {}
+        self._lock = RLock()
+        self._cleanup_orphan_files()
+
+    @classmethod
+    def from_settings(cls) -> LogTransferSpool:
+        """Build the default spool from socket-app runtime settings."""
+
+        return cls(
+            directory=settings.LOG_TRANSFER_DIR,
+            ttl_seconds=settings.LOG_TRANSFER_TTL_SECONDS,
+            max_bytes=settings.MAX_LOG_TRANSFER_BYTES,
+        )
+
+    def create(self, *, container_name: str, chunks: Any) -> _LogTransfer:
+        """Create one immutable spool file from Docker log chunks."""
+
+        spool_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix="log-transfer-",
+                suffix=".part",
+                dir=self.directory,
+                delete=False,
+            ) as spool:
+                spool_path = Path(spool.name)
+                byte_count = 0
+                for chunk in chunks:
+                    raw = chunk if isinstance(chunk, bytes) else str(chunk).encode("utf-8")
+                    if byte_count + len(raw) > self.max_bytes:
+                        raise DockerBackendError(
+                            f"Docker log transfer exceeded maximum size of {self.max_bytes} bytes."
+                        )
+                    spool.write(raw)
+                    byte_count += len(raw)
+        except Exception:
+            if spool_path is not None:
+                spool_path.unlink(missing_ok=True)
+            raise
+
+        assert spool_path is not None
+        final_spool_path = spool_path.with_suffix(".spool")
+        spool_path.replace(final_spool_path)
+        transfer = _LogTransfer(
+            transfer_id=uuid4().hex,
+            container_name=container_name,
+            spool_path=final_spool_path,
+            byte_count=byte_count,
+            next_offset=0,
+            last_accessed_at=self._clock(),
+        )
+        self._transfers[transfer.transfer_id] = transfer
+        return transfer
+
+    def create_page(
+        self,
+        *,
+        transfer: _LogTransfer,
+        offset: int,
+        byte_limit: int,
+    ) -> LogTransferPage:
+        """Return the first page from a newly-created spool."""
+
+        with self._lock:
+            self._cleanup_expired_transfers()
+            return self._page_from_transfer(transfer=transfer, offset=offset, byte_limit=byte_limit)
+
+    def read_page(
+        self,
+        *,
+        transfer_id: str,
+        offset: int,
+        byte_limit: int,
+    ) -> LogTransferPage:
+        """Return one page from an existing spool."""
+
+        with self._lock:
+            self._cleanup_expired_transfers()
+            transfer = self._transfers.get(transfer_id)
+            if transfer is None:
+                raise DockerBackendError("Unknown or expired log transfer id.")
+            if offset != transfer.next_offset:
+                raise DockerBackendError(f"Log transfer offset must be {transfer.next_offset}.")
+            return self._page_from_transfer(transfer=transfer, offset=offset, byte_limit=byte_limit)
+
+    def _page_from_transfer(
+        self,
+        *,
+        transfer: _LogTransfer,
+        offset: int,
+        byte_limit: int,
+    ) -> LogTransferPage:
+        with transfer.spool_path.open("rb") as spool:
+            spool.seek(offset)
+            page = spool.read(byte_limit)
+        next_offset = offset + len(page)
+        truncated = next_offset < transfer.byte_count
+        if truncated:
+            transfer.next_offset = next_offset
+            transfer.last_accessed_at = self._clock()
+            response_transfer_id: str | None = transfer.transfer_id
+        else:
+            self.delete(transfer.transfer_id)
+            response_transfer_id = None
+
+        return LogTransferPage(
+            transfer_id=response_transfer_id,
+            container_name=transfer.container_name,
+            content=page,
+            offset=offset,
+            byte_limit=byte_limit,
+            truncated=truncated,
+            next_offset=next_offset if truncated else None,
+        )
+
+    def _cleanup_expired_transfers(self) -> None:
+        expires_before = self._clock() - self.ttl_seconds
+        expired_ids = [
+            transfer_id
+            for transfer_id, transfer in self._transfers.items()
+            if transfer.last_accessed_at <= expires_before
+        ]
+        for transfer_id in expired_ids:
+            self.delete(transfer_id)
+        self._cleanup_orphan_files()
+
+    def _cleanup_orphan_files(self) -> None:
+        expires_before = wall_time() - self.ttl_seconds
+        active_paths = {transfer.spool_path for transfer in self._transfers.values()}
+        for pattern in ("log-transfer-*.spool", "log-transfer-*.part"):
+            for spool_path in self.directory.glob(pattern):
+                if spool_path in active_paths:
+                    continue
+                try:
+                    if spool_path.stat().st_mtime <= expires_before:
+                        spool_path.unlink(missing_ok=True)
+                except FileNotFoundError:
+                    continue
+
+    def delete(self, transfer_id: str) -> None:
+        transfer = self._transfers.pop(transfer_id, None)
+        if transfer is not None:
+            transfer.spool_path.unlink(missing_ok=True)
 
 
 class DockerSdkAdapter(DockerBackend):
@@ -33,11 +244,30 @@ class DockerSdkAdapter(DockerBackend):
     cannot provide arbitrary commands through the socket protocol.
     """
 
-    def __init__(self, client: Any | None = None) -> None:
+    def __init__(
+        self,
+        client: Any | None = None,
+        *,
+        log_transfer_spool: LogTransferSpool | None = None,
+    ) -> None:
         self.client = client or from_env(timeout=settings.DOCKER_TIMEOUT_SECONDS)
+        self.log_transfer_spool = log_transfer_spool or LogTransferSpool.from_settings()
         self.docker_service = DockerService(self.client)
         self.crowdsec_service = CrowdSecService(self.docker_service)
         self.backend_command_run_service = BackendCommandRunService(self.docker_service)
+
+    def service_health(self) -> dict[str, Any]:
+        """Return healthy only when the Docker daemon answers a SDK ping."""
+
+        try:
+            docker_reachable = self.client.ping() is True
+        except requests_exceptions.Timeout as error:
+            raise DockerBackendError("Timed out pinging the Docker daemon.") from error
+        except DockerException as error:
+            raise DockerBackendError(str(error).strip() or "Docker daemon ping failed.") from error
+        if not docker_reachable:
+            raise DockerBackendError("Docker daemon ping failed.")
+        return {"status": "ok", "docker_reachable": True}
 
     def container_logs(
         self,
@@ -85,6 +315,91 @@ class DockerSdkAdapter(DockerBackend):
                 break
             lines.append(raw.decode("utf-8", errors="replace").rstrip("\n"))
         return {"container_name": container_name, "logs": lines, "truncated": truncated}
+
+    def container_logs_page(
+        self,
+        *,
+        transfer_id: str | None = None,
+        container_name: str | None = None,
+        stream: Literal["stdout", "stderr"] | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        tail: int | None = None,
+        offset: int = 0,
+        max_bytes: int | None = None,
+    ) -> dict[str, Any]:
+        """Page one immutable Docker-log spool through an opaque cursor."""
+
+        if offset < 0:
+            raise DockerBackendError("offset must be a non-negative integer.")
+        if max_bytes is not None and max_bytes < 1:
+            raise DockerBackendError("max_bytes must be a positive integer.")
+        byte_limit = min(max_bytes or settings.MAX_LOG_BYTES, settings.MAX_LOG_BYTES)
+
+        page: LogTransferPage
+        if transfer_id is None:
+            if offset != 0:
+                raise DockerBackendError("A new log transfer must start at offset 0.")
+            if not container_name:
+                raise DockerBackendError("container_name is required for a new log transfer.")
+            transfer: _LogTransfer = self._create_log_transfer(
+                container_name=container_name,
+                stream=stream,
+                since=since,
+                until=until,
+                tail=tail,
+            )
+            page = self.log_transfer_spool.create_page(
+                transfer=transfer,
+                offset=offset,
+                byte_limit=byte_limit,
+            )
+        else:
+            if any(value is not None for value in (container_name, stream, since, until, tail)):
+                raise DockerBackendError(
+                    "A continued log transfer accepts only transfer_id, offset, and max_bytes."
+                )
+            page = self.log_transfer_spool.read_page(
+                transfer_id=transfer_id,
+                offset=offset,
+                byte_limit=byte_limit,
+            )
+
+        return page.to_payload()
+
+    def _create_log_transfer(
+        self,
+        *,
+        container_name: str,
+        stream: Literal["stdout", "stderr"] | None,
+        since: str | None,
+        until: str | None,
+        tail: int | None,
+    ) -> _LogTransfer:
+        kwargs: dict[str, Any] = {}
+        if since is not None:
+            kwargs["since"] = self._parse_log_timestamp(since, "since")
+        if until is not None:
+            kwargs["until"] = self._parse_log_timestamp(until, "until")
+        if tail is not None:
+            kwargs["tail"] = tail
+        try:
+            container = self.client.containers.get(container_name)
+            chunks = container.logs(
+                follow=False,
+                timestamps=True,
+                stdout=stream != "stderr",
+                stderr=stream != "stdout",
+                stream=True,
+                **kwargs,
+            )
+            return self.log_transfer_spool.create(container_name=container_name, chunks=chunks)
+        except requests_exceptions.Timeout as error:
+            raise DockerBackendError(
+                f"Timed out collecting docker logs for {container_name}."
+            ) from error
+        except DockerException as error:
+            raise DockerBackendError(str(error).strip() or "Docker operation failed.") from error
 
     @staticmethod
     def _parse_log_timestamp(value: str, param_name: str) -> datetime:

@@ -57,7 +57,7 @@ services:
     environment:
       LOGS_DIR: ${LOGS_DIR:-/app/logs}
       SOCKET_APP_SOCKET_PATH: /run/socket-app/gateway.sock
-      DOCKER_SOCKET_APP_TIMEOUT_SECONDS: 60
+      DOCKER_SOCKET_APP_TIMEOUT_SECONDS: ${DOCKER_SOCKET_APP_TIMEOUT_SECONDS:-300}
       DATABASE_HOST: db
       DATABASE_PORT: 5432
       DATABASE_NAME: ${DATABASE_NAME:-mcp_log_server}
@@ -69,20 +69,9 @@ services:
       PYTHONPATH: /app/src
       SITE_DOMAIN: ${SITE_DOMAIN}
       TLS_CERTIFICATE_SUBDOMAINS: ${TLS_CERTIFICATE_SUBDOMAINS:-admin,stage,mcp}
+      BACKUP_INSPECTION_ROOTS: ${BACKUP_INSPECTION_ROOTS:-/host/var/backups}
     ports:
       - "127.0.0.1:${MCP_PORT_HOST:-8001}:${MCP_PORT:-8001}"
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-m",
-          "healthcheck",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 10s
     command:
       [
         "sh",
@@ -91,6 +80,7 @@ services:
       ]
 
   socket-app:
+    image: mcp-socket-local:latest
     build:
       context: .
       dockerfile: docker/socket-app/Dockerfile
@@ -98,6 +88,7 @@ services:
     restart: unless-stopped
     environment:
       SOCKET_APP_SOCKET_PATH: /run/socket-app/gateway.sock
+      MAX_LOG_TRANSFER_BYTES: ${MAX_LOG_TRANSFER_BYTES:-268435456}
     volumes:
       - socket-app-run:/run/socket-app
       - /var/run/docker.sock:/var/run/docker.sock
@@ -122,7 +113,7 @@ services:
     environment:
       LOGS_DIR: /app/logs
       SOCKET_APP_SOCKET_PATH: /tmp/socket-app-test.sock
-      DOCKER_SOCKET_APP_TIMEOUT_SECONDS: 60
+      DOCKER_SOCKET_APP_TIMEOUT_SECONDS: ${DOCKER_SOCKET_APP_TIMEOUT_SECONDS:-300}
       DATABASE_HOST: db
       DATABASE_PORT: 5432
       DATABASE_NAME: mcp_log_server_test

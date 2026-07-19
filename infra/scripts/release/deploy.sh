@@ -18,7 +18,7 @@
 #   - runs a pre-deploy database backup unless SKIP_BACKUP=true
 #   - applies migrations unless SKIP_MIGRATE=true
 #   - recreates the socket app and MCP app containers with the selected tag
-#   - waits for Docker app health before recording current_tag
+#   - waits for bounded MCP HTTP readiness before recording current_tag
 #
 # What this script does not do:
 #   - does not build images
@@ -73,6 +73,7 @@ SITE_DOMAIN="${SITE_DOMAIN:?SITE_DOMAIN is required for Traefik MCP routing}"
 DOCKER_SOCKET_GID="${DOCKER_SOCKET_GID:?DOCKER_SOCKET_GID is required}"
 PROJECT_MANIFESTS_HOST_PATH="${PROJECT_MANIFESTS_HOST_PATH:?PROJECT_MANIFESTS_HOST_PATH is required}"
 PROJECT_MANIFESTS_PATH="${PROJECT_MANIFESTS_PATH:-/app/project-manifests}"
+MCP_PORT_HOST="${MCP_PORT_HOST:-8001}"
 
 export \
     ENVIRONMENT \
@@ -87,7 +88,8 @@ export \
     SITE_DOMAIN \
     DOCKER_SOCKET_GID \
     PROJECT_MANIFESTS_HOST_PATH \
-    PROJECT_MANIFESTS_PATH
+    PROJECT_MANIFESTS_PATH \
+    MCP_PORT_HOST
 
 cleanup() {
     rmdir "$LOCK_DIR" 2>/dev/null || true
@@ -119,32 +121,19 @@ fi
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 printf "📁 State directory: %s\n" "$STATE_DIR"
 
-wait_for_app_container_health() {
-    local container_id
-    local health_status
+wait_for_app_http_readiness() {
+    local readiness_url="http://127.0.0.1:${MCP_PORT_HOST}/healthz"
 
     for attempt in {1..30}; do
-        container_id="$(docker compose "${COMPOSE_ARGS[@]}" ps -q app)"
-        if [[ -n "$container_id" ]]; then
-            health_status="$(
-                docker inspect \
-                    --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' \
-                    "$container_id" \
-                    2>/dev/null \
-                    || true
-            )"
-            if [[ "$health_status" == "healthy" ]]; then
-                printf "✅ Docker app healthcheck passed\n"
-                return 0
-            fi
-            printf "⏳ Waiting for Docker app health (%s/30): %s\n" "$attempt" "$health_status"
-        else
-            printf "⏳ Waiting for Docker app container (%s/30)\n" "$attempt"
+        if curl --fail --silent --show-error --connect-timeout 2 --max-time 5 "$readiness_url" >/dev/null 2>&1; then
+            printf "✅ MCP HTTP readiness check passed\n"
+            return 0
         fi
+        printf "⏳ Waiting for MCP HTTP readiness (%s/30)\n" "$attempt"
         sleep 2
     done
 
-    log_error "Docker app healthcheck did not pass."
+    log_error "MCP /healthz readiness check did not pass."
     docker compose "${COMPOSE_ARGS[@]}" ps
     return 1
 }
@@ -220,12 +209,12 @@ fi
 # Step 8: start or update the Docker-backed application containers with the selected tag.
 deploy_step "🚀" 8 9 "Start application containers"
 docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans socket-app
-printf "✅ Socket app container recreated\n"
+printf "✅ Socket app recreated\n"
 docker compose "${COMPOSE_ARGS[@]}" up -d --force-recreate --remove-orphans app
 printf "✅ Application container recreated\n"
 
-# Step 9: wait for Docker to confirm the app accepts unauthenticated liveness probes.
-deploy_step "🩺" 9 9 "Wait for Docker app health"
-wait_for_app_container_health
+# Step 9: verify MCP HTTP readiness directly after the containers start.
+deploy_step "🩺" 9 9 "Wait for MCP HTTP readiness"
+wait_for_app_http_readiness
 printf "%s\n" "$TAG" > "$STATE_DIR/current_tag"
 printf "🎉 Deploy complete: %s\n" "$IMAGE_NAME"

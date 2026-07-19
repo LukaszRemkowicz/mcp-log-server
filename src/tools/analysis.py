@@ -621,6 +621,7 @@ async def inspect_proxy_activity(
             "archive_name": archive_name,
             "workspace": payload.workspace,
             "searched_source_count": len(payload.searched_source_keys),
+            "excluded_health_check_count": payload.excluded_health_check_count,
             "http_status_line_count": payload.http_status_line_count,
             "upstream_error_count": payload.upstream_error_count,
             "top_route_count": len(payload.top_routes),

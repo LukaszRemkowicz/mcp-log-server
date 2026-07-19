@@ -22,7 +22,7 @@ from auth.scopes import (
     WORKFLOW_SKILLS_READ_SCOPE,
 )
 from core.types import LogWorkspace
-from database.models import McpCaller, Task
+from database.models import McpCaller, ProjectManifest, Task
 from services.crowdsec_service import CrowdSecActivity, CrowdSecSection
 from services.inspection_tools_service import (
     ContainerDetail,
@@ -323,6 +323,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
         (
             "workflow-agent",
             [
+                CONTAINER_FILES_READ_SCOPE,
                 LOGS_COLLECT_SCOPE,
                 PROJECTS_READ_SCOPE,
                 WORKFLOW_BOOTSTRAP_SCOPE,
@@ -350,23 +351,8 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "get_mcp_health_check",
             },
             {
-                "inspect_containers_health",
-                "inspect_project_compose_state",
-                "inspect_project_runtime",
-                "inspect_project_deployment",
-                "inspect_vps_containers",
-                "inspect_vps_volumes",
-                "inspect_container_detail",
-                "stat_container_path",
-                "read_container_file",
-                "list_container_directory",
-                "stat_project_path",
-                "read_project_file",
-                "list_project_directory",
-                "inspect_project_scheduled_jobs",
-                "list_landingpage_django_commands",
-                "inspect_landingpage_media_inventory",
                 "close_agent_session",
+                "inspect_project_backups",
             },
         ),
         (
@@ -408,6 +394,7 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
                 "read_project_file",
                 "list_project_directory",
                 "inspect_project_scheduled_jobs",
+                "inspect_project_backups",
                 "list_landingpage_django_commands",
                 "inspect_landingpage_media_inventory",
                 "close_agent_session",
@@ -417,6 +404,13 @@ PROJECT_PROTECTED_SINGLE_PROJECT_TOOL_CALLS: tuple[ProtectedToolCall, ...] = (
             {
                 "analyze_daily_log_bundle",
             },
+        ),
+        (
+            "agent",
+            [CONTAINER_FILES_READ_SCOPE],
+            "agent",
+            set(),
+            {"inspect_project_backups"},
         ),
     ],
 )
@@ -446,6 +440,89 @@ async def test_tools_list_filters_visible_tools_per_jwt(
 
     assert expected_present <= tool_names
     assert tool_names.isdisjoint(expected_absent)
+
+
+async def test_inspect_project_backups_is_codex_session_only_and_returns_metadata(
+    custom_jwt_token: CustomJwtToken,
+    jsonrpc: JsonRpcClient,
+    tmp_path: Path,
+) -> None:
+    backup_root = tmp_path / "backups"
+    backup_dir = backup_root / "landingpage"
+    backup_dir.mkdir(parents=True)
+    backup_file = backup_dir / "landingpage_20260719.dump"
+    backup_file.write_bytes(b"opaque backup bytes")
+    await McpCaller.create(
+        client_id="workflow-session-test-client",
+        client_type="workflow_agent",
+        workspace=LogWorkspace.SESSION,
+        allowed_projects=["landingpage"],
+    )
+    await ProjectManifest.filter(project_key="landingpage").update(
+        deployment={
+            "backup_inspection": {
+                "locations": [backup_dir.as_posix()],
+                "filename_patterns": ["landingpage_*.dump"],
+                "max_age_seconds": 86400,
+            }
+        }
+    )
+    codex_token = custom_jwt_token(
+        "codex-agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "codex-agent",
+    )
+    workflow_token = custom_jwt_token(
+        "workflow-session-test-client",
+        [CONTAINER_FILES_READ_SCOPE],
+        "workflow-session-test-client",
+        {"client_type": "workflow_agent"},
+    )
+    non_codex_session_token = custom_jwt_token(
+        "agent",
+        [CONTAINER_FILES_READ_SCOPE],
+        "agent",
+        {"client_type": "agent"},
+    )
+    request = {
+        "jsonrpc": "2.0",
+        "id": "inspect-backups",
+        "method": "tools/call",
+        "params": {
+            "name": "inspect_project_backups",
+            "arguments": {"project_name": "landingpage"},
+        },
+    }
+
+    with override_settings(BACKUP_INSPECTION_ROOTS=[backup_root]):
+        codex_response = await jsonrpc.post(token=codex_token, data=request)
+        workflow_response = await jsonrpc.post(token=workflow_token, data=request)
+        non_codex_response = await jsonrpc.post(token=non_codex_session_token, data=request)
+
+    payload = codex_response.json()["result"]["structuredContent"]
+    assert codex_response.json()["result"]["isError"] is False
+    assert payload == {
+        "action": "inspect_project_backups",
+        "requested_project_name": "landingpage",
+        "project_name": "landingpage",
+        "status": "current",
+        "latest_filename": backup_file.name,
+        "latest_age_seconds": payload["latest_age_seconds"],
+        "latest_size_bytes": len(b"opaque backup bytes"),
+        "backup_count": 1,
+        "scan_complete": True,
+        "integrity_note": (
+            "Integrity was not independently verified; this tool inspects filesystem metadata only."
+        ),
+        "warnings": [],
+    }
+    assert payload["latest_age_seconds"] >= 0
+    assert backup_dir.as_posix() not in str(payload)
+    assert "opaque backup bytes" not in str(payload)
+    assert workflow_response.json()["result"]["isError"] is True
+    assert "Unknown tool" in workflow_response.json()["result"]["content"][0]["text"]
+    assert non_codex_response.json()["result"]["isError"] is True
+    assert "Unknown tool" in non_codex_response.json()["result"]["content"][0]["text"]
 
 
 async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstrap(
@@ -1465,6 +1542,7 @@ async def test_inspect_proxy_activity_api_groups_proxy_status_signals(
     assert payload["searched_source_keys"] == ["nginx", "traefik"]
     assert payload["total_line_count"] == 8
     assert payload["parsed_proxy_line_count"] == 8
+    assert payload["excluded_health_check_count"] == 0
     assert payload["http_status_line_count"] == 6
     assert payload["upstream_error_count"] == 1
     assert payload["truncated"] is False
@@ -1938,7 +2016,7 @@ async def test_project_protected_tools_api_require_bearer_token(
     )
 
     assert response.status_code == 401
-    assert response.json()["error"] == "invalid_token"
+    assert response.content in {b"", b"null"}
 
 
 @pytest.mark.parametrize(("tool_name", "arguments", "scopes"), PROJECT_PROTECTED_TOOL_CALLS)
@@ -4816,7 +4894,7 @@ async def test_api_requires_bearer_token(
     )
 
     assert response.status_code == 401
-    assert response.json()["error"] == "invalid_token"
+    assert response.content in {b"", b"null"}
 
 
 @pytest.mark.parametrize(

@@ -51,6 +51,7 @@ class CollectedSourcePayload(BaseModel):
     line_count: int
     byte_count: int
     output_file: str | None
+    transfer: dict[str, Any] | None = None
     error: str | None
     retry_tips: list[str]
 
@@ -681,6 +682,7 @@ class InspectProxyActivityPayload(BaseModel):
     searched_source_keys: list[str]
     total_line_count: int
     parsed_proxy_line_count: int
+    excluded_health_check_count: int
     http_status_line_count: int
     upstream_error_count: int
     max_groups: int

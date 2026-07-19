@@ -118,6 +118,7 @@ Currently implemented tools:
 - `inspect_containers_health`
 - `inspect_container_detail`
 - `inspect_project_compose_state`
+- `inspect_project_backups` (Codex/session only)
 - `stat_container_path`
 - `read_container_file`
 - `list_container_directory`
@@ -240,9 +241,8 @@ them, such as the new `devops/` project, and be uploaded or updated into the
 MCP database with the manifest commands.
 
 File source targets must be absolute paths as seen by the MCP container. In
-production Compose, host `/var/log` is mounted at `/host/var/log`, and host
-`/etc/nginx/logs` is mounted at `/host/etc/nginx/logs`. Manifest targets are
-literal paths; MCP does not expand dated filename templates.
+production Compose, host `/var/log` is mounted at `/host/var/log`. Manifest
+targets are literal paths; MCP does not expand dated filename templates.
 
 `inspect_project_compose_state` uses manifest docker source targets and current
 Docker runtime labels/metadata only. It can report inferred Compose service
@@ -267,6 +267,11 @@ Characteristics:
 - mounts `/var/run/docker.sock` only into `socket-app`, not into `app`
 - shares `/run/socket-app` between `app` and `socket-app` through the
   `socket-app-run` named volume
+- starts `app` after the `socket-app` service has started; the first
+  Docker-backed tool call handles any short socket startup race
+- does not run a recurring HTTP healthcheck against `app`; release deploys call
+  `/healthz` directly with bounded retries after startup
+- emits socket-app lifecycle and request outcomes as structured JSON Lines
 - binds published service ports to `127.0.0.1` to avoid VPS-wide port exposure
 - uses host port `5437` for local MCP Postgres by default, leaving
   `landingpage`'s local `5436` binding separate
@@ -289,6 +294,11 @@ Characteristics:
 - mounts `/var/run/docker.sock` only into `socket-app`, not into `app`
 - shares `/run/socket-app` between `app` and `socket-app` through the
   `socket-app-run` named volume
+- starts `app` after the `socket-app` service has started; the first
+  Docker-backed tool call handles any short socket startup race
+- does not run a recurring HTTP healthcheck against `app`; release deploys call
+  `/healthz` directly with bounded retries after startup
+- emits socket-app lifecycle and request outcomes as structured JSON Lines
 - binds the MCP HTTP host port to `127.0.0.1`
 - starts with `uv run python -m main`
 

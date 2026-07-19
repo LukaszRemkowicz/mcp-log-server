@@ -181,6 +181,7 @@ class CollectLogsService:
                         else None
                     ),
                     line_count=source.line_count,
+                    transfer=source.transfer,
                     error=source.error,
                     retry_tips=source.retry_tips,
                 )

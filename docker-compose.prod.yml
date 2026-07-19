@@ -21,6 +21,36 @@ services:
       timeout: 5s
       retries: 5
 
+  db-backup:
+    image: prodrigestivill/postgres-backup-local:18@sha256:f70742ebe42b2277689b028d1fd15aa80f77cffa01da163cc9f85a6ff1866e7f
+    restart: unless-stopped
+    user: postgres:postgres
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    networks:
+      - default
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: ${DATABASE_NAME}
+      POSTGRES_USER: ${DATABASE_USER}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+      SCHEDULE: "@weekly"
+      BACKUP_KEEP_DAYS: 30
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 3
+      BACKUP_SUFFIX: ".sql.gz"
+      HEALTHCHECK_PORT: 8080
+    volumes:
+      - /var/backups/mcp-log-server/prod:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+
   app:
     image: prod-mcp-log-server:${TAG:-latest}
     build:
@@ -36,7 +66,7 @@ services:
     environment:
       ENVIRONMENT: prod
       SOCKET_APP_SOCKET_PATH: /run/socket-app/gateway.sock
-      DOCKER_SOCKET_APP_TIMEOUT_SECONDS: 60
+      DOCKER_SOCKET_APP_TIMEOUT_SECONDS: ${DOCKER_SOCKET_APP_TIMEOUT_SECONDS:-300}
       MCP_HOST: 0.0.0.0
       MCP_PORT: ${MCP_PORT:-8001}
       PYTHONPATH: /app/src
@@ -50,36 +80,27 @@ services:
       JWT_AUDIENCE: ${JWT_AUDIENCE}
       SITE_DOMAIN: ${SITE_DOMAIN}
       TLS_CERTIFICATE_SUBDOMAINS: ${TLS_CERTIFICATE_SUBDOMAINS:-admin,stage,mcp}
+      BACKUP_INSPECTION_ROOTS: ${BACKUP_INSPECTION_ROOTS:-/host/var/backups}
       PROJECT_MANIFESTS_PATH: ${PROJECT_MANIFESTS_PATH:-/app/project-manifests}
     volumes:
       - socket-app-run:/run/socket-app
       - /var/log:/host/var/log:ro
-      - /etc/nginx/logs:/host/etc/nginx/logs:ro
       - /etc/cron.d:/host/etc/cron.d:ro
       - /etc/cron.daily:/host/etc/cron.daily:ro
       - /etc/cron.weekly:/host/etc/cron.weekly:ro
       - /var/spool/cron:/host/var/spool/cron:ro
       - /etc/systemd/system:/host/etc/systemd/system:ro
+      - /var/backups/mcp-log-server/prod:/host/var/backups/mcp-log-server/prod:ro
+      - /var/backups/portfolio/prod:/host/var/backups/portfolio/prod:ro
+      - /var/backups/portfolio/pre_release/prod:/host/var/backups/portfolio/pre_release/prod:ro
+      - /var/backups/agent-monitoring/prod:/host/var/backups/agent-monitoring/prod:ro
       - /var/lib/mcp-log-server:/var/lib/mcp-log-server:ro
-      - /var/lib/portfolio:/var/lib/portfolio:ro
       - type: bind
         source: ${PROJECT_MANIFESTS_HOST_PATH}
         target: ${PROJECT_MANIFESTS_PATH:-/app/project-manifests}
         read_only: true
     ports:
       - "127.0.0.1:${MCP_PORT_HOST:-8001}:${MCP_PORT:-8001}"
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-m",
-          "healthcheck",
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 6
-      start_period: 10s
     networks:
       - default
       - traefik_proxy
@@ -103,6 +124,7 @@ services:
     restart: unless-stopped
     environment:
       SOCKET_APP_SOCKET_PATH: /run/socket-app/gateway.sock
+      MAX_LOG_TRANSFER_BYTES: ${MAX_LOG_TRANSFER_BYTES:-268435456}
     volumes:
       - socket-app-run:/run/socket-app
       - /var/run/docker.sock:/var/run/docker.sock
