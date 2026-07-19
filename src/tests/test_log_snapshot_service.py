@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, cast
@@ -512,3 +513,43 @@ def test_grep_snapshot_returns_error_for_unknown_source_key(tmp_path) -> None:
     assert isinstance(result, SnapshotGrepError)
     assert result.error_code == "snapshot_source_key_not_found"
     assert result.message == "Requested log snapshot source_keys were not found: missing"
+
+
+@pytest.mark.anyio
+async def test_collection_transaction_serializes_workflow_and_session_writers(
+    tmp_path: Path,
+) -> None:
+    storage = LogFileStorage(root=tmp_path)
+    workflow_service = LogSnapshotService(storage=storage)
+    session_service = LogSnapshotService(storage=storage)
+    workflow_entered = asyncio.Event()
+    release_workflow = asyncio.Event()
+    order: list[str] = []
+
+    async def workflow_writer() -> None:
+        async with workflow_service.collection_transaction():
+            order.append("workflow-enter")
+            workflow_entered.set()
+            await release_workflow.wait()
+            order.append("workflow-exit")
+
+    async def session_writer() -> None:
+        await workflow_entered.wait()
+        async with session_service.collection_transaction():
+            order.append("session-enter")
+
+    workflow_task = asyncio.create_task(workflow_writer())
+    try:
+        await asyncio.wait_for(workflow_entered.wait(), timeout=0.2)
+    except TimeoutError:
+        await workflow_task
+        raise
+    session_task = asyncio.create_task(session_writer())
+    await asyncio.sleep(0.05)
+    assert order == ["workflow-enter"]
+
+    release_workflow.set()
+    await asyncio.gather(workflow_task, session_task)
+
+    assert order == ["workflow-enter", "workflow-exit", "session-enter"]
+    assert (tmp_path / ".snapshot-collection.lock").is_file()

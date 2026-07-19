@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Literal
 
 from docker.errors import APIError, DockerException
 from requests import exceptions as requests_exceptions
@@ -201,7 +201,9 @@ class SocketOperationRegistry:
 
     Supported operation names:
 
+    - `service_health`
     - `container_logs`
+    - `container_logs_page`
     - `container_health`
     - `container_detail`
     - `container_path_stat`
@@ -235,12 +237,39 @@ class SocketOperationRegistry:
                 not match the fixed operation contract.
         """
 
+        if operation == "service_health":
+            self._reject_params(params)
+            return self.backend.service_health()
         if operation == "container_logs":
             return self.backend.container_logs(
                 container_name=self._required_string(params, "container_name"),
                 since=self._optional_string(params, "since"),
                 until=self._optional_string(params, "until"),
                 tail=self._optional_int(params, "tail"),
+            )
+        if operation == "container_logs_page":
+            transfer_id = self._optional_string(params, "transfer_id")
+            if transfer_id == "":
+                raise ProtocolException("Parameter 'transfer_id' must be a non-empty string.")
+            if transfer_id is not None:
+                unexpected = set(params) - {"transfer_id", "offset", "max_bytes"}
+                if unexpected:
+                    raise ProtocolException(
+                        "A continued log transfer accepts only transfer_id, offset, and max_bytes."
+                    )
+                return self.backend.container_logs_page(
+                    transfer_id=transfer_id,
+                    offset=self._optional_int(params, "offset") or 0,
+                    max_bytes=self._optional_int(params, "max_bytes"),
+                )
+            return self.backend.container_logs_page(
+                container_name=self._required_string(params, "container_name"),
+                stream=self._optional_log_stream(params, "stream"),
+                since=self._optional_string(params, "since"),
+                until=self._optional_string(params, "until"),
+                tail=self._optional_int(params, "tail"),
+                offset=self._optional_int(params, "offset") or 0,
+                max_bytes=self._optional_int(params, "max_bytes"),
             )
         if operation == "container_health":
             return self.backend.container_health(
@@ -319,6 +348,19 @@ class SocketOperationRegistry:
         return value
 
     @staticmethod
+    def _optional_log_stream(
+        params: dict[str, Any], key: str
+    ) -> Literal["stdout", "stderr"] | None:
+        """Return an optional supported Docker log stream label."""
+
+        value = params.get(key)
+        if value is None:
+            return None
+        if not isinstance(value, str) or value not in {"stdout", "stderr"}:
+            raise ProtocolException(f"Parameter '{key}' must be 'stdout' or 'stderr'.")
+        return value
+
+    @staticmethod
     def _required_string_list(params: dict[str, Any], key: str) -> list[str]:
         """Return a required non-empty string list or raise `ProtocolException`."""
 
@@ -336,7 +378,7 @@ class SocketOperationRegistry:
         value = params.get(key)
         if value is None:
             return None
-        if not isinstance(value, int):
+        if isinstance(value, bool) or not isinstance(value, int):
             raise ProtocolException(f"Parameter '{key}' must be an integer.")
         return value
 

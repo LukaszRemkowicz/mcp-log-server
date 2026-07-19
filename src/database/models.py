@@ -408,6 +408,10 @@ class CollectLogsSource(DatabaseModel):
         default=0,
         description="Number of lines persisted for this source.",
     )
+    transfer: fields.Field[dict[str, Any] | None] = fields.JSONField(
+        null=True,
+        description="Optional JSON-safe transfer metadata for this collected source.",
+    )
     error = fields.TextField(
         null=True,
         description="Source-level collection error when status is unavailable.",

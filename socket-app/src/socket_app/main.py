@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from .adapters import DockerSdkAdapter
+from .logging_config import configure_logging
 from .server import DockerSocketServer
 from .services import SocketOperationRegistry
 from .settings import SOCKET_APP_SOCKET_PATH
@@ -13,6 +14,7 @@ from .settings import SOCKET_APP_SOCKET_PATH
 def main() -> None:
     """Start the Unix-socket MCP helper app."""
 
+    configure_logging()
     operation_registry = SocketOperationRegistry(backend=DockerSdkAdapter())
     server = DockerSocketServer(
         socket_path=SOCKET_APP_SOCKET_PATH,

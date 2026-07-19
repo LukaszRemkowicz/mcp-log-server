@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import fcntl
 import shutil
 import subprocess
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -133,6 +137,27 @@ class LogSnapshotService:
             session_id.strip(),
         )
         return snapshot_output_path
+
+    @asynccontextmanager
+    async def collection_transaction(self) -> AsyncIterator[None]:
+        """Serialize every snapshot mutation transaction across processes."""
+
+        lock_path = self.storage.location / ".snapshot-collection.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = lock_path.open("a+b")
+        acquired = False
+        try:
+            while not acquired:
+                try:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                except BlockingIOError:
+                    await asyncio.sleep(0.01)
+            yield
+        finally:
+            if acquired:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            lock_file.close()
 
     async def load_snapshot(
         self,

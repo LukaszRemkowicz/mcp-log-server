@@ -230,8 +230,7 @@ Manifests and logs are intentionally separate:
 - file-backed manifest source targets must be absolute paths, so each source
   declares exactly where its log file lives
 - in production Compose, host `/var/log` is visible inside MCP as
-  `/host/var/log`, and host `/etc/nginx/logs` is visible as
-  `/host/etc/nginx/logs`
+  `/host/var/log`
 - manifest file targets are literal paths; dated filename templates are not
   expanded by MCP
 - production Compose mounts scheduler provenance roots read-only under `/host`:
@@ -239,6 +238,19 @@ Manifests and logs are intentionally separate:
   `/host/var/spool/cron`, and `/host/etc/systemd/system`
 - `SCHEDULER_INSPECTION_ROOTS` controls which container-visible scheduler roots
   `inspect_project_scheduled_jobs` scans
+- production Compose mounts only the three manifest-declared backup directories
+  for MCP, landingpage/portfolio, and agent-monitoring read-only under
+  `/host/var/backups`; the parent host backup tree is not mounted. Landingpage
+  daily and pre-release backup directories are mounted separately.
+- `BACKUP_INSPECTION_ROOTS` controls the outer allowlist for Codex/session-only
+  backup metadata inspection; each project must additionally declare
+  `deployment.backup_inspection.locations`, `filename_patterns`, and
+  `max_age_seconds` in its persisted manifest
+- `inspect_project_backups` scans only direct regular, non-symlink matches,
+  returns no paths or contents, and does not independently verify integrity;
+  `backup_count` is the number of matching entries inspected, while
+  `scan_complete=false` and `status=unavailable` explicitly mark a result
+  truncated by the bounded directory-entry limit
 
 - `MCP_HOST`
   Host address the FastMCP service binds inside the running process.
@@ -292,11 +304,21 @@ Manifests and logs are intentionally separate:
 
 - `DOCKER_SOCKET_APP_TIMEOUT_SECONDS`
   Timeout for one MCP app request waiting for the generic socket app response.
-  Default: `60`
+  Default: `300`
+  This gives 48-hour Docker log windows time to finish preparing their
+  immutable spool while the async MCP event loop remains responsive.
 
   The default is intentionally longer than lightweight Docker metadata reads so
   fixed backend commands such as landingpage media inventory can finish without
   the MCP client closing the Unix socket early.
+
+- `MAX_LOG_TRANSFER_BYTES`
+  Maximum total size of one immutable Docker-log spool created by the socket
+  app. A larger transfer fails explicitly and the partial spool is deleted; the
+  service never silently truncates a paged transfer.
+  Default: `268435456` (256 MiB)
+
+  This total-transfer limit is separate from the 1000000-byte page limit.
 
 Run the service through Docker Compose with Doppler:
 
@@ -325,6 +347,22 @@ The `socket-app-run` named volume is mounted into both containers at
 `/run/socket-app`. The `socket-app` process creates the socket file there; the
 MCP app only connects to it. The socket app accepts a fixed set of read-only
 Docker-backed operations and has no HTTP or TCP port.
+
+Both local and production Compose start the MCP app after the `socket-app`
+service has started. There is no separate `socket-ready` container and no
+recurring Compose healthcheck for the socket bridge. The first Docker-backed
+tool call handles any short socket startup race, while release deploys call
+`/healthz` directly with bounded retries after app startup.
+
+The socket app writes structured JSON Lines to stdout for server lifecycle and
+request completion events. Successful health probes are DEBUG-only to avoid a
+steady INFO flood; other successes are INFO. Failures are ERROR and include
+only stable `error_category` and `error_code` values. Request completion records
+use a fixed recognized `operation` name or a bounded sentinel for unknown input,
+and intentionally omit params, response bodies, exception text, and raw unknown
+operation values.
+The production MCP manifest should declare the Compose `socket-app` service as
+its own `socket_app` Docker log source with `parser_type: json_lines`.
 
 Only the `socket-app` service mounts `/var/run/docker.sock`. On Linux, Compose
 adds the `socket-app` container process to the Docker socket's group through

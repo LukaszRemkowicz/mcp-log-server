@@ -63,7 +63,21 @@ Example error response:
 {"ok":false,"error":{"message":"Unsupported docker socket operation: run_shell"}}
 ```
 
+The process writes JSON Lines lifecycle and request outcome events to stdout.
+Request logs contain only bounded protocol metadata such as the operation name,
+success flag, and duration; request params and response bodies are not logged.
+
 ## Supported Operations
+
+`service_health`
+
+Pings the Docker daemon through the Docker SDK connection used by the socket
+app. This operation remains available for explicit diagnostics, but Compose no
+longer runs a separate startup health gate or recurring socket probe.
+
+Params:
+
+- none
 
 `container_logs`
 
@@ -78,6 +92,16 @@ Optional params:
 - `since`
 - `until`
 - `tail`
+
+`container_logs_page`
+
+Creates one immutable Docker-log spool and returns it as lossless base64 pages.
+Continuation calls use the returned opaque `transfer_id` and exact
+`next_offset`; Docker is queried only while creating the spool. The spool is
+deleted after the final page or after its inactivity TTL. A transfer exceeding
+`MAX_LOG_TRANSFER_BYTES` fails explicitly and its partial spool is deleted.
+The default total-transfer cap is 268435456 bytes (256 MiB); each returned page
+remains capped separately at 1000000 bytes.
 
 `container_health`
 

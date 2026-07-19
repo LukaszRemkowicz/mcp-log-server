@@ -8,6 +8,8 @@ from typing import Literal
 from pydantic import BaseModel, Field, model_validator
 
 _PATH_SCHEME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+MAX_BACKUP_LOCATIONS = 8
+MAX_BACKUP_FILENAME_PATTERNS = 20
 
 
 class SourceCommandRun(BaseModel):
@@ -101,12 +103,55 @@ class SourceDefinition(BaseModel):
         return self
 
 
+class ProjectBackupInspectionMetadata(BaseModel):
+    """Manifest-bounded project backup metadata inspection inputs."""
+
+    locations: list[str] = Field(min_length=1, max_length=MAX_BACKUP_LOCATIONS)
+    filename_patterns: list[str] = Field(
+        min_length=1,
+        max_length=MAX_BACKUP_FILENAME_PATTERNS,
+    )
+    max_age_seconds: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_backup_inspection_shape(self) -> ProjectBackupInspectionMetadata:
+        """Require absolute directories and basename-only filename patterns."""
+
+        for location in self.locations:
+            normalized_location = location.replace("\\", "/")
+            path_parts = normalized_location.split("/")[1:]
+            invalid_location = (
+                not normalized_location
+                or not normalized_location.startswith("/")
+                or normalized_location.startswith("//")
+                or normalized_location.startswith("~")
+                or _PATH_SCHEME_PATTERN.match(normalized_location) is not None
+                or any(ord(character) < 32 for character in normalized_location)
+                or any(part in {"", ".", ".."} for part in path_parts)
+            )
+            if invalid_location:
+                raise ValueError("backup inspection locations must be clean absolute paths.")
+
+        for pattern in self.filename_patterns:
+            invalid_pattern = (
+                not pattern
+                or pattern in {".", ".."}
+                or "/" in pattern
+                or "\\" in pattern
+                or any(ord(character) < 32 for character in pattern)
+            )
+            if invalid_pattern:
+                raise ValueError("backup inspection patterns must match basenames only.")
+        return self
+
+
 class ProjectDeploymentMetadata(BaseModel):
     """Optional project-level deployment provenance inputs."""
 
     compose_files: list[str] = Field(default_factory=list)
     current_tag_path: str | None = None
     expected_image_repositories: dict[str, str] = Field(default_factory=dict)
+    backup_inspection: ProjectBackupInspectionMetadata | None = None
 
     @model_validator(mode="after")
     def validate_path_shapes(self) -> ProjectDeploymentMetadata:

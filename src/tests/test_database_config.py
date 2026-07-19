@@ -494,6 +494,7 @@ def test_database_models_are_importable_from_dedicated_module() -> None:
         "status",
         "file",
         "line_count",
+        "transfer",
         "error",
         "retry_tips",
     }

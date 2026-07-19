@@ -22,6 +22,7 @@ def register_mcp_components() -> None:
 
     import resources.workflow  # noqa: F401
     import tools.analysis  # noqa: F401
+    import tools.backups  # noqa: F401
     import tools.collection  # noqa: F401
     import tools.container_inspection  # noqa: F401
     import tools.crowdsec  # noqa: F401

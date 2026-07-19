@@ -40,7 +40,7 @@ SOCKET_APP_SOCKET_PATH = Path(
 )
 DOCKER_SOCKET_APP_TIMEOUT_SECONDS = env.int(
     "DOCKER_SOCKET_APP_TIMEOUT_SECONDS",
-    default=60,
+    default=300,
 )
 SITE_DOMAIN = env.str("SITE_DOMAIN", default="localhost").strip()
 TLS_CERTIFICATE_SUBDOMAINS = env.list(
@@ -60,6 +60,13 @@ SCHEDULER_INSPECTION_ROOTS = [
             "/host/var/spool/cron",
             "/host/etc/systemd/system",
         ],
+    )
+]
+BACKUP_INSPECTION_ROOTS = [
+    Path(path)
+    for path in env.list(
+        "BACKUP_INSPECTION_ROOTS",
+        default=["/host/var/backups"],
     )
 ]
 MCP_PATH = "/mcp"

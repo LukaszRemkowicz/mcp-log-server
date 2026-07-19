@@ -168,6 +168,16 @@ def async_(func: AsyncCallable[P, T]) -> Callable[P, T]:  # noqa: UP047
     return wrapper
 
 
+def run_in_thread(func: Callable[P, T]) -> AsyncCallable[P, T]:  # noqa: UP047
+    """Run one synchronous function in the default asyncio thread pool."""
+
+    @wraps(func)
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        return await asyncio.to_thread(func, *args, **kwargs)
+
+    return wrapper
+
+
 def db(func: AsyncCallable[P, T]) -> AsyncCallable[P, T]:  # noqa: UP047
     """Wrap an async command with database startup and shutdown."""
 

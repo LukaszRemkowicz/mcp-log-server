@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import binascii
 import json
 import re
 import shutil
@@ -56,6 +59,7 @@ _ISO_PREFIX_TIMESTAMP_PATTERN = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)"
 )
 DockerTimeFilter = datetime | int | None
+_DOCKER_LOG_PAGE_MAX_BYTES = 1_000_000
 
 
 class DockerSocketClientProtocol(Protocol):
@@ -115,6 +119,7 @@ class SourceCollectionResult(BaseModel):
     output_file: str | None = None
     line_count: int = 0
     byte_count: int = 0
+    transfer: dict[str, object] | None = None
     error: str | None = None
     retry_tips: list[str]
 
@@ -131,6 +136,7 @@ class SourceCollectionResult(BaseModel):
         output_file: Path,
         line_count: int,
         byte_count: int,
+        transfer: dict[str, object] | None = None,
     ) -> SourceCollectionResult:
         """Build the internal success result for one collected source."""
 
@@ -147,6 +153,7 @@ class SourceCollectionResult(BaseModel):
             output_file=str(output_file),
             line_count=line_count,
             byte_count=byte_count,
+            transfer=transfer,
             error=None,
             retry_tips=[],
         )
@@ -174,6 +181,7 @@ class SourceCollectionResult(BaseModel):
             output_file=None,
             line_count=0,
             byte_count=0,
+            transfer=None,
             error=error,
             retry_tips=retry_tips,
         )
@@ -261,7 +269,6 @@ class LogCollectionService:
 
         try:
             time_filters = self.validate_and_normalize_time_filters(
-                sources=sources,
                 since=since,
                 until=until,
             )
@@ -272,29 +279,30 @@ class LogCollectionService:
         if isinstance(agent_session, BuildLogsError):
             return agent_session
 
-        if workspace == LogWorkspace.SESSION:
-            return await self.build_session_logs(
-                manifest=manifest,
-                sources=sources,
-                missing_source_keys=missing_source_keys,
-                source_keys=source_keys,
-                since=since,
-                until=until,
-                time_filters=time_filters,
-                agent_session=agent_session,
-            )
-        if workspace == LogWorkspace.WORKFLOW:
-            return await self.build_workflow_logs(
-                manifest=manifest,
-                sources=sources,
-                missing_source_keys=missing_source_keys,
-                source_keys=source_keys,
-                since=since,
-                until=until,
-                time_filters=time_filters,
-                agent_session=agent_session,
-            )
-        raise RuntimeError(f"Unsupported collect_logs workspace: {workspace}")
+        async with self.snapshot_service.collection_transaction():
+            if workspace == LogWorkspace.SESSION:
+                return await self.build_session_logs(
+                    manifest=manifest,
+                    sources=sources,
+                    missing_source_keys=missing_source_keys,
+                    source_keys=source_keys,
+                    since=since,
+                    until=until,
+                    time_filters=time_filters,
+                    agent_session=agent_session,
+                )
+            if workspace == LogWorkspace.WORKFLOW:
+                return await self.build_workflow_logs(
+                    manifest=manifest,
+                    sources=sources,
+                    missing_source_keys=missing_source_keys,
+                    source_keys=source_keys,
+                    since=since,
+                    until=until,
+                    time_filters=time_filters,
+                    agent_session=agent_session,
+                )
+            raise RuntimeError(f"Unsupported collect_logs workspace: {workspace}")
 
     async def resolve_agent_session(
         self,
@@ -363,7 +371,7 @@ class LogCollectionService:
                     ),
                 ],
             )
-        collected_results = self.collect_sources(
+        collected_results = await self.collect_sources_async(
             sources=sources,
             snapshot_dir=snapshot_dir,
             time_filters=time_filters,
@@ -427,7 +435,7 @@ class LogCollectionService:
             session_id=None,
             snapshot_dir=workflow_collect_logs_obj.snapshot_dir,
         )
-        collected_results = self.collect_sources(
+        collected_results = await self.collect_sources_async(
             sources=sources,
             snapshot_dir=snapshot_dir,
             time_filters=time_filters,
@@ -484,6 +492,31 @@ class LogCollectionService:
             collected_results.append(diagnostics_result)
         return collected_results
 
+    async def collect_sources_async(
+        self,
+        *,
+        sources: list[SourceDefinition],
+        snapshot_dir: Path,
+        time_filters: DockerTimeFilters,
+    ) -> list[SourceCollectionResult]:
+        """Collect in a worker while keeping cancellation inside the snapshot lock."""
+
+        worker_task = asyncio.create_task(
+            asyncio.to_thread(
+                self.collect_sources,
+                sources=sources,
+                snapshot_dir=snapshot_dir,
+                time_filters=time_filters,
+            )
+        )
+        try:
+            return await asyncio.shield(worker_task)
+        except asyncio.CancelledError:
+            # A thread cannot be cancelled. Wait for it before allowing the caller's
+            # collection transaction to release its cross-process snapshot lock.
+            await worker_task
+            raise
+
     @staticmethod
     def _build_collection_diagnostics_result(
         collected_results: list[SourceCollectionResult],
@@ -535,6 +568,7 @@ class LogCollectionService:
             output_file=str(output_file),
             line_count=line_count,
             byte_count=byte_count,
+            transfer=None,
             error=None,
             retry_tips=[],
         )
@@ -676,7 +710,6 @@ class LogCollectionService:
     @staticmethod
     def validate_and_normalize_time_filters(
         *,
-        sources: list[SourceDefinition],
         since: str | None,
         until: str | None,
     ) -> DockerTimeFilters:
@@ -808,6 +841,7 @@ class LogCollectionService:
                 status="unavailable",
                 file=None,
                 line_count=0,
+                transfer=None,
                 error=result.error,
                 retry_tips=result.retry_tips,
             )
@@ -826,6 +860,7 @@ class LogCollectionService:
             status="collected",
             file=file_path,
             line_count=result.line_count,
+            transfer=result.transfer if result.source_type == "docker" else None,
             error=None,
             retry_tips=[],
         )
@@ -1134,8 +1169,9 @@ class LogCollectionService:
         logs_kwargs: dict[str, int | str | datetime] = {}
         if time_filters.since is not None:
             logs_kwargs["since"] = time_filters.since
-        if time_filters.until is not None:
-            logs_kwargs["until"] = time_filters.until
+        # Paging replays the bounded Docker logs query for every offset. Freeze
+        # an upper bound once so a growing live stream cannot shift between pages.
+        logs_kwargs["until"] = time_filters.until or datetime.now(UTC)
 
         stream_target = self._resolve_docker_log_container(definition)
         if isinstance(stream_target, SourceCollectionResult):
@@ -1144,9 +1180,12 @@ class LogCollectionService:
             byte_count = 0
             newline_count = 0
             trailing_byte: bytes = b""
+            page_count = 0
+            final_page: dict[str, object] | None = None
             with output_file.open("wb") as handle:
-                for chunk in self._stream_docker_logs(
+                for chunk, page_metadata in self._stream_docker_log_pages(
                     container_name=stream_target,
+                    stream=definition.stream,
                     logs_kwargs=logs_kwargs,
                 ):
                     handle.write(chunk)
@@ -1154,6 +1193,8 @@ class LogCollectionService:
                     newline_count += chunk.count(b"\n")
                     if chunk:
                         trailing_byte = chunk[-1:]
+                    page_count += 1
+                    final_page = page_metadata
             persisted_output_file = str(output_file)
             if byte_count == 0:
                 line_count = 0
@@ -1176,6 +1217,15 @@ class LogCollectionService:
             output_file=Path(persisted_output_file),
             line_count=line_count,
             byte_count=byte_count,
+            transfer={
+                "operation": "container_logs_page",
+                "encoding": "base64",
+                "page_count": page_count,
+                "returned_bytes": byte_count,
+                "byte_limit": final_page["byte_limit"] if final_page is not None else 0,
+                "truncated": final_page["truncated"] if final_page is not None else False,
+                "next_offset": final_page["next_offset"] if final_page is not None else None,
+            },
         )
 
     def _resolve_docker_log_container(
@@ -1237,27 +1287,105 @@ class LogCollectionService:
         value = compose_labels.get(label)
         return str(value) if value is not None else ""
 
-    def _stream_docker_logs(
+    def _stream_docker_log_pages(
         self,
         *,
         container_name: str,
+        stream: Literal["stdout", "stderr"] | None,
         logs_kwargs: dict[str, int | str | datetime],
     ):
-        """Yield encoded Docker log lines from the socket app."""
+        """Yield validated, lossless byte pages from the socket app."""
 
-        params: dict[str, object] = {"container_name": container_name}
+        params: dict[str, object] = {
+            "container_name": container_name,
+            "stream": stream,
+        }
         for key in ("since", "until", "tail"):
             value = logs_kwargs.get(key)
             if isinstance(value, datetime):
                 params[key] = value.isoformat()
             elif isinstance(value, (int, str)):
                 params[key] = value
-        payload = self.docker_socket_client.request("container_logs", params)
-        logs = payload.get("logs", [])
-        if not isinstance(logs, list):
-            raise DockerSocketGatewayError(message="Socket app returned invalid logs.")
-        for line in logs:
-            yield f"{line}\n".encode()
+        offset = 0
+        transfer_id: str | None = None
+        while True:
+            if transfer_id is None:
+                page_params = {
+                    **params,
+                    "offset": offset,
+                    "max_bytes": _DOCKER_LOG_PAGE_MAX_BYTES,
+                }
+            else:
+                page_params = {
+                    "transfer_id": transfer_id,
+                    "offset": offset,
+                    "max_bytes": _DOCKER_LOG_PAGE_MAX_BYTES,
+                }
+            payload = self.docker_socket_client.request("container_logs_page", page_params)
+            page = self._validated_docker_log_page(payload, expected_offset=offset)
+            yield page["content"], page
+            if not page["truncated"]:
+                return
+            next_offset = page["next_offset"]
+            next_transfer_id = page["transfer_id"]
+            assert isinstance(next_offset, int)
+            assert isinstance(next_transfer_id, str)
+            transfer_id = next_transfer_id
+            offset = next_offset
+
+    @staticmethod
+    def _validated_docker_log_page(
+        payload: dict[str, Any],
+        *,
+        expected_offset: int,
+    ) -> dict[str, object]:
+        """Validate one page contract and decode its exact base64 bytes."""
+
+        encoded = payload.get("logs_base64")
+        try:
+            content = base64.b64decode(encoded, validate=True) if isinstance(encoded, str) else None
+        except (binascii.Error, ValueError) as error:
+            raise DockerSocketGatewayError(
+                message="Socket app returned invalid base64 docker log bytes."
+            ) from error
+        returned_bytes = payload.get("returned_bytes")
+        byte_limit = payload.get("byte_limit")
+        truncated = payload.get("truncated")
+        next_offset = payload.get("next_offset")
+        transfer_id = payload.get("transfer_id")
+        if (
+            content is None
+            or payload.get("offset") != expected_offset
+            or not isinstance(returned_bytes, int)
+            or isinstance(returned_bytes, bool)
+            or returned_bytes != len(content)
+            or not isinstance(byte_limit, int)
+            or isinstance(byte_limit, bool)
+            or byte_limit < 1
+            or not isinstance(truncated, bool)
+        ):
+            raise DockerSocketGatewayError(message="Socket app returned invalid docker log page.")
+        expected_next_offset = expected_offset + returned_bytes
+        if truncated:
+            if (
+                next_offset != expected_next_offset
+                or returned_bytes == 0
+                or not isinstance(transfer_id, str)
+                or not transfer_id
+            ):
+                raise DockerSocketGatewayError(
+                    message="Socket app returned a non-progressing docker log page."
+                )
+        elif next_offset is not None or transfer_id is not None:
+            raise DockerSocketGatewayError(message="Socket app returned invalid final log page.")
+        return {
+            "content": content,
+            "returned_bytes": returned_bytes,
+            "byte_limit": byte_limit,
+            "truncated": truncated,
+            "next_offset": next_offset,
+            "transfer_id": transfer_id,
+        }
 
     @staticmethod
     def _inventory_created_at(container: dict[str, Any]) -> datetime:
@@ -1330,6 +1458,7 @@ class LogCollectionService:
             "line_count",
             "byte_count",
             "output_file",
+            "transfer",
             "error",
             "retry_tips",
         }

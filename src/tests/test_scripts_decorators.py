@@ -6,7 +6,7 @@ import inspect
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from decorators import async_, db
+from decorators import async_, db, run_in_thread
 
 
 def test_async_runs_coroutine_and_preserves_signature() -> None:
@@ -17,6 +17,26 @@ def test_async_runs_coroutine_and_preserves_signature() -> None:
 
     assert wrapped("landingpage", all_projects=True) == "landingpage:True"
     assert inspect.signature(wrapped) == inspect.signature(command)
+
+
+def test_run_in_thread_offloads_sync_function_and_preserves_signature(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    async def fake_to_thread(function, *args, **kwargs):
+        calls.append(("to_thread", function))
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr("decorators.asyncio.to_thread", fake_to_thread)
+
+    def command(project_name: str, all_projects: bool = False) -> str:
+        calls.append((project_name, all_projects))
+        return f"{project_name}:{all_projects}"
+
+    wrapped = run_in_thread(command)
+
+    assert async_(wrapped)("landingpage", all_projects=True) == "landingpage:True"
+    assert inspect.signature(wrapped) == inspect.signature(command)
+    assert calls == [("to_thread", command), ("landingpage", True)]
 
 
 def test_db_wraps_async_command_with_database_lifespan(monkeypatch) -> None:

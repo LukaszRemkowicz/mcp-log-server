@@ -50,6 +50,21 @@ def _snapshot_dir_from_metadata(metadata: LogSnapshotMetadata) -> str:
     return Path(metadata.files[0].output_file).parent.as_posix()
 
 
+def _successful_health_status(status_code: int | None) -> bool:
+    """Return whether a health request has an explicit successful status."""
+
+    return status_code is not None and 200 <= status_code < 300
+
+
+def is_successful_health_request(
+    request_path: str | None,
+    status_code: int | None,
+) -> bool:
+    """Return whether one known health path has an explicit 2xx status."""
+
+    return request_path in _HEALTH_PATHS and _successful_health_status(status_code)
+
+
 def _successful_static_asset_status(status_code: int | None) -> bool:
     """Return whether MCP can safely treat an asset request as routine noise."""
 
@@ -392,16 +407,14 @@ class LogFilteringService:
         parsed = self._parse_json_line(raw_line)
         request_path = self._extract_request_path(parsed, raw_line)
         status_code = self._extract_status_code(parsed, raw_line)
-        level = self._extract_level(parsed)
-
         if profile_name == "web_noise":
             return self._filter_web_noise(context, request_path, status_code)
         if profile_name == "proxy_noise":
             return self._filter_proxy_noise(context, request_path, status_code)
         if profile_name == "backend_noise":
-            return self._filter_backend_noise(request_path, status_code, level)
+            return self._filter_backend_noise(request_path, status_code)
         if profile_name == "frontend_noise":
-            return self._filter_frontend_noise(context, request_path, status_code, level)
+            return self._filter_frontend_noise(context, request_path, status_code)
         return FilterDecision(keep=True)
 
     @staticmethod
@@ -412,7 +425,7 @@ class LogFilteringService:
     ) -> FilterDecision:
         if request_path is None:
             return FilterDecision(keep=True)
-        if request_path in _HEALTH_PATHS and (status_code is None or status_code < 500):
+        if is_successful_health_request(request_path, status_code):
             return FilterDecision(keep=False, reason="health_check_request")
         if _is_successful_static_asset_request(context, request_path, status_code):
             return FilterDecision(keep=False, reason="successful_static_asset_request")
@@ -426,7 +439,7 @@ class LogFilteringService:
     ) -> FilterDecision:
         if request_path is None:
             return FilterDecision(keep=True)
-        if request_path in _HEALTH_PATHS and (status_code is None or status_code < 500):
+        if is_successful_health_request(request_path, status_code):
             return FilterDecision(keep=False, reason="proxy_health_check_request")
         if request_path.startswith("/.well-known/acme-challenge/") and (
             status_code is None or status_code < 500
@@ -440,12 +453,11 @@ class LogFilteringService:
     def _filter_backend_noise(
         request_path: str | None,
         status_code: int | None,
-        level: str | None,
     ) -> FilterDecision:
-        if request_path in _HEALTH_PATHS and level in {"info", "debug", "trace"}:
-            return FilterDecision(keep=False, reason="application_health_check_log")
-        if request_path in _HEALTH_PATHS and status_code is not None and status_code < 500:
-            return FilterDecision(keep=False, reason="successful_health_request_log")
+        if request_path in _HEALTH_PATHS:
+            if is_successful_health_request(request_path, status_code):
+                return FilterDecision(keep=False, reason="application_health_check_log")
+            return FilterDecision(keep=True)
         return FilterDecision(keep=True)
 
     @staticmethod
@@ -453,10 +465,11 @@ class LogFilteringService:
         context: SourceNoiseContext,
         request_path: str | None,
         status_code: int | None,
-        level: str | None,
     ) -> FilterDecision:
-        if request_path in _HEALTH_PATHS and level in {"info", "debug", "trace"}:
-            return FilterDecision(keep=False, reason="frontend_health_check_log")
+        if request_path in _HEALTH_PATHS:
+            if is_successful_health_request(request_path, status_code):
+                return FilterDecision(keep=False, reason="frontend_health_check_log")
+            return FilterDecision(keep=True)
         if request_path and _is_successful_static_asset_request(
             context,
             request_path,

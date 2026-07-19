@@ -188,13 +188,12 @@ Deploy behavior:
 - applies committed migrations with `uv run migrate` unless `SKIP_MIGRATE=true`
   using the production image's `UV_NO_DEV`, `UV_FROZEN`, and `UV_NO_SYNC`
   settings so the already-built no-dev environment is reused
-- starts the socket app services and MCP app service with `--force-recreate`
-  and `--remove-orphans` so the selected images are rerun and removed Compose
-  services are cleaned up
-- waits for Docker to mark the app service healthy through the unauthenticated
-  `/healthz` liveness endpoint
+- recreates `socket-app` plus the one-shot `socket-ready` UDS/Docker gate,
+  then recreates the MCP app only after that gate exits successfully
+- calls the unauthenticated `/healthz` endpoint directly with bounded curl
+  retries after startup; no recurring Docker app healthcheck is configured
 - records the deployed tag under `/var/lib/mcp-log-server/prod/current_tag`
-  after health passes
+  after HTTP readiness passes
 
 After deploy records `current_tag`, host-side `uv run shell` and
 `uv run command ...` helpers use that tag as the default `TAG` when the caller

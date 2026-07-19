@@ -194,6 +194,7 @@ class CollectLogsSourceCreate(BaseModel):
     status: Literal["collected", "unavailable"]
     file: str | None = None
     line_count: int = 0
+    transfer: dict[str, Any] | None = None
     error: str | None = None
     retry_tips: list[str]
 
@@ -215,6 +216,7 @@ class CollectLogsSourceOut(BaseModel):
     status: Literal["collected", "unavailable"]
     file: FileReference | None = None
     line_count: int
+    transfer: dict[str, Any] | None = None
     error: str | None = None
     retry_tips: list[str]
 

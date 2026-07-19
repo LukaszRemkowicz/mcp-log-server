@@ -884,6 +884,7 @@ async def test_audit_middleware_authorizes_container_file_tools_as_session_tools
         ("inspect_live_crowdsec_activity", {"project_name": "vps-security"}),
         ("list_landingpage_django_commands", {"project_name": "landingpage"}),
         ("inspect_landingpage_media_inventory", {"project_name": "landingpage"}),
+        ("inspect_project_backups", {"project_name": "landingpage"}),
     ],
 )
 async def test_audit_middleware_authorizes_workspace_agnostic_tools_for_session_callers(
