@@ -262,7 +262,6 @@ analysis.
 
 Manifest file source targets must be absolute paths as seen from inside the MCP
 container. In production, `docker-compose.prod.yml` mounts host `/var/log` at
-`/host/var/log` and host `/etc/nginx/logs` at `/host/etc/nginx/logs`. For
-example, host `/var/log/app/app.jsonl` should be written in the manifest as
-`/host/var/log/app/app.jsonl`. Targets are literal paths; dated filename
+`/host/var/log`. For example, host `/var/log/app/app.jsonl` should be written in
+the manifest as `/host/var/log/app/app.jsonl`. Targets are literal paths; dated filename
 templates are not expanded.

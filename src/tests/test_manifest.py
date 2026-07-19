@@ -4,9 +4,17 @@ import pytest
 from pydantic import ValidationError
 
 from manifests.loader import load_manifest
-from manifests.models import Manifest, ProjectDeploymentMetadata, SourceDefinition
+from manifests.models import (
+    Manifest,
+    ProjectBackupInspectionMetadata,
+    ProjectDeploymentMetadata,
+    SourceDefinition,
+)
 from services.project_manifest import ProjectManifestService
 from tests.conftest import TEST_MANIFESTS_DIR
+
+MAX_BACKUP_FILENAME_PATTERNS = 20
+MAX_BACKUP_LOCATIONS = 8
 
 
 def test_manifest_loads_into_valid_source_manifest() -> None:
@@ -145,6 +153,11 @@ def test_manifest_accepts_optional_deployment_metadata(tmp_path: Path) -> None:
             compose_files=["/opt/mcp/docker-compose.prod.yml"],
             current_tag_path=str(tag_file),
             expected_image_repositories={"app": "prod-mcp-log-server"},
+            backup_inspection=ProjectBackupInspectionMetadata(
+                locations=["/host/var/backups/mcp/production"],
+                filename_patterns=["mcp_log_server_prod_*.dump"],
+                max_age_seconds=90000,
+            ),
         ),
         sources=[
             SourceDefinition(
@@ -165,6 +178,54 @@ def test_manifest_accepts_optional_deployment_metadata(tmp_path: Path) -> None:
     assert manifest.deployment.compose_files == ["/opt/mcp/docker-compose.prod.yml"]
     assert manifest.deployment.current_tag_path == str(tag_file)
     assert manifest.deployment.expected_image_repositories == {"app": "prod-mcp-log-server"}
+    assert manifest.deployment.backup_inspection is not None
+    assert manifest.deployment.backup_inspection.filename_patterns == ["mcp_log_server_prod_*.dump"]
+
+
+@pytest.mark.parametrize(
+    ("locations", "patterns"),
+    [
+        (["relative/backups"], ["*.dump"]),
+        (["/host/var/backups/../secrets"], ["*.dump"]),
+        (["/host/var/backups"], ["nested/*.dump"]),
+        (["/host/var/backups"], ["../*.dump"]),
+    ],
+)
+def test_backup_inspection_metadata_rejects_unbounded_locations_or_patterns(
+    locations: list[str],
+    patterns: list[str],
+) -> None:
+    with pytest.raises(ValidationError, match="backup inspection"):
+        ProjectBackupInspectionMetadata(
+            locations=locations,
+            filename_patterns=patterns,
+            max_age_seconds=86400,
+        )
+
+
+@pytest.mark.parametrize(
+    ("locations", "patterns"),
+    [
+        (
+            [f"/host/var/backups/project-{index}" for index in range(MAX_BACKUP_LOCATIONS + 1)],
+            ["*.dump"],
+        ),
+        (
+            ["/host/var/backups/project"],
+            [f"backup-{index}-*.dump" for index in range(MAX_BACKUP_FILENAME_PATTERNS + 1)],
+        ),
+    ],
+)
+def test_backup_inspection_metadata_enforces_location_and_pattern_limits(
+    locations: list[str],
+    patterns: list[str],
+) -> None:
+    with pytest.raises(ValidationError):
+        ProjectBackupInspectionMetadata(
+            locations=locations,
+            filename_patterns=patterns,
+            max_age_seconds=86400,
+        )
 
 
 def test_manifest_loads_absolute_file_source_target(tmp_path: Path) -> None:

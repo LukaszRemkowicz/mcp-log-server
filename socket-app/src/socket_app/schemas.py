@@ -44,6 +44,10 @@ class DockerBackend(ABC):
     """
 
     @abstractmethod
+    def service_health(self) -> dict[str, Any]:
+        """Ping the Docker daemon and return socket-app readiness state."""
+
+    @abstractmethod
     def container_logs(
         self,
         *,
@@ -58,6 +62,21 @@ class DockerBackend(ABC):
         implementation must not follow logs forever and should cap the response
         size so a single request cannot exhaust memory.
         """
+
+    @abstractmethod
+    def container_logs_page(
+        self,
+        *,
+        transfer_id: str | None = None,
+        container_name: str | None = None,
+        stream: Literal["stdout", "stderr"] | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        tail: int | None = None,
+        offset: int = 0,
+        max_bytes: int | None = None,
+    ) -> dict[str, Any]:
+        """Return a bounded, base64-encoded page of exact container log bytes."""
 
     @abstractmethod
     def container_health(self, *, container_name: str) -> dict[str, Any]:

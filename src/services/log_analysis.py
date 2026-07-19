@@ -25,6 +25,7 @@ from typing import Any, Literal, cast
 
 from database.fields import FileReference
 from database.schemas import CollectLogsSourceOut
+from services.log_filtering import is_successful_health_request
 from services.log_snapshots import LogSnapshotService
 from tools.models import (
     GroupedErrorPayload,
@@ -376,6 +377,7 @@ class ProxyActivityAnalysis:
     searched_source_keys: list[str]
     total_line_count: int
     parsed_proxy_line_count: int
+    excluded_health_check_count: int
     http_status_line_count: int
     upstream_error_count: int
     status_class_counts: list[ProxyStatusClassCountPayload]
@@ -690,6 +692,7 @@ class LogAnalysisService:
             searched_source_keys=analysis.searched_source_keys,
             total_line_count=analysis.total_line_count,
             parsed_proxy_line_count=analysis.parsed_proxy_line_count,
+            excluded_health_check_count=analysis.excluded_health_check_count,
             http_status_line_count=analysis.http_status_line_count,
             upstream_error_count=analysis.upstream_error_count,
             max_groups=max_groups,
@@ -718,6 +721,7 @@ class LogAnalysisService:
         status_counts: dict[StatusClass, int] = defaultdict(int)
         total_line_count = 0
         parsed_proxy_line_count = 0
+        excluded_health_check_count = 0
         http_status_line_count = 0
         upstream_error_count = 0
 
@@ -729,6 +733,9 @@ class LogAnalysisService:
                 continue
             parsed_proxy_line_count += 1
             status_code = event.status_code
+            if is_successful_health_request(event.path, status_code):
+                excluded_health_check_count += 1
+                continue
             status_class = event.status_class
             if status_code is None or status_class is None:
                 continue
@@ -764,6 +771,7 @@ class LogAnalysisService:
             searched_source_keys=[item.source_key for item in sources],
             total_line_count=total_line_count,
             parsed_proxy_line_count=parsed_proxy_line_count,
+            excluded_health_check_count=excluded_health_check_count,
             http_status_line_count=http_status_line_count,
             upstream_error_count=upstream_error_count,
             status_class_counts=[

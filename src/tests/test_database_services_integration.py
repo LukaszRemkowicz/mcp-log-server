@@ -21,9 +21,14 @@ from database.schemas import (
     AgentCallCreate,
     AgentCallFilter,
     AgentCallUpdate,
+    CollectLogsSourceCreate,
     ProjectManifestCreate,
 )
 from database.services.agent_calls import AgentCallService
+from database.services.collect_logs import (
+    CollectLogsService,
+    CollectLogsSourceService,
+)
 from database.services.project_manifests import ProjectManifestService
 from database.types import (
     AgentCallEvent,
@@ -194,6 +199,62 @@ async def test_collect_logs_models_round_trip_against_real_postgres() -> None:
     assert fetched_sources[1].error == "Source file was not available."
     assert fetched_sources[1].retry_tips == ["Check the configured source path."]
     assert CollectLogsSource._meta.ordering[0][0] == "id"
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("db")
+async def test_collect_logs_transfer_metadata_survives_database_round_trip() -> None:
+    transfer = {
+        "operation": "container_logs_page",
+        "encoding": "base64",
+        "page_count": 4,
+        "returned_bytes": 21,
+        "byte_limit": 6,
+        "truncated": False,
+        "next_offset": None,
+    }
+    caller = await McpCallerFactory.save_to_db()
+    agent_session = await AgentSessionFactory.save_to_db(caller=caller)
+    collect_logs = await CollectLogsFactory.save_to_db(
+        session=agent_session,
+        requested_source_keys=["backend", "nginx"],
+        resolved_source_keys=[],
+    )
+    collect_logs_service = CollectLogsService()
+    source_service = CollectLogsSourceService()
+    collect_logs_out = await collect_logs_service.get(collect_logs.id)
+
+    await source_service.create_many(
+        collect_logs_out,
+        [
+            CollectLogsSourceCreate(
+                source_key="backend",
+                source_type="docker",
+                target="integration-backend",
+                description="Backend integration logs.",
+                stream="stdout",
+                status="collected",
+                transfer=transfer,
+                retry_tips=[],
+            ),
+            CollectLogsSourceCreate(
+                source_key="nginx",
+                source_type="file",
+                target="/var/log/nginx/access.log",
+                description="Nginx access logs.",
+                status="unavailable",
+                transfer=None,
+                error="Source file was not available.",
+                retry_tips=["Check the configured source path."],
+            ),
+        ],
+    )
+
+    fetched = await collect_logs_service.get_with_sources(collect_logs.id)
+    public_payload = LogCollectionService._build_project_payload(fetched)
+
+    assert [source.transfer for source in fetched.sources] == [transfer, None]
+    assert [source.transfer for source in public_payload.sources] == [transfer, None]
 
 
 @pytest.mark.anyio

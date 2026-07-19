@@ -132,6 +132,30 @@ def test_group_errors_keeps_structured_json_error_level_failures(tmp_path: Path)
     assert analysis.groups[0].message_summary == "Database connection failed"
 
 
+def test_group_errors_keeps_structured_socket_app_failures(tmp_path: Path) -> None:
+    """Socket gateway ERROR events remain visible to deterministic grouping."""
+
+    log_file = tmp_path / "socket-app.jsonl"
+    log_file.write_text(
+        '{"level":"ERROR","event":"socket_request_completed",'
+        '"operation":"service_health","ok":false,'
+        '"error_category":"docker_backend",'
+        '"error_code":"docker_backend_error"}\n',
+        encoding="utf-8",
+    )
+
+    analysis = LogAnalysisService().group_snapshot_errors(
+        sources=[_proxy_source(log_file, source_key="socket_app")],
+        requested_source_keys=None,
+        max_groups=5,
+    )
+
+    assert analysis.matching_line_count == 1
+    assert analysis.groups[0].category == "application_error"
+    assert analysis.groups[0].severity == "high"
+    assert "docker_backend_error" in analysis.groups[0].first_seen.line
+
+
 def test_proxy_activity_keeps_late_repeated_upstream_route_when_groups_are_bounded(
     tmp_path: Path,
 ) -> None:
@@ -329,3 +353,49 @@ def test_proxy_activity_maps_traefik_downstream_status_fields(tmp_path: Path) ->
     assert analysis.top_routes[0].host == "lukaszremkowicz.com"
     assert analysis.top_routes[0].status_code == 502
     assert analysis.top_routes[0].is_upstream_error is True
+
+
+def test_proxy_activity_excludes_only_successful_health_requests_from_derived_metrics(
+    tmp_path: Path,
+) -> None:
+    log_file = tmp_path / "nginx-health.jsonl"
+    raw_snapshot = (
+        "\n".join(
+            [
+                '{"status": 200, "request": "GET /healthz HTTP/1.1"}',
+                '{"status": 204, "request": "GET /ready HTTP/1.1"}',
+                '{"status": 404, "request": "GET /healthz HTTP/1.1"}',
+                '{"status": 503, "request": "GET /healthz HTTP/1.1"}',
+                '{"request": "GET /healthz HTTP/1.1"}',
+                '{"status": 200, "request": "GET /api HTTP/1.1"}',
+            ]
+        )
+        + "\n"
+    )
+    log_file.write_text(raw_snapshot, encoding="utf-8")
+
+    payload = LogAnalysisService().inspect_proxy_activity(
+        _metadata(log_file),
+        sources=[_proxy_source(log_file)],
+        requested_source_keys=None,
+        max_groups=10,
+        requested_project_name="landingpage",
+        project_name="landingpage",
+    )
+
+    assert log_file.read_text(encoding="utf-8") == raw_snapshot
+    assert payload.total_line_count == 6
+    assert payload.parsed_proxy_line_count == 6
+    assert payload.excluded_health_check_count == 2
+    assert payload.http_status_line_count == 3
+    assert payload.upstream_error_count == 1
+    assert {(item.status_class, item.count) for item in payload.status_class_counts} == {
+        ("2xx", 1),
+        ("4xx", 1),
+        ("5xx", 1),
+    }
+    assert {(item.path, item.status_code) for item in payload.top_routes} == {
+        ("/api", 200),
+        ("/healthz", 404),
+        ("/healthz", 503),
+    }

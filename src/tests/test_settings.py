@@ -22,7 +22,7 @@ def test_settings_expose_uppercase_fields() -> None:
         runtime_settings.SOCKET_APP_SOCKET_PATH.as_posix()
         == settings_module.SOCKET_APP_SOCKET_PATH.as_posix()
     )
-    assert runtime_settings.DOCKER_SOCKET_APP_TIMEOUT_SECONDS == 60
+    assert runtime_settings.DOCKER_SOCKET_APP_TIMEOUT_SECONDS == 300
     assert runtime_settings.JWT_JWKS_URI == ""
     assert runtime_settings.SITE_DOMAIN == settings_module.SITE_DOMAIN
     assert runtime_settings.TLS_CERTIFICATE_SUBDOMAINS == ["admin", "stage", "mcp"]

@@ -4,10 +4,13 @@ import asyncio
 import json
 import os
 import re
+import threading
+import time
+from base64 import b64encode
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 from fastmcp.server.auth import AccessToken
@@ -19,8 +22,10 @@ from exceptions import DockerSocketGatewayError, InvalidTimeFilterError
 from manifests.loader import list_project_manifests, load_project_manifest
 from manifests.models import SourceDefinition
 from services.log_collection import DockerTimeFilters, LogCollectionService, SourceCollectionResult
+from services.log_snapshots import LogSnapshotService
 from services.project_authorization import ProjectAuthorizationError, ProjectAuthorizationService
 from services.project_manifest import ProjectManifestService
+from storage import LogFileStorage
 from tests.conftest import (
     TEST_FILE_SOURCE_ROOT,
     TEST_MANIFESTS_DIR,
@@ -37,11 +42,15 @@ SECOND_SESSION_ID = "quiet-field-opens-b1c2"
 
 
 class FakeDockerSocketClient:
-    def __init__(self) -> None:
+    def __init__(self, *, paged_logs: bytes | None = None, page_size: int = 7) -> None:
         self.resolved_by_name: dict[str, datetime | None] = {}
         self.inventory_containers: list[dict[str, object]] = []
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.stream_calls: list[tuple[str, dict[str, int | str | datetime]]] = []
+        self.page_calls: list[dict[str, object]] = []
+        self.paged_logs = paged_logs
+        self.page_size = page_size
+        self.page_container_name: str | None = None
         self.stream_exception: DockerSocketGatewayError | None = None
         self.resolve_exception: DockerSocketGatewayError | None = None
 
@@ -84,6 +93,8 @@ class FakeDockerSocketClient:
                 )
             return {"containers": containers}
         if operation == "container_logs":
+            if self.paged_logs is not None:
+                raise AssertionError("Paged log collection must use container_logs_page.")
             if self.stream_exception is not None:
                 raise self.stream_exception
             container_name = str(params["container_name"])
@@ -94,6 +105,45 @@ class FakeDockerSocketClient:
             }
             self.stream_calls.append((container_name, logs_kwargs))
             return {"logs": ["log line 1", "log line 2"]}
+        if operation == "container_logs_page":
+            if self.stream_exception is not None:
+                raise self.stream_exception
+            self.page_calls.append(dict(params))
+            raw_offset = params.get("offset", 0)
+            raw_max_bytes = params["max_bytes"]
+            assert isinstance(raw_offset, int)
+            assert isinstance(raw_max_bytes, int)
+            offset = raw_offset
+            requested_max_bytes = raw_max_bytes
+            byte_limit = min(requested_max_bytes, self.page_size)
+            logs = self.paged_logs or b"log line 1\nlog line 2\n"
+            page = logs[offset : offset + byte_limit]
+            next_offset = offset + len(page)
+            truncated = next_offset < len(logs)
+            if offset == 0:
+                container_name = str(params["container_name"])
+                self.page_container_name = container_name
+                logs_kwargs = {
+                    key: value
+                    for key, value in params.items()
+                    if key in {"since", "until", "tail"} and isinstance(value, (int, str, datetime))
+                }
+                if "since" not in logs_kwargs:
+                    logs_kwargs.pop("until", None)
+                self.stream_calls.append((container_name, logs_kwargs))
+            else:
+                assert params["transfer_id"] == "fake-transfer"
+                assert set(params) == {"transfer_id", "offset", "max_bytes"}
+            return {
+                "transfer_id": "fake-transfer" if truncated else None,
+                "container_name": self.page_container_name,
+                "logs_base64": b64encode(page).decode("ascii"),
+                "offset": offset,
+                "returned_bytes": len(page),
+                "byte_limit": byte_limit,
+                "truncated": truncated,
+                "next_offset": next_offset if truncated else None,
+            }
         raise AssertionError(f"Unexpected docker socket operation: {operation}")
 
 
@@ -170,7 +220,6 @@ def collect_source(
         definition,
         output_file=output_file,
         time_filters=service.validate_and_normalize_time_filters(
-            sources=[definition],
             since=since,
             until=until,
         ),
@@ -733,7 +782,6 @@ def test_collect_source_sends_socket_log_filters(
         definition,
         output_file=tmp_path / "backend-filters.log",
         time_filters=LogCollectionService.validate_and_normalize_time_filters(
-            sources=[definition],
             since="30m",
             until="10m",
         ),
@@ -796,6 +844,206 @@ def test_collect_source_streams_persisted_docker_logs_without_following(
     assert output_file.read_text(encoding="utf-8") == "log line 1\nlog line 2\n"
     assert len(gateway.stream_calls) == 1
     assert gateway.stream_calls[0][0] == "backend-container"
+
+
+def test_collect_source_reassembles_lossless_paged_docker_log_transfer(
+    tmp_path: Path,
+) -> None:
+    raw_logs = b"A" * 999_999 + b"\xff\r\nsecond\x00\nthird\n"
+    definition = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
+        description="Backend logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="backend",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream="stdout",
+    )
+    gateway = FakeDockerSocketClient(paged_logs=raw_logs, page_size=1_000_000)
+    gateway.add_compose_container("backend-container")
+    output_file = tmp_path / "backend-paged.log"
+
+    result = LogCollectionService(docker_socket_client=gateway).collect_source(
+        definition,
+        output_file=output_file,
+        time_filters=DockerTimeFilters(since=None, until=None),
+    )
+
+    assert output_file.read_bytes() == raw_logs
+    assert result.byte_count == len(raw_logs)
+    assert result.line_count == 3
+    assert result["transfer"] == {
+        "operation": "container_logs_page",
+        "encoding": "base64",
+        "page_count": 2,
+        "returned_bytes": len(raw_logs),
+        "byte_limit": 1_000_000,
+        "truncated": False,
+        "next_offset": None,
+    }
+    assert len(raw_logs) > 1_000_000
+    assert [call["offset"] for call in gateway.page_calls] == [0, 1_000_000]
+    assert all(call["max_bytes"] == 1_000_000 for call in gateway.page_calls)
+    first_page_call, continuation_call = gateway.page_calls
+    assert first_page_call["until"] is not None
+    assert first_page_call["container_name"] == "backend-container"
+    assert first_page_call["stream"] == "stdout"
+    assert continuation_call == {
+        "transfer_id": "fake-transfer",
+        "offset": 1_000_000,
+        "max_bytes": 1_000_000,
+    }
+
+
+@pytest.mark.parametrize("stream", ["stdout", "stderr", None])
+def test_collect_source_binds_manifest_stream_only_when_creating_log_transfer(
+    tmp_path: Path,
+    stream: Literal["stdout", "stderr"] | None,
+) -> None:
+    definition = SourceDefinition(
+        source_key="backend",
+        source_type="docker",
+        target="backend-container",
+        compose_project="portfolio",
+        compose_service="be",
+        description="Backend logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="backend",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream=stream,
+    )
+    gateway = FakeDockerSocketClient(paged_logs=b"first\nsecond\nthird\n", page_size=6)
+    gateway.add_compose_container("backend-container")
+
+    LogCollectionService(docker_socket_client=gateway).collect_source(
+        definition,
+        output_file=tmp_path / "backend.log",
+        time_filters=DockerTimeFilters(since=None, until=None),
+    )
+
+    assert len(gateway.page_calls) > 1
+    assert gateway.page_calls[0]["stream"] == stream
+    assert all(
+        set(call) == {"transfer_id", "offset", "max_bytes"} for call in gateway.page_calls[1:]
+    )
+
+
+@pytest.mark.anyio
+async def test_collect_sources_async_keeps_concurrent_status_polling_responsive(
+    tmp_path: Path,
+) -> None:
+    source_file = tmp_path / "source.log"
+    source_file.write_bytes(b"ready\n")
+    definition = SourceDefinition(
+        source_key="app_file",
+        source_type="file",
+        target=str(source_file),
+        description="Application file logs.",
+        required=True,
+        parser_type="plain_text",
+        normalization_profile="app",
+        retention_class="short",
+        default_noise_profile="noise",
+        stream=None,
+    )
+    snapshot_dir = tmp_path / "snapshot"
+    snapshot_dir.mkdir()
+    service = LogCollectionService()
+    collection_finished = False
+    status_poll_count = 0
+
+    def blocking_collect_source(
+        source: SourceDefinition,
+        output_file: Path,
+        time_filters: DockerTimeFilters,
+    ) -> SourceCollectionResult:
+        nonlocal collection_finished
+        _ = time_filters
+        time.sleep(0.1)
+        output_file.write_bytes(b"ready\n")
+        collection_finished = True
+        return SourceCollectionResult.collected(
+            source,
+            output_file=output_file,
+            line_count=1,
+            byte_count=6,
+        )
+
+    service.collect_source = blocking_collect_source  # type: ignore[assignment]
+
+    async def poll_status_while_collection_runs() -> None:
+        nonlocal status_poll_count
+        while not collection_finished:
+            status_poll_count += 1
+            await asyncio.sleep(0.01)
+
+    async def collect() -> list[SourceCollectionResult]:
+        return await service.collect_sources_async(
+            sources=[definition],
+            snapshot_dir=snapshot_dir,
+            time_filters=DockerTimeFilters(since=None, until=None),
+        )
+
+    results, _ = await asyncio.gather(collect(), poll_status_while_collection_runs())
+
+    assert status_poll_count >= 3
+    assert results[0].status == "collected"
+    assert (snapshot_dir / "app_file.log").read_bytes() == b"ready\n"
+
+
+@pytest.mark.anyio
+async def test_collect_sources_async_defers_cancellation_until_worker_stops(
+    tmp_path: Path,
+) -> None:
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    service = LogCollectionService()
+    storage = LogFileStorage(root=tmp_path)
+    collection_snapshots = LogSnapshotService(storage=storage)
+    competing_snapshots = LogSnapshotService(storage=storage)
+
+    def blocking_collect_sources(**_: object) -> list[SourceCollectionResult]:
+        worker_started.set()
+        assert release_worker.wait(timeout=1)
+        return []
+
+    service.collect_sources = blocking_collect_sources  # type: ignore[method-assign]
+
+    async def collect_under_lock() -> list[SourceCollectionResult]:
+        async with collection_snapshots.collection_transaction():
+            return await service.collect_sources_async(
+                sources=[],
+                snapshot_dir=tmp_path,
+                time_filters=DockerTimeFilters(since=None, until=None),
+            )
+
+    competing_lock_entered = asyncio.Event()
+
+    async def enter_competing_lock() -> None:
+        async with competing_snapshots.collection_transaction():
+            competing_lock_entered.set()
+
+    collection_task = asyncio.create_task(collect_under_lock())
+    assert await asyncio.to_thread(worker_started.wait, 0.2)
+
+    collection_task.cancel()
+    competing_task = asyncio.create_task(enter_competing_lock())
+    await asyncio.sleep(0.02)
+
+    assert not collection_task.done()
+    assert not competing_lock_entered.is_set()
+    release_worker.set()
+    with pytest.raises(asyncio.CancelledError):
+        await collection_task
+    await asyncio.wait_for(competing_task, timeout=0.2)
+    assert competing_lock_entered.is_set()
 
 
 def test_collect_source_uses_injected_docker_socket_client_for_compose_selector(

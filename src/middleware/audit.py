@@ -25,14 +25,20 @@ from typing import Any, cast
 from uuid import UUID
 
 import mcp.types as mt
-from fastmcp.exceptions import AuthorizationError, NotFoundError
+from fastmcp.exceptions import (
+    AuthorizationError,
+    NotFoundError,
+)
+from fastmcp.exceptions import (
+    ValidationError as FastMCPValidationError,
+)
 from fastmcp.resources.base import Resource, ResourceResult
 from fastmcp.resources.template import ResourceTemplate
 from fastmcp.server.auth import AccessToken
 from fastmcp.server.dependencies import get_access_token, get_http_request
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import Tool, ToolResult
-from pydantic import ValidationError
+from pydantic import ValidationError as PydanticValidationError
 from tortoise.exceptions import BaseORMException
 
 from auth.mcp_caller_context import (
@@ -77,6 +83,7 @@ WORKSPACE_AGNOSTIC_TOOLS = frozenset(
         "inspect_containers_health",
         "inspect_live_crowdsec_activity",
         "inspect_landingpage_media_inventory",
+        "inspect_project_backups",
         "inspect_project_compose_state",
         "inspect_project_deployment",
         "inspect_project_scheduled_jobs",
@@ -206,14 +213,20 @@ def _unknown_tool_error(tool_name: str) -> AgentToolErrorResult:
 def _invalid_tool_arguments_error(
     *,
     tool_name: str,
-    error: ValidationError,
+    error: FastMCPValidationError | PydanticValidationError,
 ) -> AgentToolErrorResult:
     """Return an agent-facing error for FastMCP/Pydantic argument validation."""
+
+    pydantic_error: PydanticValidationError | None = None
+    if isinstance(error, PydanticValidationError):
+        pydantic_error = error
+    elif isinstance(error.__cause__, PydanticValidationError):
+        pydantic_error = error.__cause__
 
     invalid_arguments = sorted(
         {
             str(location[0])
-            for item in error.errors()
+            for item in (pydantic_error.errors() if pydantic_error is not None else [])
             if (location := item.get("loc")) and isinstance(location, tuple)
         }
     )
@@ -749,7 +762,7 @@ class AccessAuditMiddleware(Middleware):
             result = await call_next(context)
         except NotFoundError:
             result = _unknown_tool_error(tool_name)
-        except ValidationError as error:
+        except (FastMCPValidationError, PydanticValidationError) as error:
             result = _invalid_tool_arguments_error(tool_name=tool_name, error=error)
         except Exception:
             duration_seconds = round(perf_counter() - started_at, 3)

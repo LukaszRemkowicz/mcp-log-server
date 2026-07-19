@@ -5,14 +5,39 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from pathlib import Path
+from time import perf_counter
 
 from .dispatcher import dispatch_request
-from .exceptions import ProtocolException
+from .exceptions import DockerBackendError, ProtocolException
 from .services import SocketOperationRegistry
+
+logger = logging.getLogger("socket_app.server")
+
+_SUPPORTED_OPERATIONS = frozenset(
+    {
+        "service_health",
+        "container_logs",
+        "container_logs_page",
+        "container_health",
+        "container_detail",
+        "container_path_stat",
+        "container_file_read",
+        "container_directory_list",
+        "vps_containers_inventory",
+        "vps_volumes_inventory",
+        "traefik_router_tls_inventory",
+        "crowdsec_activity",
+        "landingpage_django_list_commands",
+        "landingpage_django_media_inventory",
+    }
+)
+_UNSUPPORTED_OPERATION_LABEL = "unsupported"
+_INVALID_OPERATION_LABEL = "invalid"
 
 
 class DockerSocketServer:
@@ -39,6 +64,10 @@ class DockerSocketServer:
             path=str(self.socket_path),
         )
         os.chmod(self.socket_path, 0o660)
+        logger.info(
+            "socket_server_started",
+            extra={"socket_path": str(self.socket_path)},
+        )
 
     async def stop(self) -> None:
         """Stop listening and remove the socket file."""
@@ -49,6 +78,10 @@ class DockerSocketServer:
             self._server = None
         if self.socket_path.exists():
             self.socket_path.unlink()
+        logger.info(
+            "socket_server_stopped",
+            extra={"socket_path": str(self.socket_path)},
+        )
 
     @contextlib.asynccontextmanager
     async def running(self) -> AsyncIterator[None]:
@@ -78,7 +111,7 @@ class DockerSocketServer:
     ) -> None:
         try:
             while raw_line := await reader.readline():
-                writer.write(self._build_response(raw_line))
+                writer.write(await asyncio.to_thread(self._build_response, raw_line))
                 with suppress(BrokenPipeError, ConnectionResetError):
                     await writer.drain()
         finally:
@@ -87,13 +120,72 @@ class DockerSocketServer:
                 await writer.wait_closed()
 
     def _build_response(self, raw_line: bytes) -> bytes:
+        started_at = perf_counter()
+        operation = _INVALID_OPERATION_LABEL
+        unsupported_operation = False
+        request_error: Exception | None = None
         try:
             decoded = json.loads(raw_line.decode("utf-8"))
             if not isinstance(decoded, dict):
                 raise ProtocolException("Request must be a JSON object.")
+            raw_operation = decoded.get("operation")
+            operation, unsupported_operation = self._operation_log_label(raw_operation)
             response = dispatch_request(decoded, self.operation_registry)
         except (json.JSONDecodeError, ProtocolException) as error:
+            request_error = error
             response = {"ok": False, "error": {"message": str(error)}}
         except Exception as error:  # pragma: no cover - defensive service boundary
+            request_error = error
             response = {"ok": False, "error": {"message": str(error) or "Docker operation failed."}}
+        self._log_request_outcome(
+            operation=operation,
+            unsupported_operation=unsupported_operation,
+            ok=response["ok"],
+            request_error=request_error,
+            duration_ms=round((perf_counter() - started_at) * 1000, 3),
+        )
         return json.dumps(response, separators=(",", ":")).encode("utf-8") + b"\n"
+
+    @staticmethod
+    def _operation_log_label(raw_operation: object) -> tuple[str, bool]:
+        """Return only a fixed recognized operation name or bounded sentinel."""
+
+        if isinstance(raw_operation, str) and raw_operation in _SUPPORTED_OPERATIONS:
+            return raw_operation, False
+        if isinstance(raw_operation, str):
+            return _UNSUPPORTED_OPERATION_LABEL, True
+        return _INVALID_OPERATION_LABEL, False
+
+    @staticmethod
+    def _log_request_outcome(
+        *,
+        operation: str,
+        unsupported_operation: bool,
+        ok: bool,
+        request_error: Exception | None,
+        duration_ms: float,
+    ) -> None:
+        """Log bounded request metadata at a level useful to MCP analysis."""
+
+        operation_label = (
+            operation if operation in _SUPPORTED_OPERATIONS else _UNSUPPORTED_OPERATION_LABEL
+        )
+        if not ok:
+            if isinstance(request_error, json.JSONDecodeError):
+                logger.error("socket_request_failed_invalid_json")
+                return
+            if isinstance(request_error, ProtocolException):
+                if unsupported_operation or operation_label == _UNSUPPORTED_OPERATION_LABEL:
+                    logger.error("socket_request_failed_unsupported_operation")
+                    return
+                logger.error("socket_request_failed_invalid_request")
+                return
+            if isinstance(request_error, DockerBackendError):
+                logger.error("socket_request_failed_docker_backend")
+                return
+            logger.error("socket_request_failed_internal")
+            return
+        if operation_label == "service_health":
+            logger.debug("socket_service_health_completed")
+            return
+        logger.info("socket_request_completed")

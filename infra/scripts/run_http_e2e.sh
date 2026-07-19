@@ -3,9 +3,12 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TMP_ROOT="$(mktemp -d)"
+TMP_ROOT="$(cd "$TMP_ROOT" && pwd -P)"
 FIXTURES_DIR="$TMP_ROOT/fixtures"
 MANIFESTS_DIR="$TMP_ROOT/manifests"
 LOGS_DIR="$TMP_ROOT/logs"
+BACKUPS_ROOT="$TMP_ROOT/backups"
+BACKUPS_DIR="$BACKUPS_ROOT/landingpage"
 SERVER_LOG="$TMP_ROOT/server.log"
 TOKENS_FILE="$TMP_ROOT/dev_jwt_tokens.json"
 MCP_PORT="${MCP_PORT:-${PORT:-18081}}"
@@ -19,6 +22,12 @@ export DATABASE_NAME="${E2E_DATABASE_NAME:-mcp_log_server_test}"
 export DATABASE_USER="${DATABASE_USER:-mcp_log_server}"
 export DATABASE_PASSWORD="${DATABASE_PASSWORD:-mcp-log-server-local-password}"
 export COMMANDS_DISABLE_COMPOSE_BRIDGE=1
+export BACKUP_INSPECTION_ROOTS="$BACKUPS_ROOT"
+export ENVIRONMENT=test
+export JWT_SHARED_SECRET="mcp-http-e2e-test-only-secret"
+export JWT_JWKS_URI=""
+export JWT_ISSUER="mcp-log-server-http-e2e"
+export JWT_AUDIENCE="mcp-log-server-http-e2e"
 
 if [[ "$DATABASE_NAME" != *_test ]]; then
   echo "Refusing to run HTTP E2E against non-test database: $DATABASE_NAME" >&2
@@ -35,7 +44,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$FIXTURES_DIR" "$MANIFESTS_DIR" "$LOGS_DIR"
+mkdir -p "$FIXTURES_DIR" "$MANIFESTS_DIR" "$LOGS_DIR" "$BACKUPS_DIR"
+printf 'temporary HTTP E2E backup fixture\n' > "$BACKUPS_DIR/backup_http_e2e.dump"
 
 cat > "$FIXTURES_DIR/app_first.log" <<'EOF'
 alpha
@@ -53,6 +63,13 @@ cat > "$MANIFESTS_DIR/landingpage.json" <<EOF
 {
   "project_key": "landingpage",
   "project_summary": "Temporary project for HTTP MCP end-to-end checks.",
+  "deployment": {
+    "backup_inspection": {
+      "locations": ["$BACKUPS_DIR"],
+      "filename_patterns": ["backup_*.dump"],
+      "max_age_seconds": 3600
+    }
+  },
   "sources": [
     {
       "source_key": "app_first",
@@ -207,6 +224,13 @@ if ! kill -0 "$SERVER_PID" 2>/dev/null; then
 fi
 
 TOOLS_RESPONSE="$(json_post '{"jsonrpc":"2.0","id":"tools-list","method":"tools/list","params":{}}')"
+CODEX_TOOLS_RESPONSE="$(json_post_with_token "$CODEX_AGENT_JWT" '{"jsonrpc":"2.0","id":"codex-tools-list","method":"tools/list","params":{}}')"
+BACKUP_RESPONSE="$(
+  json_post_with_token "$CODEX_AGENT_JWT" '{"jsonrpc":"2.0","id":"inspect-backups","method":"tools/call","params":{"name":"inspect_project_backups","arguments":{"project_name":"landingpage"}}}'
+)"
+WORKFLOW_BACKUP_RESPONSE="$(
+  json_post '{"jsonrpc":"2.0","id":"workflow-inspect-backups","method":"tools/call","params":{"name":"inspect_project_backups","arguments":{"project_name":"landingpage"}}}'
+)"
 COLLECT_RESPONSE="$(
   json_post '{"jsonrpc":"2.0","id":"collect-workflow","method":"tools/call","params":{"name":"collect_logs","arguments":{"project_names":["landingpage"],"source_keys":["app_first","app_second"]}}}'
 )"
@@ -241,6 +265,34 @@ assert_eq \
   "$(printf '%s' "$TOOLS_RESPONSE" | jq -r '.result.tools | map(.name) | index("create_filtered_view") != null')" \
   "true" \
   "tools/list should expose create_filtered_view"
+assert_eq \
+  "$(printf '%s' "$TOOLS_RESPONSE" | jq -r '.result.tools | map(.name) | index("inspect_project_backups") == null')" \
+  "true" \
+  "workflow tools/list should hide inspect_project_backups"
+assert_eq \
+  "$(printf '%s' "$CODEX_TOOLS_RESPONSE" | jq -r '.result.tools | map(.name) | index("inspect_project_backups") != null')" \
+  "true" \
+  "Codex tools/list should expose inspect_project_backups"
+assert_eq \
+  "$(printf '%s' "$BACKUP_RESPONSE" | jq -r '.result.isError')" \
+  "false" \
+  "inspect_project_backups should succeed for Codex"
+assert_eq \
+  "$(printf '%s' "$BACKUP_RESPONSE" | jq -r '.result.structuredContent.status')" \
+  "current" \
+  "inspect_project_backups should report the temporary backup as current"
+assert_eq \
+  "$(printf '%s' "$BACKUP_RESPONSE" | jq -r '.result.structuredContent.latest_filename')" \
+  "backup_http_e2e.dump" \
+  "inspect_project_backups should return only the temporary backup basename"
+assert_eq \
+  "$(printf '%s' "$BACKUP_RESPONSE" | jq -r '.result.structuredContent.scan_complete')" \
+  "true" \
+  "inspect_project_backups should complete the bounded scan"
+assert_eq \
+  "$(printf '%s' "$WORKFLOW_BACKUP_RESPONSE" | jq -r '.result.isError')" \
+  "true" \
+  "inspect_project_backups should reject workflow-agent calls"
 assert_eq \
   "$(printf '%s' "$COLLECT_RESPONSE" | jq -r '.result.isError')" \
   "false" \
