@@ -167,10 +167,12 @@ class DockerSocketServer:
     ) -> None:
         """Log bounded request metadata at a level useful to MCP analysis."""
 
-        operation_label, derived_unsupported_operation = DockerSocketServer._operation_log_label(
-            operation
+        operation_label = (
+            operation if operation in _SUPPORTED_OPERATIONS else _UNSUPPORTED_OPERATION_LABEL
         )
-        unsupported_operation = unsupported_operation or derived_unsupported_operation
+        unsupported_operation = (
+            unsupported_operation or operation_label == _UNSUPPORTED_OPERATION_LABEL
+        )
         fields: dict[str, object] = {
             "operation": operation_label,
             "ok": ok,
