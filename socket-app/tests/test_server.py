@@ -18,14 +18,14 @@ class RecordingLogger:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, dict[str, object]]] = []
 
-    def debug(self, event: str, *, extra: dict[str, object]) -> None:
-        self.calls.append(("debug", event, extra))
+    def debug(self, event: str, *, extra: dict[str, object] | None = None) -> None:
+        self.calls.append(("debug", event, extra or {}))
 
-    def info(self, event: str, *, extra: dict[str, object]) -> None:
-        self.calls.append(("info", event, extra))
+    def info(self, event: str, *, extra: dict[str, object] | None = None) -> None:
+        self.calls.append(("info", event, extra or {}))
 
-    def error(self, event: str, *, extra: dict[str, object]) -> None:
-        self.calls.append(("error", event, extra))
+    def error(self, event: str, *, extra: dict[str, object] | None = None) -> None:
+        self.calls.append(("error", event, extra or {}))
 
 
 class FakeDockerBackend:
@@ -152,10 +152,7 @@ def test_service_health_success_logs_at_debug(monkeypatch: pytest.MonkeyPatch) -
     response = server._build_response(b'{"operation":"service_health","params":{}}\n')
 
     assert response == b'{"ok":true,"result":{"status":"ok","docker_reachable":true}}\n'
-    assert recording_logger.calls[0][0:2] == ("debug", "socket_request_completed")
-    assert recording_logger.calls[0][2]["operation"] == "service_health"
-    assert recording_logger.calls[0][2]["ok"] is True
-    assert isinstance(recording_logger.calls[0][2]["duration_ms"], float)
+    assert recording_logger.calls[0] == ("debug", "socket_service_health_completed", {})
 
 
 def test_non_health_success_logs_at_info(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -168,8 +165,7 @@ def test_non_health_success_logs_at_info(monkeypatch: pytest.MonkeyPatch) -> Non
 
     server._build_response(b'{"operation":"container_health","params":{"container_name":"app"}}\n')
 
-    assert recording_logger.calls[0][0:2] == ("info", "socket_request_completed")
-    assert recording_logger.calls[0][2]["operation"] == "container_health"
+    assert recording_logger.calls[0] == ("info", "socket_request_completed", {})
 
 
 def test_backend_failure_logs_sanitized_error_fields(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -182,15 +178,7 @@ def test_backend_failure_logs_sanitized_error_fields(monkeypatch: pytest.MonkeyP
 
     server._build_response(b'{"operation":"service_health","params":{}}\n')
 
-    level, event, fields = recording_logger.calls[0]
-    assert (level, event) == ("error", "socket_request_completed")
-    assert fields == {
-        "operation": "service_health",
-        "ok": False,
-        "duration_ms": fields["duration_ms"],
-        "error_category": "docker_backend",
-        "error_code": "docker_backend_error",
-    }
+    assert recording_logger.calls[0] == ("error", "socket_request_failed_docker_backend", {})
     assert "secret" not in repr(recording_logger.calls)
     assert "credentials" not in repr(recording_logger.calls)
 
@@ -210,9 +198,7 @@ def test_log_request_outcome_sanitizes_operation_at_boundary(
         duration_ms=1.0,
     )
 
-    level, _, fields = recording_logger.calls[0]
-    assert level == "info"
-    assert fields["operation"] == "unsupported"
+    assert recording_logger.calls[0] == ("info", "socket_request_completed", {})
     assert secret_operation not in repr(recording_logger.calls)
 
 
@@ -228,9 +214,9 @@ def test_unknown_operation_is_logged_as_fixed_sentinel(monkeypatch: pytest.Monke
 
     server._build_response(raw_request)
 
-    level, _, fields = recording_logger.calls[0]
-    assert level == "error"
-    assert fields["operation"] == "unsupported"
-    assert fields["error_category"] == "protocol"
-    assert fields["error_code"] == "unsupported_operation"
+    assert recording_logger.calls[0] == (
+        "error",
+        "socket_request_failed_unsupported_operation",
+        {},
+    )
     assert secret_operation not in repr(recording_logger.calls)

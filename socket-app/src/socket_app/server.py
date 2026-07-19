@@ -170,46 +170,22 @@ class DockerSocketServer:
         operation_label = (
             operation if operation in _SUPPORTED_OPERATIONS else _UNSUPPORTED_OPERATION_LABEL
         )
-        unsupported_operation = (
-            unsupported_operation or operation_label == _UNSUPPORTED_OPERATION_LABEL
-        )
-        fields: dict[str, object] = {
-            "operation": operation_label,
-            "ok": ok,
-            "duration_ms": duration_ms,
-        }
         if not ok:
-            error_category, error_code = DockerSocketServer._error_log_classification(
-                request_error=request_error,
-                unsupported_operation=unsupported_operation,
-            )
-            fields.update(
-                {
-                    "error_category": error_category,
-                    "error_code": error_code,
-                }
-            )
-            logger.error("socket_request_completed", extra=fields)
+            if isinstance(request_error, json.JSONDecodeError):
+                logger.error("socket_request_failed_invalid_json")
+                return
+            if isinstance(request_error, ProtocolException):
+                if unsupported_operation or operation_label == _UNSUPPORTED_OPERATION_LABEL:
+                    logger.error("socket_request_failed_unsupported_operation")
+                    return
+                logger.error("socket_request_failed_invalid_request")
+                return
+            if isinstance(request_error, DockerBackendError):
+                logger.error("socket_request_failed_docker_backend")
+                return
+            logger.error("socket_request_failed_internal")
             return
         if operation_label == "service_health":
-            logger.debug("socket_request_completed", extra=fields)
+            logger.debug("socket_service_health_completed")
             return
-        logger.info("socket_request_completed", extra=fields)
-
-    @staticmethod
-    def _error_log_classification(
-        *,
-        request_error: Exception | None,
-        unsupported_operation: bool,
-    ) -> tuple[str, str]:
-        """Map request failures to stable categories without logging error text."""
-
-        if isinstance(request_error, json.JSONDecodeError):
-            return "protocol", "invalid_json"
-        if isinstance(request_error, ProtocolException):
-            if unsupported_operation:
-                return "protocol", "unsupported_operation"
-            return "protocol", "invalid_request"
-        if isinstance(request_error, DockerBackendError):
-            return "docker_backend", "docker_backend_error"
-        return "internal", "internal_error"
+        logger.info("socket_request_completed")

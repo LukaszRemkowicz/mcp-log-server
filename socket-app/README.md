@@ -64,8 +64,8 @@ Example error response:
 ```
 
 The process writes JSON Lines lifecycle and request outcome events to stdout.
-Request logs contain only bounded protocol metadata such as the operation name,
-success flag, and duration; request params and response bodies are not logged.
+Request outcome logs use static event names only; request operation strings,
+params, response bodies, and error text are not logged.
 
 ## Supported Operations
 
