@@ -1733,6 +1733,7 @@ async def test_inspect_probe_blocking_activity_api_correlates_probe_events(
     assert payload["suspicious_ip_count"] == 2
     assert payload["suspicious_access_count"] == 3
     assert payload["observed_appsec_ban_ip_count"] == 0
+    assert payload["appsec_bans"] == []
 
     appsec_context = next(
         item for item in payload["suspicious_ips"] if item["ip"] == "198.51.100.20"

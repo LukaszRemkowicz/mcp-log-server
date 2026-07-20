@@ -80,10 +80,11 @@ INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION = (
 INSPECT_PROBE_BLOCKING_ACTIVITY_TOOL_DESCRIPTION = (
     "Inspect collected CrowdSec plus proxy access snapshot sources for historical "
     "AppSec second-probe correlation. Returns the current appsec/second-probe "
-    "policy, suspicious URL access context by IP, and only matching historical "
-    "AppSec ban evidence. Suspicious access entries are investigation context, "
-    "not proven AppSec detections or expected bans. This tool reads snapshot files "
-    "only and does not run live CrowdSec commands."
+    "policy, all confirmed matching historical AppSec ban evidence, and suspicious "
+    "URL access context by IP. Confirmed bans remain visible even without correlated "
+    "access context in the selected snapshot. Suspicious access entries are "
+    "investigation context, not proven AppSec detections or expected bans. This tool "
+    "reads snapshot files only and does not run live CrowdSec commands."
 )
 
 INSPECT_LIVE_CROWDSEC_ACTIVITY_TOOL_DESCRIPTION = (

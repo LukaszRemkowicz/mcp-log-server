@@ -34,6 +34,7 @@ from tools.models import (
     InspectProbeBlockingActivityPayload,
     InspectProxyActivityPayload,
     LogSnapshotMetadata,
+    ProbeBlockingBanPayload,
     ProbeBlockingIpPayload,
     ProbeBlockingPolicyPayload,
     ProxyRouteSignalPayload,
@@ -396,6 +397,16 @@ class ProbeBlockingRecord:
             last_appsec_ban_at=self.last_appsec_ban_at,
         )
 
+    def to_ban_payload(self) -> ProbeBlockingBanPayload:
+        """Convert confirmed AppSec ban evidence into its public payload."""
+
+        return ProbeBlockingBanPayload(
+            ip=self.ip,
+            appsec_ban_count=self.appsec_ban_count,
+            last_appsec_ban_at=self.last_appsec_ban_at,
+            has_suspicious_access_context=self.suspicious_access_count > 0,
+        )
+
 
 class LogAnalysisService:
     """Run deterministic grouped-error analysis over persisted snapshots.
@@ -557,7 +568,7 @@ class LogAnalysisService:
         requested_project_name: str | None,
         project_name: str,
     ) -> InspectProbeBlockingActivityPayload:
-        """Correlate suspicious access context with AppSec second-probe bans."""
+        """Report AppSec second-probe bans and correlated suspicious access context."""
 
         selected_sources = self._select_snapshot_files(
             requested_source_keys,
@@ -604,7 +615,10 @@ class LogAnalysisService:
             ),
             key=lambda item: (-item.suspicious_access_count, item.ip),
         )
-        observed_bans = [item for item in suspicious_ips if item.observed_appsec_ban]
+        appsec_bans = sorted(
+            (record.to_ban_payload() for record in records.values() if record.appsec_ban_count > 0),
+            key=lambda item: item.ip,
+        )
         return InspectProbeBlockingActivityPayload(
             action="inspect_probe_blocking_activity",
             requested_project_name=requested_project_name,
@@ -616,7 +630,8 @@ class LogAnalysisService:
             policy=_PROBE_BLOCKING_POLICY,
             suspicious_ip_count=len(suspicious_ips),
             suspicious_access_count=sum(item.suspicious_access_count for item in suspicious_ips),
-            observed_appsec_ban_ip_count=len(observed_bans),
+            observed_appsec_ban_ip_count=len(appsec_bans),
+            appsec_bans=appsec_bans,
             suspicious_ips=suspicious_ips,
         )
 

@@ -275,6 +275,10 @@ def test_probe_blocking_activity_reports_current_appsec_policy_and_matching_bans
             'level=info msg="(localhost/crowdsec) crowdsecurity/ssh-bf '
             'by ip 203.0.113.40 (PL/29314) : 4h ban on Ip 203.0.113.40" '
             "module=db\n"
+            '2026-07-04T00:08:46.322183975Z time="2026-07-04T02:08:46+02:00" '
+            'level=info msg="(localhost/crowdsec) appsec/second-probe '
+            'by ip 192.0.2.50 (PL/29314) : 876000h ban on Ip 192.0.2.50" '
+            "module=db\n"
         ),
         encoding="utf-8",
     )
@@ -320,7 +324,25 @@ def test_probe_blocking_activity_reports_current_appsec_policy_and_matching_bans
         "ban_duration": "876000h",
         "effective_permanent_ban": True,
     }
-    assert payload.observed_appsec_ban_ip_count == 1
+    assert payload.observed_appsec_ban_ip_count == 2
+    assert [item.model_dump() for item in payload.appsec_bans] == [
+        {
+            "ip": "192.0.2.50",
+            "appsec_ban_count": 1,
+            "last_appsec_ban_at": "2026-07-04T02:08:46+02:00",
+            "has_suspicious_access_context": False,
+        },
+        {
+            "ip": "198.51.100.20",
+            "appsec_ban_count": 1,
+            "last_appsec_ban_at": "2026-07-04T02:06:46+02:00",
+            "has_suspicious_access_context": True,
+        },
+    ]
+    assert [item.ip for item in payload.suspicious_ips] == [
+        "198.51.100.20",
+        "203.0.113.40",
+    ]
     assert payload.suspicious_ips[0].ip == "198.51.100.20"
     assert payload.suspicious_ips[0].suspicious_access_count == 2
     assert payload.suspicious_ips[0].observed_appsec_ban is True

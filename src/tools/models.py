@@ -545,6 +545,17 @@ class ProbeBlockingIpPayload(BaseModel):
     last_appsec_ban_at: str
 
 
+class ProbeBlockingBanPayload(BaseModel):
+    """Confirmed AppSec second-probe ban evidence for one IP."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ip: str
+    appsec_ban_count: int
+    last_appsec_ban_at: str
+    has_suspicious_access_context: bool
+
+
 class InspectProbeBlockingActivityPayload(BaseModel):
     """Structured response returned by `inspect_probe_blocking_activity`."""
 
@@ -561,6 +572,7 @@ class InspectProbeBlockingActivityPayload(BaseModel):
     suspicious_ip_count: int
     suspicious_access_count: int
     observed_appsec_ban_ip_count: int
+    appsec_bans: list[ProbeBlockingBanPayload]
     suspicious_ips: list[ProbeBlockingIpPayload]
 
 
