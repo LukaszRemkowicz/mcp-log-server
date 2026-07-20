@@ -1323,16 +1323,12 @@ def test_parse_log_line_timestamp_supports_file_log_formats() -> None:
     json_nginx_timestamp = service.parse_log_line_timestamp(
         '{ "time_local": "18/May/2026:09:38:45 +0000", "status": "200" }'
     )
-    fail2ban_timestamp = service.parse_log_line_timestamp(
-        "2026-05-18 09:38:55,771 fail2ban.filter [123]: INFO Found 203.0.113.10"
-    )
     nginx_error_timestamp = service.parse_log_line_timestamp(
         "2026/05/18 09:54:03 [error] 42#42: *99 upstream timed out"
     )
 
     assert raw_nginx_timestamp == datetime(2026, 1, 26, 13, 35, 2, tzinfo=UTC)
     assert json_nginx_timestamp == datetime(2026, 5, 18, 9, 38, 45, tzinfo=UTC)
-    assert fail2ban_timestamp == datetime(2026, 5, 18, 9, 38, 55, tzinfo=UTC)
     assert nginx_error_timestamp == datetime(2026, 5, 18, 9, 54, 3, tzinfo=UTC)
 
 

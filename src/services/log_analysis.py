@@ -34,6 +34,7 @@ from tools.models import (
     InspectProbeBlockingActivityPayload,
     InspectProxyActivityPayload,
     LogSnapshotMetadata,
+    ProbeBlockingBanPayload,
     ProbeBlockingIpPayload,
     ProbeBlockingPolicyPayload,
     ProxyRouteSignalPayload,
@@ -57,22 +58,13 @@ _WHITESPACE_PATTERN = re.compile(r"\s+")
 _REQUEST_LINE_PATTERN = re.compile(r"^[A-Z]+\s+(\S+)\s+HTTP/\d(?:\.\d)?$")
 _REQUEST_METHOD_PATH_PATTERN = re.compile(r"^(?P<method>[A-Z]+)\s+(?P<path>\S+)")
 _DOCKER_JSON_LINE_PATTERN = re.compile(r"^\S+\s+({.*})\s*$")
-_PROBE_ACCESS_SOURCE_TO_JAIL = {
-    "nginx_access": "portfolio-nginx-probes",
-    "traefik_access": "portfolio-traefik-probes",
-}
-_PROBE_BLOCKING_DEFAULT_POLICY = {
-    "portfolio-nginx-probes": ProbeBlockingPolicyPayload(
-        findtime="1m",
-        maxretry=3,
-        bantime="-1",
-    ),
-    "portfolio-traefik-probes": ProbeBlockingPolicyPayload(
-        findtime="1m",
-        maxretry=3,
-        bantime="-1",
-    ),
-}
+_PROBE_BLOCKING_POLICY = ProbeBlockingPolicyPayload(
+    scenario="appsec/second-probe",
+    maintained_appsec_detection_threshold=2,
+    detection_window="1m",
+    ban_duration="876000h",
+    effective_permanent_ban=True,
+)
 _PROBE_SUSPICIOUS_PATH_PATTERNS = (
     re.compile(r"^/(?:[^/]+/)*\.env[^ ]*$"),
     re.compile(r"^/(?:[^/]+/)*\.git/config[^ ]*$"),
@@ -81,16 +73,9 @@ _PROBE_SUSPICIOUS_PATH_PATTERNS = (
         r"setup\.php|config\.php|eval-stdin\.php)(?:[/?].*)?$"
     ),
 )
-_FAIL2BAN_ACTION_PATTERN = re.compile(
-    r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s+\S+\s+\[\d+\]:"
-    r"\s+\w+\s+\[(?P<jail>[^\]]+)\]\s+(?P<action>Ban|Unban)\s+(?P<ip>\S+)$"
-)
-_FAIL2BAN_ALREADY_BANNED_PATTERN = re.compile(
-    r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+\s+\S+\s+\[\d+\]:"
-    r"\s+\w+\s+\[(?P<jail>[^\]]+)\]\s+(?P<ip>\S+)\s+already banned$"
-)
-_CROWDSEC_BAN_PATTERN = re.compile(
-    r'\btime="(?P<timestamp>[^"]+)".*\bmsg="[^"]*\bby ip (?P<ip>\S+) '
+_CROWDSEC_APPSEC_SECOND_PROBE_BAN_PATTERN = re.compile(
+    r'\btime="(?P<timestamp>[^"]+)".*\bmsg="[^"]*\bappsec/second-probe '
+    r"\bby ip (?P<ip>\S+) "
     r'[^"]*:\s+[^"]*\bban on Ip (?P=ip)\b'
 )
 
@@ -388,46 +373,38 @@ class ProxyActivityAnalysis:
 
 @dataclass(slots=True)
 class ProbeBlockingRecord:
-    """Mutable probe-blocking correlation state for one IP and policy."""
+    """Mutable suspicious-access context and AppSec evidence for one IP."""
 
     ip: str
-    jail: str
     sources: set[str] = field(default_factory=set)
-    request_count: int = 0
+    suspicious_access_count: int = 0
     paths: set[str] = field(default_factory=set)
     last_seen: str = ""
-    ban_count: int = 0
-    unban_count: int = 0
-    already_banned_count: int = 0
-    last_ban_at: str = ""
-    last_unban_at: str = ""
+    appsec_ban_count: int = 0
+    last_appsec_ban_at: str = ""
 
-    def to_payload(self, policy: dict[str, ProbeBlockingPolicyPayload]) -> ProbeBlockingIpPayload:
-        """Convert accumulated state into the public probe-blocking payload."""
+    def to_payload(self) -> ProbeBlockingIpPayload:
+        """Convert accumulated context into the public CrowdSec payload."""
 
-        maxretry = policy.get(
-            self.jail,
-            ProbeBlockingPolicyPayload(
-                findtime="1m",
-                maxretry=3,
-                bantime="-1",
-            ),
-        ).maxretry
         return ProbeBlockingIpPayload(
             ip=self.ip,
-            jail=self.jail,
             sources=sorted(self.sources),
-            request_count=self.request_count,
+            suspicious_access_count=self.suspicious_access_count,
             paths=sorted(self.paths),
             last_seen=self.last_seen,
-            maxretry=maxretry,
-            expected_ban=self.request_count >= maxretry,
-            observed_ban=self.ban_count > 0 or self.already_banned_count > 0,
-            ban_count=self.ban_count,
-            unban_count=self.unban_count,
-            already_banned_count=self.already_banned_count,
-            last_ban_at=self.last_ban_at,
-            last_unban_at=self.last_unban_at,
+            observed_appsec_ban=self.appsec_ban_count > 0,
+            appsec_ban_count=self.appsec_ban_count,
+            last_appsec_ban_at=self.last_appsec_ban_at,
+        )
+
+    def to_ban_payload(self) -> ProbeBlockingBanPayload:
+        """Convert confirmed AppSec ban evidence into its public payload."""
+
+        return ProbeBlockingBanPayload(
+            ip=self.ip,
+            appsec_ban_count=self.appsec_ban_count,
+            last_appsec_ban_at=self.last_appsec_ban_at,
+            has_suspicious_access_context=self.suspicious_access_count > 0,
         )
 
 
@@ -591,35 +568,28 @@ class LogAnalysisService:
         requested_project_name: str | None,
         project_name: str,
     ) -> InspectProbeBlockingActivityPayload:
-        """Correlate sensitive-path proxy probes with blocking engine events."""
+        """Report AppSec second-probe bans and correlated suspicious access context."""
 
         selected_sources = self._select_snapshot_files(
             requested_source_keys,
             sources=sources,
         )
-        records: dict[tuple[str, str], ProbeBlockingRecord] = {}
+        records: dict[str, ProbeBlockingRecord] = {}
         searched_source_keys: list[str] = []
-        policy = dict(_PROBE_BLOCKING_DEFAULT_POLICY)
 
         for source in selected_sources:
             source_key = source.source_key
             searched_source_keys.append(source_key)
-            if source_key not in {
-                "crowdsec_runtime",
-                "fail2ban",
-                *_PROBE_ACCESS_SOURCE_TO_JAIL.keys(),
-            }:
+            is_proxy_access = source.normalization_profile == "proxy_access"
+            if source_key != "crowdsec_runtime" and not is_proxy_access:
                 continue
             file_ref = cast(FileReference, source.file)
             try:
                 with open(file_ref.path, encoding="utf-8", errors="replace") as file:
                     for line_number, raw_line in enumerate(file, start=1):
                         line = raw_line.rstrip("\n")
-                        if source_key == "fail2ban":
-                            self._add_fail2ban_probe_events(line, records)
-                            continue
                         if source_key == "crowdsec_runtime":
-                            self._add_crowdsec_probe_events(line, records)
+                            self._add_crowdsec_appsec_ban_event(line, records)
                             continue
                         payload = self._parse_json_line(line)
                         if payload is None:
@@ -638,11 +608,17 @@ class LogAnalysisService:
                 raise ValueError("Requested log snapshot file was not found on disk.") from error
 
         suspicious_ips = sorted(
-            (record.to_payload(policy) for record in records.values() if record.request_count > 0),
-            key=lambda item: (-item.request_count, item.ip, item.jail),
+            (
+                record.to_payload()
+                for record in records.values()
+                if record.suspicious_access_count > 0
+            ),
+            key=lambda item: (-item.suspicious_access_count, item.ip),
         )
-        expected_bans = [item for item in suspicious_ips if item.expected_ban]
-        observed_bans = [item for item in suspicious_ips if item.observed_ban]
+        appsec_bans = sorted(
+            (record.to_ban_payload() for record in records.values() if record.appsec_ban_count > 0),
+            key=lambda item: item.ip,
+        )
         return InspectProbeBlockingActivityPayload(
             action="inspect_probe_blocking_activity",
             requested_project_name=requested_project_name,
@@ -651,14 +627,11 @@ class LogAnalysisService:
             session_id=metadata.session_id,
             snapshot_dir=_snapshot_dir_from_metadata(metadata),
             searched_source_keys=searched_source_keys,
-            policy=policy,
+            policy=_PROBE_BLOCKING_POLICY,
             suspicious_ip_count=len(suspicious_ips),
-            suspicious_request_count=sum(item.request_count for item in suspicious_ips),
-            expected_ban_ip_count=len(expected_bans),
-            observed_ban_ip_count=len(observed_bans),
-            expected_but_not_observed=[
-                item.ip for item in suspicious_ips if item.expected_ban and not item.observed_ban
-            ],
+            suspicious_access_count=sum(item.suspicious_access_count for item in suspicious_ips),
+            observed_appsec_ban_ip_count=len(appsec_bans),
+            appsec_bans=appsec_bans,
             suspicious_ips=suspicious_ips,
         )
 
@@ -901,7 +874,7 @@ class LogAnalysisService:
     @staticmethod
     def _add_sensitive_probe_event(
         event: ProxyLineEvent,
-        records: dict[tuple[str, str], ProbeBlockingRecord],
+        records: dict[str, ProbeBlockingRecord],
     ) -> None:
         """Add one proxy event if it is a sensitive 403/404 probe."""
 
@@ -911,65 +884,30 @@ class LogAnalysisService:
             return
         if not any(pattern.match(event.path) for pattern in _PROBE_SUSPICIOUS_PATH_PATTERNS):
             return
-        jail = _PROBE_ACCESS_SOURCE_TO_JAIL.get(event.source_key)
-        if jail is None:
-            return
-        record = records.setdefault(
-            (event.client_ip, jail),
-            ProbeBlockingRecord(event.client_ip, jail),
-        )
+        record = records.setdefault(event.client_ip, ProbeBlockingRecord(event.client_ip))
         record.sources.add(event.source_key)
-        record.request_count += 1
+        record.suspicious_access_count += 1
         record.paths.add(event.path)
         if event.timestamp:
             record.last_seen = event.timestamp
 
     @staticmethod
-    def _add_fail2ban_probe_events(
+    def _add_crowdsec_appsec_ban_event(
         line: str,
-        records: dict[tuple[str, str], ProbeBlockingRecord],
+        records: dict[str, ProbeBlockingRecord],
     ) -> None:
-        """Add fail2ban ban/unban/already-banned facts to correlated records."""
+        """Add an appsec/second-probe ban fact correlated by source IP."""
 
-        action_match = _FAIL2BAN_ACTION_PATTERN.match(line)
-        if action_match is not None:
-            jail = action_match.group("jail")
-            ip = action_match.group("ip")
-            record = records.setdefault((ip, jail), ProbeBlockingRecord(ip, jail))
-            timestamp = action_match.group("timestamp")
-            if action_match.group("action") == "Ban":
-                record.ban_count += 1
-                record.last_ban_at = timestamp
-            else:
-                record.unban_count += 1
-                record.last_unban_at = timestamp
-            return
-
-        already_match = _FAIL2BAN_ALREADY_BANNED_PATTERN.match(line)
-        if already_match is not None:
-            jail = already_match.group("jail")
-            ip = already_match.group("ip")
-            record = records.setdefault((ip, jail), ProbeBlockingRecord(ip, jail))
-            record.already_banned_count += 1
-
-    @staticmethod
-    def _add_crowdsec_probe_events(
-        line: str,
-        records: dict[tuple[str, str], ProbeBlockingRecord],
-    ) -> None:
-        """Add CrowdSec ban facts to probe records correlated by source IP."""
-
-        ban_match = _CROWDSEC_BAN_PATTERN.search(line)
+        ban_match = _CROWDSEC_APPSEC_SECOND_PROBE_BAN_PATTERN.search(line)
         if ban_match is None:
             return
 
         ip = ban_match.group("ip")
         timestamp = ban_match.group("timestamp")
-        for jail in _PROBE_ACCESS_SOURCE_TO_JAIL.values():
-            record = records.setdefault((ip, jail), ProbeBlockingRecord(ip, jail))
-            record.sources.add("crowdsec_runtime")
-            record.ban_count += 1
-            record.last_ban_at = timestamp
+        record = records.setdefault(ip, ProbeBlockingRecord(ip))
+        record.sources.add("crowdsec_runtime")
+        record.appsec_ban_count += 1
+        record.last_appsec_ban_at = timestamp
 
     @staticmethod
     def _select_proxy_snapshot_files(

@@ -519,34 +519,41 @@ class ProxyRouteSignalPayload(BaseModel):
 
 
 class ProbeBlockingPolicyPayload(BaseModel):
-    """Fail2ban policy used to decide whether probe traffic should trigger a ban."""
+    """Current CrowdSec AppSec policy relevant to second-probe blocking."""
 
     model_config = ConfigDict(extra="forbid")
 
-    findtime: str
-    maxretry: int
-    bantime: str
+    scenario: Literal["appsec/second-probe"]
+    maintained_appsec_detection_threshold: int
+    detection_window: str
+    ban_duration: str
+    effective_permanent_ban: bool
 
 
 class ProbeBlockingIpPayload(BaseModel):
-    """One suspicious IP correlated with fail2ban activity for one jail."""
+    """Suspicious access context correlated with AppSec ban evidence for one IP."""
 
     model_config = ConfigDict(extra="forbid")
 
     ip: str
-    jail: str
     sources: list[str]
-    request_count: int
+    suspicious_access_count: int
     paths: list[str]
     last_seen: str
-    maxretry: int
-    expected_ban: bool
-    observed_ban: bool
-    ban_count: int
-    unban_count: int
-    already_banned_count: int
-    last_ban_at: str
-    last_unban_at: str
+    observed_appsec_ban: bool
+    appsec_ban_count: int
+    last_appsec_ban_at: str
+
+
+class ProbeBlockingBanPayload(BaseModel):
+    """Confirmed AppSec second-probe ban evidence for one IP."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ip: str
+    appsec_ban_count: int
+    last_appsec_ban_at: str
+    has_suspicious_access_context: bool
 
 
 class InspectProbeBlockingActivityPayload(BaseModel):
@@ -561,12 +568,11 @@ class InspectProbeBlockingActivityPayload(BaseModel):
     session_id: str | None
     snapshot_dir: str
     searched_source_keys: list[str]
-    policy: dict[str, ProbeBlockingPolicyPayload]
+    policy: ProbeBlockingPolicyPayload
     suspicious_ip_count: int
-    suspicious_request_count: int
-    expected_ban_ip_count: int
-    observed_ban_ip_count: int
-    expected_but_not_observed: list[str]
+    suspicious_access_count: int
+    observed_appsec_ban_ip_count: int
+    appsec_bans: list[ProbeBlockingBanPayload]
     suspicious_ips: list[ProbeBlockingIpPayload]
 
 
