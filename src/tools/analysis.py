@@ -495,7 +495,7 @@ async def inspect_probe_blocking_activity(
     source_keys: list[str] | None = None,
     source_key: str | None = None,
 ) -> ToolResult:
-    """Correlate sensitive-path proxy probes with historical fail2ban events."""
+    """Correlate suspicious access context with historical CrowdSec AppSec bans."""
 
     context = await authorize_and_get_snapshot(
         tool_name="inspect_probe_blocking_activity",
@@ -544,8 +544,7 @@ async def inspect_probe_blocking_activity(
             "workspace": payload.workspace,
             "searched_source_count": len(payload.searched_source_keys),
             "suspicious_ip_count": payload.suspicious_ip_count,
-            "expected_ban_ip_count": payload.expected_ban_ip_count,
-            "observed_ban_ip_count": payload.observed_ban_ip_count,
+            "observed_appsec_ban_ip_count": payload.observed_appsec_ban_ip_count,
         },
     )
     response = dict(
