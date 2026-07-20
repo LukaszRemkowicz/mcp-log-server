@@ -52,9 +52,6 @@ _RAW_NGINX_TIMESTAMP_PATTERN = re.compile(r"\[(?P<timestamp>\d{2}/[A-Za-z]{3}/\d
 _NGINX_ERROR_TIMESTAMP_PATTERN = re.compile(
     r"^(?P<timestamp>\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})\s+"
 )
-_FAIL2BAN_TIMESTAMP_PATTERN = re.compile(
-    r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:,\d+)?"
-)
 _ISO_PREFIX_TIMESTAMP_PATTERN = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)"
 )
@@ -1012,13 +1009,6 @@ class LogCollectionService:
             return datetime.strptime(
                 nginx_error_match.group("timestamp"),
                 "%Y/%m/%d %H:%M:%S",
-            ).replace(tzinfo=UTC)
-
-        fail2ban_match = _FAIL2BAN_TIMESTAMP_PATTERN.match(stripped_line)
-        if fail2ban_match is not None:
-            return datetime.strptime(
-                fail2ban_match.group("timestamp"),
-                "%Y-%m-%d %H:%M:%S",
             ).replace(tzinfo=UTC)
 
         iso_match = _ISO_PREFIX_TIMESTAMP_PATTERN.match(stripped_line)

@@ -1585,7 +1585,7 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
             data=build_collect_logs_request(
                 request_id="collect-vps-security-fixture",
                 project_names=["vps-security"],
-                source_keys=["nginx_access", "nginx_runtime", "traefik_access"],
+                source_keys=["traefik_access"],
                 since="2026-05-18T00:00:00Z",
             ),
         )
@@ -1600,7 +1600,7 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
                     "arguments": {
                         "project_name": "vps-security",
                         "grep": "wp-login|502",
-                        "source_keys": ["nginx_access", "traefik_access"],
+                        "source_keys": ["traefik_access"],
                     },
                 },
             },
@@ -1615,7 +1615,7 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
                     "name": "inspect_proxy_activity",
                     "arguments": {
                         "project_name": "vps-security",
-                        "source_keys": ["nginx_access", "traefik_access"],
+                        "source_keys": ["traefik_access"],
                         "max_groups": 30,
                     },
                 },
@@ -1631,7 +1631,7 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
                     "name": "group_errors",
                     "arguments": {
                         "project_name": "vps-security",
-                        "source_keys": ["nginx_access", "traefik_access"],
+                        "source_keys": ["traefik_access"],
                         "max_groups": 6,
                     },
                 },
@@ -1645,30 +1645,23 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
 
     assert collect_response.status_code == 200
     assert collect_response.json()["result"]["isError"] is False
-    assert collect_payload["resolved_source_keys"] == [
-        "nginx_access",
-        "nginx_runtime",
-        "traefik_access",
-    ]
-    assert [source["line_count"] for source in collect_payload["sources"]] == [12, 1, 12]
+    assert collect_payload["resolved_source_keys"] == ["traefik_access"]
+    assert [source["line_count"] for source in collect_payload["sources"]] == [12]
     assert grep_response.status_code == 200
     assert grep_response.json()["result"]["isError"] is False
-    assert grep_payload["match_count"] == 4
-    assert grep_payload["matched_source_keys"] == [
-        "nginx_access",
-        "traefik_access",
-    ]
+    assert grep_payload["match_count"] == 2
+    assert grep_payload["matched_source_keys"] == ["traefik_access"]
     assert proxy_response.status_code == 200
     assert proxy_response.json()["result"]["isError"] is False
-    assert proxy_payload["total_line_count"] == 24
-    assert proxy_payload["parsed_proxy_line_count"] == 24
-    assert proxy_payload["http_status_line_count"] == 24
-    assert proxy_payload["upstream_error_count"] == 3
+    assert proxy_payload["total_line_count"] == 12
+    assert proxy_payload["parsed_proxy_line_count"] == 12
+    assert proxy_payload["http_status_line_count"] == 12
+    assert proxy_payload["upstream_error_count"] == 2
     assert proxy_payload["status_class_counts"] == [
-        {"status_class": "2xx", "count": 5},
+        {"status_class": "2xx", "count": 3},
         {"status_class": "3xx", "count": 1},
-        {"status_class": "4xx", "count": 15},
-        {"status_class": "5xx", "count": 3},
+        {"status_class": "4xx", "count": 6},
+        {"status_class": "5xx", "count": 2},
     ]
     assert any(
         route["path"] == "/travel"
@@ -1678,7 +1671,7 @@ async def test_vps_security_fixture_logs_support_snapshot_analysis(
     )
     assert group_response.status_code == 200
     assert group_response.json()["result"]["isError"] is False
-    assert group_payload["matching_line_count"] == 18
+    assert group_payload["matching_line_count"] == 8
 
 
 async def test_inspect_probe_blocking_activity_api_correlates_probe_events(
@@ -1701,7 +1694,7 @@ async def test_inspect_probe_blocking_activity_api_correlates_probe_events(
             data=build_collect_logs_request(
                 request_id="collect-vps-security-probe-blocking",
                 project_names=["vps-security"],
-                source_keys=["nginx_access", "traefik_access"],
+                source_keys=["traefik_access"],
                 since="2026-05-18T00:00:00Z",
             ),
         )
@@ -1715,7 +1708,7 @@ async def test_inspect_probe_blocking_activity_api_correlates_probe_events(
                     "name": "inspect_probe_blocking_activity",
                     "arguments": {
                         "project_name": "vps-security",
-                        "source_keys": ["nginx_access", "traefik_access"],
+                        "source_keys": ["traefik_access"],
                     },
                 },
             },
@@ -1729,37 +1722,33 @@ async def test_inspect_probe_blocking_activity_api_correlates_probe_events(
     assert response.json()["result"]["isError"] is False
     assert payload["action"] == "inspect_probe_blocking_activity"
     assert payload["project_name"] == "vps-security"
-    assert payload["searched_source_keys"] == ["nginx_access", "traefik_access"]
+    assert payload["searched_source_keys"] == ["traefik_access"]
     assert payload["policy"] == {
-        "portfolio-nginx-probes": {"findtime": "1m", "maxretry": 3, "bantime": "-1"},
-        "portfolio-traefik-probes": {"findtime": "1m", "maxretry": 3, "bantime": "-1"},
+        "scenario": "appsec/second-probe",
+        "maintained_appsec_detection_threshold": 2,
+        "detection_window": "1m",
+        "ban_duration": "876000h",
+        "effective_permanent_ban": True,
     }
-    assert payload["suspicious_ip_count"] == 4
-    assert payload["suspicious_request_count"] == 8
-    assert payload["expected_ban_ip_count"] == 1
-    assert payload["observed_ban_ip_count"] == 0
-    assert payload["expected_but_not_observed"] == ["203.0.113.10"]
+    assert payload["suspicious_ip_count"] == 2
+    assert payload["suspicious_access_count"] == 3
+    assert payload["observed_appsec_ban_ip_count"] == 0
 
-    nginx_record = next(
-        item
-        for item in payload["suspicious_ips"]
-        if item["ip"] == "203.0.113.10" and item["jail"] == "portfolio-nginx-probes"
+    appsec_context = next(
+        item for item in payload["suspicious_ips"] if item["ip"] == "198.51.100.20"
     )
-    assert nginx_record["request_count"] == 4
-    assert nginx_record["paths"] == ["/.env", "/.git/config", "/phpmyadmin/index.php", "/wp-admin"]
-    assert nginx_record["expected_ban"] is True
-    assert nginx_record["observed_ban"] is False
-    assert nginx_record["ban_count"] == 0
-    assert nginx_record["already_banned_count"] == 0
-    assert nginx_record["last_ban_at"] == ""
+    assert appsec_context["suspicious_access_count"] == 2
+    assert appsec_context["paths"] == ["/.git/config", "/xmlrpc.php"]
+    assert appsec_context["observed_appsec_ban"] is False
+    assert appsec_context["appsec_ban_count"] == 0
+    assert appsec_context["last_appsec_ban_at"] == ""
 
     unobserved_record = next(
-        item
-        for item in payload["suspicious_ips"]
-        if item["ip"] == "198.51.100.99" and item["jail"] == "portfolio-traefik-probes"
+        item for item in payload["suspicious_ips"] if item["ip"] == "198.51.100.99"
     )
-    assert unobserved_record["expected_ban"] is False
-    assert unobserved_record["observed_ban"] is False
+    assert unobserved_record["suspicious_access_count"] == 1
+    assert unobserved_record["paths"] == ["/wp-content/debug.log"]
+    assert unobserved_record["observed_appsec_ban"] is False
 
 
 @pytest.mark.parametrize(

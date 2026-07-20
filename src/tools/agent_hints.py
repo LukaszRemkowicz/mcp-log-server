@@ -78,11 +78,12 @@ INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION = (
 )
 
 INSPECT_PROBE_BLOCKING_ACTIVITY_TOOL_DESCRIPTION = (
-    "Inspect collected CrowdSec plus nginx/Traefik access snapshot sources for "
-    "deterministic probe-blocking correlation. Returns sensitive-path probe "
-    "requests by IP, whether each IP should have crossed the configured retry "
-    "threshold, and whether mitigation evidence was observed. This tool reads "
-    "snapshot files only and does not run live CrowdSec commands."
+    "Inspect collected CrowdSec plus proxy access snapshot sources for historical "
+    "AppSec second-probe correlation. Returns the current appsec/second-probe "
+    "policy, suspicious URL access context by IP, and only matching historical "
+    "AppSec ban evidence. Suspicious access entries are investigation context, "
+    "not proven AppSec detections or expected bans. This tool reads snapshot files "
+    "only and does not run live CrowdSec commands."
 )
 
 INSPECT_LIVE_CROWDSEC_ACTIVITY_TOOL_DESCRIPTION = (
