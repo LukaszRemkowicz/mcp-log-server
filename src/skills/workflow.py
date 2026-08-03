@@ -53,8 +53,10 @@ WORKFLOW_SKILLS: tuple[WorkflowSkillDefinition, ...] = (
         asset_path="skills/bot_detection.md",
         description="Guidance for recognizing bot traffic and suspicious probing patterns.",
         when_useful=(
-            "Use for scanner/probe-heavy traffic, clustered 404/405s, suspicious "
-            "infrastructure warnings, credential scans, or commodity path probing."
+            "Use when unknown or material scanner/probe evidence needs interpretation, "
+            "including suspicious infrastructure warnings, credential scans, or "
+            "commodity path probing. Skip established 403/404-only blocked or "
+            "missing-resource noise with no security-control failure or service impact."
         ),
     ),
     WorkflowSkillDefinition(
@@ -62,8 +64,8 @@ WORKFLOW_SKILLS: tuple[WorkflowSkillDefinition, ...] = (
         asset_path="skills/owasp_security.md",
         description="Security interpretation guidance aligned with OWASP-style incident framing.",
         when_useful=(
-            "Use for auth abuse, injection strings, exploit attempts, successful "
-            "sensitive-path access, or API/security impact framing."
+            "Use after targeted evidence when auth abuse, exploit attempts, "
+            "sensitive-path access, or API/security impact remains unclear."
         ),
     ),
     WorkflowSkillDefinition(

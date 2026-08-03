@@ -20,7 +20,11 @@ from core.types import LogWorkspace
 from decorators import project_authorized_tool, workflow_discoverable_tool
 from logging_config import get_logger
 from manifests.models import Manifest
-from services.log_analysis import LogAnalysisService
+from services.log_analysis import (
+    GROUP_ERRORS_ANALYSIS_GROUP_LIMIT,
+    GROUP_ERRORS_FINGERPRINT_VERSION,
+    LogAnalysisService,
+)
 from services.log_filtering import CreateFilteredViewError, LogFilteringService, SourceNoiseContext
 from services.log_snapshots import LogSnapshotService, SnapshotContext, SnapshotLookupError
 from services.project_manifest import ProjectManifestError
@@ -105,14 +109,28 @@ def _build_group_errors_summary(
     matching_line_count: int,
     total_group_count: int,
     groups: list[GroupedErrorPayload],
+    analysis_complete: bool,
+    analysis_group_limit: int,
+    offset: int = 0,
 ) -> str:
     """Build a compact agent-facing explanation of grouped error results."""
 
-    if matching_line_count == 0:
+    if matching_line_count == 0 and analysis_complete:
         return "No error-like lines were found in the selected snapshot sources."
 
     group_word = "group" if total_group_count == 1 else "groups"
     line_word = "line" if matching_line_count == 1 else "lines"
+    if analysis_complete:
+        result_prefix = (
+            f"Found {matching_line_count} error-like {line_word} in "
+            f"{total_group_count} {group_word}."
+        )
+    else:
+        result_prefix = (
+            f"Analysis stopped at the safety limit of {analysis_group_limit} groups "
+            f"after finding at least {matching_line_count} error-like {line_word} in "
+            f"at least {total_group_count} {group_word}."
+        )
     details = [
         (
             f"{group.count}x {group.severity} {group.category} in "
@@ -122,14 +140,9 @@ def _build_group_errors_summary(
         for group in groups[:GROUP_ERRORS_SUMMARY_LIMIT]
     ]
     if not details:
-        return (
-            f"Found {matching_line_count} error-like {line_word} in "
-            f"{total_group_count} {group_word}."
-        )
-    return (
-        f"Found {matching_line_count} error-like {line_word} in "
-        f"{total_group_count} {group_word}. Top results: " + "; ".join(details)
-    )
+        return result_prefix
+    result_label = "Top results" if offset == 0 else "Page results"
+    return f"{result_prefix} {result_label}: " + "; ".join(details)
 
 
 def _build_invalid_group_window_result(max_groups: int) -> ToolResult | None:
@@ -140,6 +153,18 @@ def _build_invalid_group_window_result(max_groups: int) -> ToolResult | None:
             error_code="invalid_group_window",
             message="max_groups must be between 1 and 200.",
             retry_tips=["Retry with max_groups set to a value between 1 and 200."],
+        )
+    return None
+
+
+def _build_invalid_group_offset_result(offset: int) -> ToolResult | None:
+    """Return a tool error when a grouped-error page offset is negative."""
+
+    if offset < 0:
+        return build_snapshot_tool_error_result(
+            error_code="invalid_group_offset",
+            message="offset must be zero or greater.",
+            retry_tips=["Retry with offset set to zero or a positive integer."],
         )
     return None
 
@@ -383,6 +408,7 @@ async def group_errors(
     source_keys: list[str] | None = None,
     source_key: str | None = None,
     max_groups: int = DEFAULT_MAX_ERROR_GROUPS,
+    offset: int = 0,
     access_token: AccessToken | None = CurrentAccessToken(),
 ) -> ToolResult:
     """Group repeated error-like lines for triage, then confirm with raw snapshot context.
@@ -413,6 +439,9 @@ async def group_errors(
     invalid_group_window_result = _build_invalid_group_window_result(max_groups)
     if invalid_group_window_result is not None:
         return invalid_group_window_result
+    invalid_group_offset_result = _build_invalid_group_offset_result(offset)
+    if invalid_group_offset_result is not None:
+        return invalid_group_offset_result
 
     try:
         source_keys = resolve_source_keys_for_snapshot(source_keys, source_key)
@@ -428,6 +457,8 @@ async def group_errors(
             sources=context.sources,
             requested_source_keys=source_keys,
             max_groups=max_groups,
+            offset=offset,
+            analysis_group_limit=GROUP_ERRORS_ANALYSIS_GROUP_LIMIT,
         )
     except ValueError as error:
         return _build_analysis_source_key_error_result(
@@ -440,12 +471,22 @@ async def group_errors(
             max_groups=max_groups,
         )
 
+    next_offset = offset + len(analysis.groups)
+    effective_next_step_tips = list(GROUP_ERRORS_NEXT_STEP_TIPS)
+    if not analysis.analysis_complete:
+        effective_next_step_tips.append(
+            "Grouped-analysis counts are lower bounds because the safety limit "
+            f"of {analysis.analysis_group_limit} groups was reached. Recollect a "
+            "narrower time window or select fewer sources before drawing complete totals."
+        )
     payload = GroupErrorsPayload(
         action="group_errors",
+        fingerprint_version=GROUP_ERRORS_FINGERPRINT_VERSION,
         requested_project_name=project_name,
         project_name=context.project_name,
         workspace=context.metadata.workspace,
         session_id=context.metadata.session_id,
+        snapshot_collected_at=context.metadata.collected_at,
         snapshot_dir=(
             Path(context.metadata.files[0].output_file).parent.as_posix()
             if context.metadata.files
@@ -453,15 +494,26 @@ async def group_errors(
         ),
         searched_source_keys=analysis.searched_source_keys,
         analysis_cautions=LOG_ANALYSIS_CAUTIONS,
-        next_step_tips=GROUP_ERRORS_NEXT_STEP_TIPS,
+        next_step_tips=effective_next_step_tips,
         grouped_error_count=analysis.total_group_count,
         matching_line_count=analysis.matching_line_count,
+        analysis_complete=analysis.analysis_complete,
+        analysis_group_limit=analysis.analysis_group_limit,
         max_groups=max_groups,
-        truncated=analysis.total_group_count > max_groups,
+        offset=offset,
+        returned_group_count=len(analysis.groups),
+        next_offset=next_offset,
+        truncated=next_offset < analysis.total_group_count,
+        partial_page=(
+            not analysis.analysis_complete or len(analysis.groups) < analysis.total_group_count
+        ),
         summary=_build_group_errors_summary(
             matching_line_count=analysis.matching_line_count,
             total_group_count=analysis.total_group_count,
             groups=analysis.groups,
+            analysis_complete=analysis.analysis_complete,
+            analysis_group_limit=analysis.analysis_group_limit,
+            offset=offset,
         ),
         groups=analysis.groups,
     )
@@ -476,7 +528,12 @@ async def group_errors(
             "grouped_error_count": payload.grouped_error_count,
             "matching_line_count": payload.matching_line_count,
             "returned_group_count": len(payload.groups),
+            "offset": payload.offset,
+            "next_offset": payload.next_offset,
             "truncated": payload.truncated,
+            "partial_page": payload.partial_page,
+            "analysis_complete": payload.analysis_complete,
+            "analysis_group_limit": payload.analysis_group_limit,
         },
     )
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))
@@ -706,6 +763,7 @@ async def build_incident_bundle(
             sources=context.sources,
             requested_source_keys=source_keys,
             max_groups=max_groups,
+            analysis_group_limit=GROUP_ERRORS_ANALYSIS_GROUP_LIMIT,
             requested_project_name=project_name,
             project_name=context.project_name,
             analysis_cautions=LOG_ANALYSIS_CAUTIONS,
@@ -736,6 +794,8 @@ async def build_incident_bundle(
             "medium_severity_group_count": payload.medium_severity_group_count,
             "low_severity_group_count": payload.low_severity_group_count,
             "top_group_count": len(payload.top_groups),
+            "analysis_complete": payload.analysis_complete,
+            "analysis_group_limit": payload.analysis_group_limit,
         },
     )
     return ToolResult(content=[], structured_content=payload.model_dump(mode="json"))

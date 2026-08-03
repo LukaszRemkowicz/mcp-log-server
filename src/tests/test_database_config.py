@@ -306,6 +306,7 @@ def test_test_command_runs_compose_test_container(mocker: MockerFixture) -> None
         "docker",
         "compose",
         "run",
+        "-T",
         "--rm",
         "--build",
         "test",

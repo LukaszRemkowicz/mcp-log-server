@@ -65,9 +65,13 @@ GROUP_ERRORS_TOOL_DESCRIPTION = (
     "Group repeated error-like lines from one persisted workflow or session "
     "snapshot into compact triage findings. Use it after collect_logs when you "
     "need recurring failures, timestamps, source keys, and raw line references. "
-    "Use source_key for one source or source_keys for multiple sources, but not both, "
-    "before deciding whether to grep, read files, or recollect a narrower "
-    "since/until window."
+    "Use source_key for one source or source_keys for multiple sources, but not both. "
+    "While truncated is true, call the next page with next_offset and the same "
+    "snapshot arguments. next_offset is always the integer position after the page. "
+    "Across pages, keep snapshot_collected_at and fingerprint_version identical. "
+    "partial_page means this response alone is not the whole grouped snapshot. "
+    "Review all pages before deciding whether to grep, read files, or recollect "
+    "a narrower since/until window."
 )
 
 INSPECT_PROXY_ACTIVITY_TOOL_DESCRIPTION = (
@@ -336,6 +340,11 @@ GREP_SNAPSHOT_NEXT_STEP_TIPS = [
 ]
 
 GROUP_ERRORS_NEXT_STEP_TIPS = [
+    (
+        "While truncated is true, call group_errors again with next_offset and the "
+        "same snapshot arguments. Combine pages only while snapshot_collected_at "
+        "and fingerprint_version remain identical."
+    ),
     (
         "Use first_timestamp and last_timestamp to decide whether the issue "
         "looks bursty, continuous, or isolated."

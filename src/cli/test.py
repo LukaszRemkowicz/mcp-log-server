@@ -11,6 +11,7 @@ def _run_test() -> int:
             "docker",
             "compose",
             "run",
+            "-T",
             "--rm",
             "--build",
             "test",
