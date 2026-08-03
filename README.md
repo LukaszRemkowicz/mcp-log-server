@@ -106,9 +106,19 @@ Filtered views, grouped errors, incident bundles, and proxy activity reports are
 derived responses built from those raw snapshots. `inspect_proxy_activity`
 excludes known health paths only when they have an explicit 2xx status, reports
 the number as `excluded_health_check_count`, and leaves failed, unknown-status,
-and raw lines intact. Collection diagnostics are
-saved inside the same snapshot directory, so they follow the same cleanup
-behavior as the logs they describe.
+and raw lines intact. A 502/503/504 counts as an upstream error only when the
+proxy log contains concrete upstream-attempt evidence such as Nginx
+`upstream_addr`/`upstream_status` or Traefik `ServiceURL`/`OriginStatus`.
+Router and service names alone are routing metadata: a middleware or AppSec
+response can contain them without contacting the application. Per-route counts
+partition `count`: `upstream_attempt_count` has concrete upstream-attempt
+evidence, `non_upstream_count` has explicit evidence that no upstream was
+attempted, and `unknown_upstream_count` lacks enough fields to decide.
+Grouped-analysis responses expose `analysis_complete`; `analysis_group_limit`
+records the safety cap. When `analysis_complete` is false, treat group counts and
+rankings as bounded partial results rather than evidence that omitted groups do
+not exist. Collection diagnostics are saved inside the same snapshot directory,
+so they follow the same cleanup behavior as the logs they describe.
 
 ## Layout
 

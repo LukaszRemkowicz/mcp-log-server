@@ -565,12 +565,46 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
     assert payload["workflow_name"] == "analyze_daily_log_bundle"
     assert isinstance(payload["prompt"], str)
     assert payload["prompt"]
-    assert "return `action=read_skills` for" in payload["prompt"]
-    assert "`bot_detection` before `final_report`" in payload["prompt"]
-    assert "instead of relying on model memory" in payload["prompt"]
-    assert "possible security impact" in payload["prompt"]
-    assert "successful sensitive-path access" in payload["prompt"]
-    assert "`owasp_security` before `final_report`" in payload["prompt"]
+    prompt_json_examples = [
+        json.loads(example)
+        for example in re.findall(r"```json\n(.*?)\n```", payload["prompt"], flags=re.DOTALL)
+    ]
+    action_examples = {
+        example["action"]: example for example in prompt_json_examples if "action" in example
+    }
+    assert set(action_examples) == {"call_tools", "read_skills", "final_report"}
+    assert isinstance(action_examples["call_tools"]["tool_calls"], list)
+    assert action_examples["call_tools"]["tool_calls"]
+    assert all(
+        isinstance(tool_call.get("tool_name"), str) and isinstance(tool_call.get("arguments"), dict)
+        for tool_call in action_examples["call_tools"]["tool_calls"]
+    )
+    assert isinstance(action_examples["read_skills"]["skill_names"], list)
+    assert action_examples["read_skills"]["skill_names"]
+    final_report = action_examples["final_report"]
+    assert {
+        "action",
+        "summary",
+        "severity",
+        "severity_rationale",
+        "key_findings",
+        "evidence",
+        "coverage_gaps",
+        "recommendations",
+        "watch_only_items",
+        "trend_summary",
+    } <= final_report.keys()
+    assert final_report["severity"] in {"INFO", "WARNING", "CRITICAL"}
+    for field_name in (
+        "summary",
+        "severity_rationale",
+        "recommendations",
+        "trend_summary",
+    ):
+        assert isinstance(final_report[field_name], str)
+        assert final_report[field_name]
+    for field_name in ("key_findings", "evidence", "coverage_gaps", "watch_only_items"):
+        assert isinstance(final_report[field_name], list)
     assert any(
         item["resource_uri"] == "skill://workflow/severity_guide"
         for item in payload["mandatory_skills"]
@@ -592,7 +626,8 @@ async def test_analyze_daily_log_bundle_api_returns_structured_workflow_bootstra
         for item in payload["optional_skills"]
         if item["resource_uri"] == "skill://workflow/bot_detection"
     )
-    assert "scanner/probe-heavy traffic" in bot_detection["when_useful"]
+    assert bot_detection["skill_name"] == "bot_detection"
+    assert bot_detection["mandatory"] is False
     assert not any(item["tool_name"] == "collect_logs" for item in payload["tools"])
     assert any(item["tool_name"] == "list_log_snapshot_files" for item in payload["tools"])
     assert any(item["tool_name"] == "read_log_snapshot_file" for item in payload["tools"])
@@ -1486,6 +1521,9 @@ async def test_analysis_tools_api_read_collected_snapshot(
     assert payload["searched_source_keys"] == ["app_file"]
     assert payload["grouped_error_count"] == 2
     assert payload["matching_line_count"] == 2
+    assert payload["fingerprint_version"] == "group-errors-v2"
+    assert payload["analysis_complete"] is True
+    assert payload["analysis_group_limit"] >= payload["grouped_error_count"]
 
     groups = payload["groups"] if tool_name == "group_errors" else payload["top_groups"]
     assert any(
@@ -1498,6 +1536,146 @@ async def test_analysis_tools_api_read_collected_snapshot(
         assert payload["summary"].startswith("Found 2 error-like lines in 2 groups.")
         assert "Database connection failed" in payload["summary"]
         assert len(payload["summary"]) < 260
+        assert payload["partial_page"] is False
+        assert payload["truncated"] is False
+
+
+async def test_group_errors_api_pages_one_snapshot_revision_without_losing_groups(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify the public MCP contract exposes reconstructable grouped-error pages."""
+
+    def group_errors_request(*, request_id: str, offset: int) -> dict[str, Any]:
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": "tools/call",
+            "params": {
+                "name": "group_errors",
+                "arguments": {
+                    "project_name": "landingpage",
+                    "source_keys": ["app_file"],
+                    "max_groups": 1,
+                    "offset": offset,
+                },
+            },
+        }
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["app_file"]),
+        )
+        first_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data=group_errors_request(request_id="group-errors-page-1", offset=0),
+        )
+        second_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data=group_errors_request(request_id="group-errors-page-2", offset=1),
+        )
+
+    assert collect_response.json()["result"]["isError"] is False
+    assert first_response.json()["result"]["isError"] is False
+    assert second_response.json()["result"]["isError"] is False
+    first = first_response.json()["result"]["structuredContent"]
+    second = second_response.json()["result"]["structuredContent"]
+
+    assert first["grouped_error_count"] == second["grouped_error_count"] == 2
+    assert first["offset"] == 0
+    assert first["returned_group_count"] == 1
+    assert first["next_offset"] == 1
+    assert first["truncated"] is True
+    assert first["partial_page"] is True
+    assert second["offset"] == 1
+    assert second["returned_group_count"] == 1
+    assert second["next_offset"] == 2
+    assert second["truncated"] is False
+    assert second["partial_page"] is True
+    assert "Page results:" in second["summary"]
+    assert any("next_offset" in tip for tip in first["next_step_tips"])
+    assert first["groups"][0]["fingerprint"] != second["groups"][0]["fingerprint"]
+    assert first["fingerprint_version"] == second["fingerprint_version"] == "group-errors-v2"
+    assert first["session_id"] == second["session_id"]
+    assert first["snapshot_dir"] == second["snapshot_dir"]
+    assert first["snapshot_collected_at"] == second["snapshot_collected_at"]
+
+
+async def test_group_errors_api_empty_snapshot_is_not_partial_at_nonzero_offset(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """An empty grouped snapshot is complete regardless of the requested offset."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["snapshot_text"]),
+        )
+        response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "group-errors-empty-nonzero-offset",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_errors",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_keys": ["snapshot_text"],
+                        "offset": 1,
+                    },
+                },
+            },
+        )
+
+    assert collect_response.json()["result"]["isError"] is False
+    assert response.json()["result"]["isError"] is False
+    payload = response.json()["result"]["structuredContent"]
+    assert payload["grouped_error_count"] == 0
+    assert payload["returned_group_count"] == 0
+    assert payload["next_offset"] == 1
+    assert payload["truncated"] is False
+    assert payload["partial_page"] is False
+
+
+async def test_group_errors_api_rejects_negative_page_offset(
+    file_backed_project_context: FileBackedProjectContext,
+    valid_jwt_token: str,
+    jsonrpc: JsonRpcClient,
+) -> None:
+    """Verify invalid offsets return the explicit deterministic tool error."""
+
+    with override_settings(LOGS_DIR=file_backed_project_context.logs_dir):
+        collect_response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data=build_collect_logs_request(source_keys=["app_file"]),
+        )
+        response = await jsonrpc.post(
+            token=valid_jwt_token,
+            data={
+                "jsonrpc": "2.0",
+                "id": "group-errors-negative-offset",
+                "method": "tools/call",
+                "params": {
+                    "name": "group_errors",
+                    "arguments": {
+                        "project_name": "landingpage",
+                        "source_keys": ["app_file"],
+                        "offset": -1,
+                    },
+                },
+            },
+        )
+
+    assert collect_response.json()["result"]["isError"] is False
+    assert response.json()["result"]["isError"] is True
+    payload = response.json()["result"]["structuredContent"]
+    assert payload["error_code"] == "invalid_group_offset"
+    assert payload["message"] == "offset must be zero or greater."
 
 
 async def test_inspect_proxy_activity_api_groups_proxy_status_signals(
@@ -1563,6 +1741,16 @@ async def test_inspect_proxy_activity_api_groups_proxy_status_signals(
     assert payload["top_routes"][1]["path"] == "/api/orders"
     assert payload["top_routes"][1]["status_code"] == 502
     assert payload["top_routes"][1]["is_upstream_error"] is True
+    assert payload["top_routes"][1]["upstream_attempt_count"] == 1
+    assert payload["top_routes"][1]["non_upstream_count"] == 0
+    assert payload["top_routes"][1]["unknown_upstream_count"] == 0
+    assert all(
+        route["count"]
+        == route["upstream_attempt_count"]
+        + route["non_upstream_count"]
+        + route["unknown_upstream_count"]
+        for route in payload["top_routes"]
+    )
 
 
 async def test_vps_security_fixture_logs_support_snapshot_analysis(

@@ -90,11 +90,15 @@ class CollectLogsService:
     ) -> CollectLogsWithSourcesOut | None:
         """Return one session collect_logs row with source rows."""
 
-        obj = await self.model.objects.filter(
-            project_name=project_name,
-            workspace=LogWorkspace.SESSION,
-            session__name=session_id,
-        ).first()
+        obj = (
+            await self.model.objects.filter(
+                project_name=project_name,
+                workspace=LogWorkspace.SESSION,
+                session__name=session_id,
+            )
+            .order_by("-collected_at", "-id")
+            .first()
+        )
         if obj is None:
             return None
         await obj.fetch_related("session")

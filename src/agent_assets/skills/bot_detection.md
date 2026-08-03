@@ -1,4 +1,4 @@
-## BOT / ATTACK DETECTION — treat as CRITICAL
+## BOT / ATTACK DETECTION
 
 Use this skill to detect suspicious traffic patterns in the logs and describe
 what happened. Focus on scanner behavior, repeated probing, clustering, and

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 from uuid import uuid4
@@ -255,6 +256,57 @@ async def test_collect_logs_transfer_metadata_survives_database_round_trip() -> 
 
     assert [source.transfer for source in fetched.sources] == [transfer, None]
     assert [source.transfer for source in public_payload.sources] == [transfer, None]
+
+
+@pytest.mark.anyio
+@pytest.mark.usefixtures("db")
+async def test_session_snapshot_lookup_returns_newest_replacement() -> None:
+    caller = await McpCallerFactory.save_to_db()
+    agent_session = await AgentSessionFactory.save_to_db(caller=caller)
+    project_name = f"replacement-{uuid4().hex}"
+    older_collection = await CollectLogsFactory.save_to_db(
+        session=agent_session,
+        project_name=project_name,
+        collected_at=datetime(2026, 8, 3, 12, 0, tzinfo=UTC),
+        requested_source_keys=["nginx"],
+        resolved_source_keys=["nginx"],
+    )
+    await CollectLogsSourceFactory.save_to_db(
+        collect_logs=older_collection,
+        source_key="nginx",
+    )
+    newer_collection = await CollectLogsFactory.save_to_db(
+        session=agent_session,
+        project_name=project_name,
+        collected_at=datetime(2026, 8, 3, 12, 5, tzinfo=UTC),
+        requested_source_keys=["frontend"],
+        resolved_source_keys=["frontend"],
+    )
+    await CollectLogsSourceFactory.save_to_db(
+        collect_logs=newer_collection,
+        source_key="frontend",
+    )
+    newest_collection = await CollectLogsFactory.save_to_db(
+        session=agent_session,
+        project_name=project_name,
+        collected_at=datetime(2026, 8, 3, 12, 5, tzinfo=UTC),
+        requested_source_keys=["frontend-next"],
+        resolved_source_keys=["frontend-next"],
+    )
+    await CollectLogsSourceFactory.save_to_db(
+        collect_logs=newest_collection,
+        source_key="frontend-next",
+    )
+
+    fetched = await CollectLogsService().get_session_collect_logs_with_sources(
+        project_name=project_name,
+        session_id=agent_session.name,
+    )
+
+    assert fetched is not None
+    assert fetched.id == newest_collection.id
+    assert fetched.collected_at == datetime(2026, 8, 3, 12, 5, tzinfo=UTC)
+    assert [source.source_key for source in fetched.sources] == ["frontend-next"]
 
 
 @pytest.mark.anyio
