@@ -168,7 +168,10 @@ def test_application_registers_expected_mcp_components(
             for item in bootstrap_text["optional_skills"]
             if item["skill_name"] == "bot_detection"
         )
-        assert "scanner/probe-heavy traffic" in bot_detection["when_useful"]
+        assert bot_detection["resource_uri"] == "skill://workflow/bot_detection"
+        assert bot_detection["mandatory"] is False
+        assert isinstance(bot_detection["when_useful"], str)
+        assert bot_detection["when_useful"]
         assert all(
             item["skill_name"] != "normal_patterns" for item in bootstrap_text["optional_skills"]
         )

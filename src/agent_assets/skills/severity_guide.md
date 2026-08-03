@@ -3,11 +3,15 @@
 - **INFO**: Normal operation. Routine requests, scheduled tasks completed, no issues.
   Automated SSH brute-force attempts or scanner probes with no service impact,
   sensitive data exposure, or mitigation-control failure are INFO/watch-only.
-- **WARNING**: Degraded but operational. A few 4xx errors, one failed Celery retry,
-  slow DB query, reconnaissance-only attack (all 404s).
-- **CRITICAL**: Service-affecting OR active exploitation attempt. 5xx errors,
-  DB/Redis unreachable, Celery tasks exhausted retries, email delivery failed,
-  sensitive file returned 200, injection strings in URLs.
+- **WARNING**: Degraded but operational. Real application-route errors, one failed
+  Celery retry, a slow DB query, or unresolved security impact.
+- **CRITICAL**: Confirmed service-affecting failure, successful exploitation, or
+  credible potential sensitive-data exposure that requires immediate
+  investigation. Examples include repeated upstream 5xx with user impact,
+  DB/Redis unreachable, Celery tasks exhausting retries, an unexpected non-empty
+  2xx response on a sensitive path, or confirmed malicious-input impact. A
+  sensitive-path 2xx can justify CRITICAL potential-exposure severity, but access
+  logs alone do not confirm the response contents or exfiltration.
 
 HTTP/proxy severity rules:
 
@@ -34,6 +38,14 @@ HTTP/proxy severity rules:
   workflow; do not raise severity for routing or handler misconfiguration unless
   tool evidence shows user impact, upstream errors, or a real expected client
   using that route.
-- Any 5xx/upstream failure affecting real application paths is at least WARNING
-  and may be CRITICAL when repeated or service-affecting.
+- Any confirmed upstream 5xx affecting real application paths is at least
+  WARNING and may be CRITICAL when repeated or service-affecting.
+- Do not classify a Traefik 5xx as an application outage when deterministic
+  evidence explicitly reports `upstream_attempted=false`, for example
+  `OriginStatus=0` together with an empty `ServiceURL`. Correlate it with
+  CrowdSec/AppSec evidence and treat a confirmed edge block as a security event.
+- `is_upstream_error=false` or absent upstream fields means no upstream failure
+  was confirmed; it does not prove that no upstream attempt occurred. Keep the
+  origin unknown until explicit upstream-attempt or raw correlated evidence
+  resolves it.
 - Zero-line sources are coverage gaps, not health evidence.

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from core.types import LogWorkspace
 from database.types import TaskStatus, TaskType
@@ -483,9 +483,22 @@ class GroupedErrorPayload(BaseModel):
     count: int
     source_keys: list[str]
     request_paths: list[str]
+    request_methods: list[str] = Field(default_factory=list)
+    request_hosts: list[str] = Field(default_factory=list)
     status_codes: list[int]
     levels: list[str]
     message_summary: str
+    has_explicit_message: bool = False
+    identity_kind: Literal[
+        "explicit_message",
+        "http_summary",
+        "structured_semantic",
+        "raw_fallback",
+        "plain_text_message",
+    ]
+    semantic_summary: str = Field(max_length=2000)
+    semantic_identity_hash: str = Field(pattern=r"^(?:|[0-9a-f]{64})$")
+    upstream_attempted: bool | None = None
     first_timestamp: str | None
     last_timestamp: str | None
     first_seen: SnapshotLineReferencePayload
@@ -502,7 +515,7 @@ class ProxyStatusClassCountPayload(BaseModel):
 
 
 class ProxyRouteSignalPayload(BaseModel):
-    """Describe one grouped proxy route/status signal."""
+    """Describe one route/status signal with tri-state upstream evidence counts."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -513,6 +526,9 @@ class ProxyRouteSignalPayload(BaseModel):
     status_class: Literal["1xx", "2xx", "3xx", "4xx", "5xx"]
     count: int
     source_keys: list[str]
+    upstream_attempt_count: int
+    non_upstream_count: int
+    unknown_upstream_count: int
     is_upstream_error: bool
     first_seen: SnapshotLineReferencePayload
     last_seen: SnapshotLineReferencePayload
@@ -705,26 +721,37 @@ class InspectProxyActivityPayload(BaseModel):
 class GroupErrorsPayload(BaseModel):
     """Structured response returned by `group_errors`.
 
-    This tool condenses repeated error-like log lines into stable grouped
-    findings so an agent can reason about recurring failures without reading
-    every raw line individually.
+    `next_offset` is the integer position after this page. `truncated` means a
+    continuation page remains. `partial_page` means this response alone is not
+    the complete grouped snapshot, including a final page requested with a
+    non-zero offset. When `analysis_complete` is false, grouped and matching
+    counts are lower bounds because the distinct-group safety limit stopped the
+    scan before the complete selected snapshot was examined.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     action: Literal["group_errors"]
+    fingerprint_version: Literal["group-errors-v2"]
     requested_project_name: str | None
     project_name: str
     workspace: SnapshotWorkspace
     session_id: str | None
+    snapshot_collected_at: str
     snapshot_dir: str
     searched_source_keys: list[str]
     analysis_cautions: list[str]
     next_step_tips: list[str]
     grouped_error_count: int
     matching_line_count: int
+    analysis_complete: bool
+    analysis_group_limit: int
     max_groups: int
+    offset: int
+    returned_group_count: int
+    next_offset: int
     truncated: bool
+    partial_page: bool
     summary: str
     groups: list[GroupedErrorPayload]
 
@@ -746,12 +773,14 @@ class IncidentBundlePayload(BaseModel):
 
     This is a compact deterministic bundle for LLM workflows: grouped error
     signals, source summaries, and concrete line references that point back to
-    the raw persisted snapshot files.
+    the raw persisted snapshot files. `analysis_complete` distinguishes exact
+    grouped totals from lower bounds produced by the safety cap.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     action: Literal["build_incident_bundle"]
+    fingerprint_version: Literal["group-errors-v2"]
     requested_project_name: str | None
     project_name: str
     workspace: SnapshotWorkspace
@@ -762,6 +791,8 @@ class IncidentBundlePayload(BaseModel):
     next_step_tips: list[str]
     grouped_error_count: int
     matching_line_count: int
+    analysis_complete: bool
+    analysis_group_limit: int
     high_severity_group_count: int
     medium_severity_group_count: int
     low_severity_group_count: int

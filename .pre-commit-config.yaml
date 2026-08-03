@@ -37,16 +37,19 @@ repos:
         name: safety
         entry: >-
           env UV_CACHE_DIR=/tmp/mcp-log-server-uv-cache
-          bash -c 'if [ -z "${SAFETY_API_KEY:-}" ] && [ -x /usr/bin/security ]; then
+          bash -c 'project_dir="$(pwd)" &&
+          if [ -z "${SAFETY_API_KEY:-}" ] && [ -x /usr/bin/security ]; then
           export SAFETY_API_KEY="$(/usr/bin/security find-generic-password -s SAFETY_API_KEY -w 2>/dev/null)";
           fi &&
           if [ -z "${SAFETY_API_KEY:-}" ]; then
             echo "SAFETY_API_KEY is required for the safety pre-commit hook. Set it in your shell or store it in macOS Keychain as SAFETY_API_KEY." >&2;
             exit 1;
           fi &&
-
+          run_dir="$(mktemp -d)" &&
+          cleanup() { cd "$project_dir" && rmdir "$run_dir"; } &&
           trap cleanup EXIT &&
-          uv run safety --stage cicd scan --target .'
+          cd "$run_dir" &&
+          uv run --project "$project_dir" safety --stage cicd scan --target "$project_dir"'
         language: system
         pass_filenames: false
         files: ^(pyproject\.toml|uv\.lock)$
@@ -55,8 +58,6 @@ repos:
 
       - id: pip-audit
         name: pip-audit
-        # TODO: remove this ignore when Safety no longer pulls vulnerable nltk
-        # or pip-audit reports a fixed nltk release for PYSEC-2026-597.
         entry: >-
           env UV_CACHE_DIR=/tmp/mcp-log-server-uv-cache
           bash -c 'requirements_file="$(mktemp)" &&
@@ -65,8 +66,7 @@ repos:
           uv export --frozen --no-emit-project --no-hashes > "$requirements_file" &&
           grep -v "^pip==" "$requirements_file" > "$requirements_file.filtered" &&
           mv "$requirements_file.filtered" "$requirements_file" &&
-          uv run pip-audit -r "$requirements_file" --no-deps --disable-pip
-          --ignore-vuln PYSEC-2026-597'
+          uv run pip-audit -r "$requirements_file" --no-deps --disable-pip'
         language: system
         pass_filenames: false
         files: ^(pyproject\.toml|uv\.lock)$

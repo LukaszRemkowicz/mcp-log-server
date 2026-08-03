@@ -482,12 +482,50 @@ curl -sS \
       "arguments":{
         "project_name":"landingpage",
         "source_key":"backend",
-        "max_groups":20
+        "max_groups":20,
+        "offset":0
       }
     }
   }' \
   http://127.0.0.1:8001/mcp | jq '.result.structuredContent'
 ```
+
+Grouped-error pagination and completeness contract:
+
+- `max_groups` is the requested page size; it is not the analyzer's internal
+  safety ceiling
+- start with `offset=0`; while `truncated=true`, call `group_errors` again with
+  `offset=next_offset` and the same snapshot locator, source selection, and
+  `max_groups`
+- `next_offset` is the integer group position immediately after the returned
+  page
+- `partial_page=true` means that response alone is not the complete grouped
+  result, including a final page requested with a non-zero offset
+- treat `snapshot_collected_at` as the snapshot-revision marker; a workflow
+  `latest` directory can be replaced by a newer collection without changing its
+  path, so `snapshot_dir` alone does not prove that two pages read one revision
+- combine pages only while `snapshot_collected_at` and `fingerprint_version`
+  remain identical and the snapshot/source arguments are unchanged; otherwise
+  discard the partial result and restart at `offset=0`
+- `fingerprint` identifies one deterministic group only within the same
+  `fingerprint_version`; do not merge groups across versions or use the lossy
+  display summary as group identity
+
+Bounded-analysis fields make analyzer completeness separate from page
+completeness:
+
+- `analysis_group_limit` is the internal distinct-group safety ceiling and is
+  independent of the caller's `max_groups` page size
+- `analysis_complete=true` means the analyzer examined the complete selected
+  snapshot and `grouped_error_count` plus `matching_line_count` are exact for
+  that selection
+- `analysis_complete=false` means the internal ceiling stopped analysis;
+  `grouped_error_count` and `matching_line_count` are lower bounds, even if the
+  current response has `truncated=false`
+- when `analysis_complete=false`, additional pagination can only traverse the
+  groups found by that bounded analysis. Do not claim that no other errors or
+  groups exist; use the observed timestamps with `suggest_followup_window`, then
+  recollect a narrower `since`/`until` window and analyze that snapshot
 
 Build one compact incident bundle from a saved snapshot:
 

@@ -1,6 +1,6 @@
 {"time_local":"29/Apr/2026:09:02:00 +0000","status":200,"request":"GET /favicon.ico HTTP/1.1","message":"static asset"}
 {"time_local":"29/Apr/2026:09:02:30 +0000","status":304,"request":"GET /assets/app.js?v=123 HTTP/1.1","message":"cached static asset"}
 {"time_local":"29/Apr/2026:09:02:45 +0000","status":301,"request":"GET /assets/legacy.js HTTP/1.1","message":"asset redirect"}
-{"time_local":"29/Apr/2026:09:03:00 +0000","status":502,"request":"GET /api/orders HTTP/1.1","message":"upstream failed"}
+{"time_local":"29/Apr/2026:09:03:00 +0000","status":502,"request":"GET /api/orders HTTP/1.1","upstream_addr":"172.18.0.4:8000","upstream_status":"502","message":"upstream failed"}
 {"time_local":"29/Apr/2026:10:10:00 +0000","status":404,"request":"GET /admin HTTP/1.1","message":"request completed"}
 {"time_local":"29/Apr/2026:10:11:00 +0000","status":404,"request":"GET /admin HTTP/1.1","message":"request completed"}

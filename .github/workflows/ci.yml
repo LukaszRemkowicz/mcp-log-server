@@ -57,51 +57,24 @@ jobs:
         FAIL2BAN_SOCKET_APP_SOCKET_PATH=/tmp/fail2ban-socket-app-test.sock
 
   http-e2e:
-    name: HTTP E2E
-    runs-on: ubuntu-latest
     needs: [quality]
-    services:
-      postgres:
-        image: postgres:18
-        env:
-          POSTGRES_DB: mcp_log_server
-          POSTGRES_USER: mcp_log_server
-          POSTGRES_PASSWORD: mcp-log-server-local-password
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U mcp_log_server -d mcp_log_server"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Set up uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          enable-cache: true
-
-      - name: Install dependencies
-        run: uv sync --group dev
-
-      - name: Run HTTP MCP end-to-end checks
-        env:
-          DATABASE_HOST: localhost
-          DATABASE_PORT: 5432
-          DATABASE_NAME: mcp_log_server_test
-          DATABASE_USER: mcp_log_server
-          DATABASE_PASSWORD: mcp-log-server-local-password
-          DOCKER_SOCKET_APP_SOCKET_PATH: /tmp/docker-socket-app-test.sock
-          FAIL2BAN_SOCKET_APP_SOCKET_PATH: /tmp/fail2ban-socket-app-test.sock
-        run: bash infra/scripts/run_http_e2e.sh
+    uses: LukaszRemkowicz/ci-cd/.github/workflows/python-tests-uv.yml@main
+    with:
+      working_directory: .
+      test_command: bash infra/scripts/run_http_e2e.sh
+      postgres_enabled: true
+      postgres_db: mcp_log_server_test
+      postgres_user: mcp_log_server
+      postgres_password: mcp-log-server-local-password
+      postgres_port: "5432"
+      test_environment: |
+        DATABASE_HOST=localhost
+        DATABASE_PORT=5432
+        DATABASE_NAME=mcp_log_server_test
+        DATABASE_USER=mcp_log_server
+        DATABASE_PASSWORD=mcp-log-server-local-password
+        DOCKER_SOCKET_APP_SOCKET_PATH=/tmp/docker-socket-app-test.sock
+        FAIL2BAN_SOCKET_APP_SOCKET_PATH=/tmp/fail2ban-socket-app-test.sock
 
   docker-build:
     name: Docker Build Check
@@ -127,6 +100,17 @@ jobs:
     with:
       languages_json: '["python"]'
 
+  trivy:
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    uses: LukaszRemkowicz/ci-cd/.github/workflows/trivy-scan.yml@main
+    with:
+      scan_path: .
+      severity: CRITICAL,HIGH
+      category: mcp-filesystem
+
   version-check:
     uses: LukaszRemkowicz/ci-cd/.github/workflows/version-check.yml@main
     with:
@@ -134,11 +118,11 @@ jobs:
       head_branch: dev
 
   pr-status:
-    needs: [quality, tests, http-e2e, docker-build, codeql, version-check]
+    needs: [quality, tests, http-e2e, docker-build, codeql, trivy, version-check]
     if: always()
     uses: LukaszRemkowicz/ci-cd/.github/workflows/pr-status.yml@main
     with:
       status_items_json: >-
-        {"Quality":"${{ needs.quality.result }}","Tests":"${{ needs.tests.result }}","HTTP E2E":"${{ needs.http-e2e.result }}","Docker Build Check":"${{ needs.docker-build.result }}","CodeQL":"${{ needs.codeql.result }}","Version Check":"${{ needs.version-check.result }}"}
+        {"Quality":"${{ needs.quality.result }}","Tests":"${{ needs.tests.result }}","HTTP E2E":"${{ needs.http-e2e.result }}","Docker Build Check":"${{ needs.docker-build.result }}","CodeQL":"${{ needs.codeql.result }}","Trivy":"${{ needs.trivy.result }}","Version Check":"${{ needs.version-check.result }}"}
       success_message: All MCP service CI checks passed.
       failure_message: MCP service CI failed. Please review the workflow logs.
