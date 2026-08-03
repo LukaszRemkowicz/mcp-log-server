@@ -12,6 +12,6 @@ permissions:
 
 jobs:
   add-to-project:
-    uses: LukaszRemkowicz/ci-cd/.github/workflows/add-issues-to-project.yml@ba606b6188066fcaf2dc5a7f5a52043ad5457073
+    uses: LukaszRemkowicz/ci-cd/.github/workflows/add-issues-to-project.yml@main
     secrets:
       project_token: ${{ secrets.ADD_TO_PROJECT_PAT }}
