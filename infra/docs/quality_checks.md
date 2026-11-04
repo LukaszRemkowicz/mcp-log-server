@@ -63,11 +63,15 @@ Current checks and release flows:
 - Docker Compose validation
 - Docker image build check
 - CodeQL analysis on pull requests and the weekly schedule
-- VERSION bump validation on `dev -> main` pull requests
+- `pyproject.toml` version bump validation on `dev -> main` pull requests
+- tag creation from `[project].version` in `pyproject.toml` on pushes to `main`
 
 Important current caveat:
 
 - real live-container log collection is not yet exercised inside pytest
 - that runtime path is currently verified through the HTTP end-to-end script
   and local manual curl checks instead
-- tag creation from `VERSION` on pushes to `main`
+
+Safety is temporarily disabled because its `filelock<4` requirement blocks
+patched `filelock>=4.2.1`. Restore it when that upstream constraint is fixed;
+`pip-audit` remains active.
